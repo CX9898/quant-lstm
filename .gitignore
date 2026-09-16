@@ -1,0 +1,18 @@
+# CMake 和本地编译产物
+/build/
+/cmake-build-*/
+/pytorch/build/
+
+# Python 缓存和本地扩展产物
+__pycache__/
+*.py[cod]
+*.so
+
+# Golden 派生代码：由规范 JSON 在构建或测试时重新生成
+/tests/golden/generated/
+
+# 测试、精度与性能报告：每次运行重新生成
+/tests/results/
+/tests/reports/
+/tests/precision/results/
+/tests/benchmarks/results/
