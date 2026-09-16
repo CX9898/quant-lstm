@@ -18,10 +18,17 @@ target_include_directories(
         $<INSTALL_INTERFACE:include>
 )
 
-add_library(quant_lstm STATIC src/lstm/forward_float_cpu.cc)
+add_library(
+    quant_lstm STATIC
+    src/lstm/forward_float_cpu.cc
+    src/quantization/numeric_safety.cc
+    src/quantization/quant_param.cc
+    src/quantization/real_activation.cc
+    src/quantization/scale_encoding.cc
+)
 target_link_libraries(quant_lstm PUBLIC quant_lstm_headers)
 set_target_properties(quant_lstm PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_compile_options(quant_lstm PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra;-Wpedantic>)
+target_compile_options(quant_lstm PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra>)
 
 if(QUANT_LSTM_ENABLE_CUDA)
     include(CheckLanguage)
@@ -68,11 +75,20 @@ if(QUANT_LSTM_BUILD_TESTS)
     target_link_libraries(test_float_cpu PRIVATE quant_lstm)
     add_test(NAME float_cpu COMMAND test_float_cpu)
 
+    add_executable(test_quantization_primitives tests/cpp/test_quantization_primitives.cc)
+    target_link_libraries(test_quantization_primitives PRIVATE quant_lstm)
+    add_test(NAME quantization_primitives COMMAND test_quantization_primitives)
+
     if(QUANT_LSTM_ENABLE_CUDA)
         add_executable(test_float_cuda tests/cuda/test_float_cuda.cu)
         target_link_libraries(test_float_cuda PRIVATE quant_lstm quant_lstm_test_support)
         set_target_properties(test_float_cuda PROPERTIES CUDA_ARCHITECTURES native)
         add_test(NAME float_cuda COMMAND test_float_cuda)
+
+        add_executable(test_rounding_cuda tests/cuda/test_rounding_cuda.cu)
+        target_link_libraries(test_rounding_cuda PRIVATE quant_lstm_headers CUDA::cudart)
+        set_target_properties(test_rounding_cuda PROPERTIES CUDA_ARCHITECTURES native)
+        add_test(NAME rounding_cuda COMMAND test_rounding_cuda)
     endif()
 endif()
 
