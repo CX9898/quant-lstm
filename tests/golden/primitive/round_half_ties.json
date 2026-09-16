@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "case_id": "round_half_ties",
+  "execution_model": "common",
+  "primitive": "round_to_nearest_even",
+  "attributes": {},
+  "inputs": {
+    "values": {
+      "dtype": "float64",
+      "shape": [8],
+      "data": [-3.5, -2.5, -1.5, -0.5, 0.5, 1.5, 2.5, 3.5]
+    }
+  },
+  "expected": {
+    "checkpoints": {
+      "rounded": {
+        "dtype": "int64",
+        "shape": [8],
+        "data": [-4, -2, -2, 0, 0, 2, 2, 4]
+      }
+    },
+    "diagnostics": {}
+  }
+}

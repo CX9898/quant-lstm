@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "case_id": "real_activation_boundaries_cpu_int32",
+  "execution_model": "cpu_int32",
+  "primitive": "real_activation",
+  "attributes": {},
+  "inputs": {
+    "kind": {
+      "dtype": "string",
+      "shape": [6],
+      "data": ["sigmoid", "sigmoid", "sigmoid", "tanh", "tanh", "tanh"]
+    },
+    "quantized": {"dtype": "int32", "shape": [6], "data": [0, 127, -127, 0, 127, -127]},
+    "input_scale": {
+      "dtype": "float32_scale_string",
+      "shape": [6],
+      "data": ["0.125", "0.125", "0.125", "0.125", "0.125", "0.125"]
+    },
+    "input_zero_point": {"dtype": "int32", "shape": [6], "data": [0, 0, 0, 0, 0, 0]},
+    "output_scale": {
+      "dtype": "float32_scale_string",
+      "shape": [6],
+      "data": [
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.0078125",
+        "0.0078125",
+        "0.0078125"
+      ]
+    },
+    "output_zero_point": {"dtype": "int32", "shape": [6], "data": [0, 0, 0, 0, 0, 0]}
+  },
+  "expected": {
+    "checkpoints": {
+      "quantized": {
+        "dtype": "int32",
+        "shape": [6],
+        "data": [128, 255, 0, 0, 127, -127]
+      }
+    },
+    "diagnostics": {}
+  }
+}

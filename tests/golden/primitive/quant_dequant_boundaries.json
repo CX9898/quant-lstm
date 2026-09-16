@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "case_id": "quantize_boundaries",
+  "execution_model": "common",
+  "primitive": "quant_dequant",
+  "attributes": {"operation": "quantize"},
+  "inputs": {
+    "value": {
+      "dtype": "float32",
+      "shape": [5],
+      "data": ["-16", "-0.1875", "-0.0625", "0.1875", "62.75"]
+    },
+    "scale": {
+      "dtype": "float32_scale_string",
+      "shape": [5],
+      "data": ["0.125", "0.125", "0.125", "0.125", "0.25"]
+    },
+    "zero_point": {"dtype": "int32", "shape": [5], "data": [0, 0, 0, 0, 4]},
+    "bitwidth": {"dtype": "uint8", "shape": [5], "data": [8, 8, 8, 8, 8]},
+    "is_unsigned": {
+      "dtype": "bool",
+      "shape": [5],
+      "data": [false, false, false, false, true]
+    },
+    "is_symmetric": {
+      "dtype": "bool",
+      "shape": [5],
+      "data": [true, true, true, true, false]
+    }
+  },
+  "expected": {
+    "checkpoints": {
+      "quantized": {
+        "dtype": "int32",
+        "shape": [5],
+        "data": [-127, -2, 0, 2, 255]
+      }
+    },
+    "diagnostics": {}
+  }
+}

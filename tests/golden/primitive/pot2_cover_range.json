@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "case_id": "pot2_cover_range",
+  "execution_model": "common",
+  "primitive": "pot2_cover_range",
+  "attributes": {},
+  "inputs": {
+    "range_minimum": {
+      "dtype": "float32",
+      "shape": [5],
+      "data": ["-1", "1", "-1", "0", "-1"]
+    },
+    "range_maximum": {
+      "dtype": "float32",
+      "shape": [5],
+      "data": ["1", "2", "0.5", "0", "3"]
+    },
+    "bitwidth": {"dtype": "uint8", "shape": [5], "data": [8, 8, 8, 8, 8]},
+    "is_unsigned": {
+      "dtype": "bool",
+      "shape": [5],
+      "data": [false, false, false, false, true]
+    },
+    "is_symmetric": {
+      "dtype": "bool",
+      "shape": [5],
+      "data": [true, false, true, true, false]
+    }
+  },
+  "expected": {
+    "checkpoints": {
+      "scale": {
+        "dtype": "float32_scale_string",
+        "shape": [5],
+        "data": [
+          "0.0078125",
+          "0.0078125",
+          "0.015625",
+          "1.1920929e-07",
+          "0.015625"
+        ]
+      },
+      "zero_point": {"dtype": "int32", "shape": [5], "data": [0, -128, 0, 0, 64]}
+    },
+    "diagnostics": {
+      "exponent": {"dtype": "int8", "shape": [5], "data": [7, 7, 6, 23, 6]},
+      "range_is_near_power_of_two": {
+        "dtype": "bool",
+        "shape": [5],
+        "data": [true, true, false, true, true]
+      },
+      "fallback_used": {
+        "dtype": "bool",
+        "shape": [5],
+        "data": [false, false, false, true, false]
+      }
+    }
+  }
+}

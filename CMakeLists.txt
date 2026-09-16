@@ -105,6 +105,55 @@ if(QUANT_LSTM_BUILD_TESTS)
     set_tests_properties(
         quant_config_schema PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
+    file(
+        GLOB PRIMITIVE_GOLDEN_FILES
+        CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/golden/primitive/*.json"
+    )
+    set(PRIMITIVE_GOLDEN_FIXTURE
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/primitive_golden_fixtures.h")
+    add_custom_command(
+        OUTPUT ${PRIMITIVE_GOLDEN_FIXTURE}
+        COMMAND
+            ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_primitive_golden_fixture.py
+            --golden-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden/primitive
+            --schema ${CMAKE_CURRENT_SOURCE_DIR}/config/schema/primitive_golden.schema.json
+            --output ${PRIMITIVE_GOLDEN_FIXTURE}
+        DEPENDS
+            ${PRIMITIVE_GOLDEN_FILES}
+            ${CMAKE_CURRENT_SOURCE_DIR}/config/schema/primitive_golden.schema.json
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_primitive_golden_fixture.py
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/strict_jsonschema.py
+        VERBATIM
+    )
+    add_executable(
+        test_primitive_golden
+        tests/cpp/test_primitive_golden.cc
+        ${PRIMITIVE_GOLDEN_FIXTURE}
+    )
+    target_include_directories(
+        test_primitive_golden PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+    target_link_libraries(
+        test_primitive_golden PRIVATE quant_lstm nlohmann_json::nlohmann_json)
+    add_test(NAME primitive_golden COMMAND test_primitive_golden)
+    add_test(
+        NAME primitive_golden_schema
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests/python/test_primitive_golden_schema.py
+    )
+    set_tests_properties(
+        primitive_golden_schema PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(
+        NAME primitive_golden_fixture_current
+        COMMAND
+            ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_primitive_golden_fixture.py
+            --golden-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden/primitive
+            --schema ${CMAKE_CURRENT_SOURCE_DIR}/config/schema/primitive_golden.schema.json
+            --output ${PRIMITIVE_GOLDEN_FIXTURE}
+            --check
+    )
+
     if(QUANT_LSTM_ENABLE_CUDA)
         add_executable(test_float_cuda tests/cuda/test_float_cuda.cu)
         target_link_libraries(test_float_cuda PRIVATE quant_lstm quant_lstm_test_support)

@@ -113,11 +113,12 @@ int main() {
             require(per_gate[gate * hidden_size].scale ==
                         per_gate[gate * hidden_size + 1].scale,
                     "per-gate segment expansion");
-            if (gate != 0) {
-                require(per_gate[gate * hidden_size].scale !=
-                            per_gate[(gate - 1) * hidden_size].scale,
-                        "per-gate source mapping");
-            }
+            const auto expected = quant_lstm::quantization::calibrateMinMax(
+                ranges.at(quant_lstm::QuantOperator::WeightHiddenHidden)[gate].minimum,
+                ranges.at(quant_lstm::QuantOperator::WeightHiddenHidden)[gate].maximum,
+                config.at(quant_lstm::QuantOperator::WeightHiddenHidden).type);
+            require(per_gate[gate * hidden_size].scale == expected.param.scale,
+                    "per-gate source mapping");
         }
 
         const auto& per_channel =
@@ -139,6 +140,57 @@ int main() {
                 "bias=False parameters must be absent");
         no_bias_params.validate(config);
 
+        for (quant_lstm::QuantOperator id :
+             {quant_lstm::QuantOperator::WeightInputHidden,
+              quant_lstm::QuantOperator::WeightHiddenHidden,
+              quant_lstm::QuantOperator::BiasInputHidden,
+              quant_lstm::QuantOperator::BiasHiddenHidden}) {
+            for (quant_lstm::QuantGranularity granularity :
+                 {quant_lstm::QuantGranularity::PerTensor,
+                  quant_lstm::QuantGranularity::PerGate,
+                  quant_lstm::QuantGranularity::PerChannel}) {
+                auto independent_config = defaults;
+                independent_config.at(id).granularity = granularity;
+                const auto independent_ranges =
+                    makeRanges(independent_config, channel_count, true);
+                const auto independent_params = quant_lstm::finalizeQuantParams(
+                    independent_config, independent_ranges, hidden_size, true);
+                const auto& finalized = independent_params.at(id);
+                require(finalized.values.size() == channel_count &&
+                            finalized.source_granularity == granularity,
+                        "independent parameter granularity");
+                const std::size_t expected_groups =
+                    groupCount(id, granularity, channel_count);
+                require(finalized.group_diagnostics.size() == expected_groups,
+                        "independent calibration group count");
+            }
+        }
+
+        auto equal_gate_ranges = ranges;
+        equal_gate_ranges.at(quant_lstm::QuantOperator::WeightHiddenHidden)
+            .assign(4, quant_lstm::CalibrationRange{-1.0F, 1.0F});
+        static_cast<void>(
+            quant_lstm::finalizeQuantParams(config, equal_gate_ranges, hidden_size, true));
+
+        for (std::size_t index = 0; index < quant_lstm::kQuantOperatorCount; ++index) {
+            const auto id = static_cast<quant_lstm::QuantOperator>(index);
+            if (quant_lstm::isParameterOperator(id)) {
+                continue;
+            }
+            auto field_config = defaults;
+            field_config.at(id).type = {16, true, false};
+            const auto field_ranges = makeRanges(field_config, channel_count, true);
+            const auto field_params =
+                quant_lstm::finalizeQuantParams(field_config, field_ranges, hidden_size, true);
+            const auto expected = quant_lstm::quantization::calibrateMinMax(
+                field_ranges.at(id).front().minimum, field_ranges.at(id).front().maximum,
+                field_config.at(id).type);
+            require(field_params.at(id).values.front().scale == expected.param.scale &&
+                        field_params.at(id).values.front().zero_point ==
+                            expected.param.zero_point,
+                    "non-parameter fields must reach finalize");
+        }
+
         auto invalid_ranges = ranges;
         invalid_ranges.at(quant_lstm::QuantOperator::WeightHiddenHidden).pop_back();
         requireThrows(
@@ -147,6 +199,21 @@ int main() {
                     quant_lstm::finalizeQuantParams(config, invalid_ranges, hidden_size, true));
             },
             "invalid group count must fail");
+        auto invalid_per_tensor = params;
+        invalid_per_tensor
+            .operators[static_cast<std::size_t>(
+                quant_lstm::QuantOperator::WeightInputHidden)]
+            .values[1]
+            .scale *= 2.0F;
+        requireThrows([&] { invalid_per_tensor.validate(config); },
+                      "per-tensor 4H repetition must be validated");
+        auto invalid_diagnostics = params;
+        invalid_diagnostics
+            .operators[static_cast<std::size_t>(
+                quant_lstm::QuantOperator::WeightHiddenHidden)]
+            .group_diagnostics.pop_back();
+        requireThrows([&] { invalid_diagnostics.validate(config); },
+                      "calibration group count must be validated");
 
         auto pot2_config = config;
         pot2_config.scale_mode = quant_lstm::quantization::ScaleMode::Pot2;

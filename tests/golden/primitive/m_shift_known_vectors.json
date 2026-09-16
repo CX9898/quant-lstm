@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "case_id": "m_shift_known_vectors",
+  "execution_model": "common",
+  "primitive": "m_shift",
+  "attributes": {},
+  "inputs": {
+    "ratio": {
+      "dtype": "float64",
+      "shape": [6],
+      "data": [
+        0.5,
+        1.0,
+        2.0,
+        0.50000762939453125,
+        0.50002288818359375,
+        0.99999237060546875
+      ]
+    },
+    "value": {
+      "dtype": "int64",
+      "shape": [6],
+      "data": [5, -5, 7, 1, 1, 5]
+    }
+  },
+  "expected": {
+    "checkpoints": {
+      "multiplier": {
+        "dtype": "uint16",
+        "shape": [6],
+        "data": [32768, 32768, 32768, 32768, 32770, 32768]
+      },
+      "shift": {
+        "dtype": "int8",
+        "shape": [6],
+        "data": [16, 15, 14, 16, 16, 15]
+      },
+      "int_apply": {
+        "dtype": "int64",
+        "shape": [6],
+        "data": [2, -5, 14, 0, 1, 5]
+      },
+      "fp_apply": {
+        "dtype": "int64",
+        "shape": [6],
+        "data": [2, -5, 14, 0, 1, 5]
+      }
+    },
+    "diagnostics": {}
+  }
+}

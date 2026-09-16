@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "case_id": "quantized_ranges",
+  "execution_model": "common",
+  "primitive": "quantized_range",
+  "attributes": {},
+  "inputs": {
+    "bitwidth": {"dtype": "uint8", "shape": [6], "data": [8, 8, 8, 16, 16, 16]},
+    "is_unsigned": {
+      "dtype": "bool",
+      "shape": [6],
+      "data": [false, false, true, false, false, true]
+    },
+    "is_symmetric": {
+      "dtype": "bool",
+      "shape": [6],
+      "data": [true, false, true, true, false, false]
+    }
+  },
+  "expected": {
+    "checkpoints": {
+      "minimum": {
+        "dtype": "int32",
+        "shape": [6],
+        "data": [-127, -128, 0, -32767, -32768, 0]
+      },
+      "maximum": {
+        "dtype": "int32",
+        "shape": [6],
+        "data": [127, 127, 255, 32767, 32767, 65535]
+      }
+    },
+    "diagnostics": {}
+  }
+}
