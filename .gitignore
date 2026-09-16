@@ -1,7 +1,9 @@
 # CMake 和本地编译产物
 /build/
+/build-*/
 /cmake-build-*/
 /pytorch/build/
+/pytorch/tests/build/
 
 # Python 缓存和本地扩展产物
 __pycache__/
