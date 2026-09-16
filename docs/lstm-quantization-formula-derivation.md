@@ -256,11 +256,13 @@ S_std = 2^(-n_pot)
 
 POT2 策略和 tolerance 不进入 JSON，也不存在运行时 `Round/Floor/CoverRange` 分支。JSON 只选择 `scale_mode=pot2|affine`；`pot_scale_method`、`pot_scale_tolerance` 或等价字段均作为 unknown field 拒绝。内部只能保留一个 `convertScaleToPot2CoverRange` 公共入口，测试辅助函数不得变成生产配置接口。
 
-转换后对称量化继续使用 `Z=0`；非对称量化以转换后的 `S_std` 重新计算：
+转换后对称量化继续使用 `Z=0`；非对称量化以转换后的 `S_std` 重新计算。这里的
+`r_lo` 是包含实数零并完成第 2.3.1 节 fallback 后的调整下界，不是原始观测
+`r_min`：
 
 ```text
 Z = Clamp(
-    RoundToNearestEven(qmin - r_min / S_std),
+    RoundToNearestEven(qmin - r_lo / S_std),
     qmin,
     qmax)
 ```
@@ -372,7 +374,7 @@ h, c:   [T+1, B, H]
 
 ## 4. 有效量化点
 
-以下张量发生真实 quantize/requantize 和 clamp，因此拥有独立量化参数：
+以下 18 个张量发生真实 quantize/requantize 和 clamp，因此拥有独立量化参数：
 
 | 类别 | 量化点 | 含义 |
 |---|---|---|
