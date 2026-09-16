@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-lstm.local/schema/lstm_quant_override.schema.json",
+  "title": "LSTM quantization sparse override v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "scale_mode": {"enum": ["affine", "pot2"]},
+    "operators": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "input": {"$ref": "#/$defs/non_parameter_override"},
+        "output": {"$ref": "#/$defs/non_parameter_override"},
+        "cell_state": {"$ref": "#/$defs/non_parameter_override"},
+        "weight_ih": {"$ref": "#/$defs/parameter_override"},
+        "weight_hh": {"$ref": "#/$defs/parameter_override"},
+        "bias_ih": {"$ref": "#/$defs/parameter_override"},
+        "bias_hh": {"$ref": "#/$defs/parameter_override"},
+        "weight_ih_linear": {"$ref": "#/$defs/non_parameter_override"},
+        "weight_hh_linear": {"$ref": "#/$defs/non_parameter_override"},
+        "input_gate_input": {"$ref": "#/$defs/non_parameter_override"},
+        "forget_gate_input": {"$ref": "#/$defs/non_parameter_override"},
+        "cell_gate_input": {"$ref": "#/$defs/non_parameter_override"},
+        "output_gate_input": {"$ref": "#/$defs/non_parameter_override"},
+        "input_gate_output": {"$ref": "#/$defs/non_parameter_override"},
+        "forget_gate_output": {"$ref": "#/$defs/non_parameter_override"},
+        "cell_gate_output": {"$ref": "#/$defs/non_parameter_override"},
+        "output_gate_output": {"$ref": "#/$defs/non_parameter_override"},
+        "cell_tanh_output": {"$ref": "#/$defs/non_parameter_override"}
+      }
+    }
+  },
+  "$defs": {
+    "bitwidth": {"type": "integer", "enum": [8, 16]},
+    "non_parameter_override": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "bitwidth": {"$ref": "#/$defs/bitwidth"},
+        "is_unsigned": {"type": "boolean"},
+        "is_symmetric": {"type": "boolean"}
+      }
+    },
+    "parameter_override": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "bitwidth": {"$ref": "#/$defs/bitwidth"},
+        "is_unsigned": {"const": false},
+        "is_symmetric": {"const": true},
+        "granularity": {"enum": ["per_tensor", "per_gate", "per_channel"]}
+      }
+    }
+  }
+}

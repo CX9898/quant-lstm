@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "scale_mode": "affine",
+  "operators": {
+    "input": {
+      "bitwidth": 8,
+      "is_unsigned": false,
+      "is_symmetric": true,
+      "granularity": "per_tensor"
+    },
+    "output": {
+      "bitwidth": 8,
+      "is_unsigned": false,
+      "is_symmetric": true,
+      "granularity": "per_tensor"
+    },
+    "cell_state": {
+      "bitwidth": 8,
+      "is_unsigned": false,
+      "is_symmetric": true,
+      "granularity": "per_tensor"
+    },
+    "weight_ih": {
+      "bitwidth": 8,
+      "is_unsigned": false,
+      "is_symmetric": true,
+      "granularity": "per_channel"
+    },
+    "weight_hh": {
+      "bitwidth": 8,
+      "is_unsigned": false,
+      "is_symmetric": true,
+      "granularity": "per_channel"
+    },
+    "bias_ih": {
+      "bitwidth": 8,
+      "is_unsigned": false,
+      "is_symmetric": true,
+      "granularity": "per_channel"
+    },
+    "bias_hh": {
+      "bitwidth": 8,
+      "is_unsigned": false,
+      "is_symmetric": true,
+      "granularity": "per_channel"
+    },
+    "weight_ih_linear": {
+      "bitwidth": 8,
+      "is_unsigned": false,
+      "is_symmetric": true,
+      "granularity": "per_tensor"
+    },
+    "weight_hh_linear": {
+      "bitwidth": 8,
+      "is_unsigned": false,
+      "is_symmetric": true,
+      "granularity": "per_tensor"
+    },
+    "input_gate_input": {
+      "bitwidth": 8,
+      "is_unsigned": false,
+      "is_symmetric": true,
+      "granularity": "per_tensor"
+    },
+    "forget_gate_input": {
+      "bitwidth": 8,
+      "is_unsigned": false,
+      "is_symmetric": true,
+      "granularity": "per_tensor"
+    },
+    "cell_gate_input": {
+      "bitwidth": 8,
+      "is_unsigned": false,
+      "is_symmetric": true,
+      "granularity": "per_tensor"
+    },
+    "output_gate_input": {
+      "bitwidth": 8,
+      "is_unsigned": false,
+      "is_symmetric": true,
+      "granularity": "per_tensor"
+    },
+    "input_gate_output": {
+      "bitwidth": 8,
+      "is_unsigned": true,
+      "is_symmetric": true,
+      "granularity": "per_tensor"
+    },
+    "forget_gate_output": {
+      "bitwidth": 8,
+      "is_unsigned": true,
+      "is_symmetric": true,
+      "granularity": "per_tensor"
+    },
+    "cell_gate_output": {
+      "bitwidth": 8,
+      "is_unsigned": false,
+      "is_symmetric": true,
+      "granularity": "per_tensor"
+    },
+    "output_gate_output": {
+      "bitwidth": 8,
+      "is_unsigned": true,
+      "is_symmetric": true,
+      "granularity": "per_tensor"
+    },
+    "cell_tanh_output": {
+      "bitwidth": 8,
+      "is_unsigned": false,
+      "is_symmetric": true,
+      "granularity": "per_tensor"
+    }
+  }
+}

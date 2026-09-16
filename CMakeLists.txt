@@ -10,6 +10,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+find_package(nlohmann_json 3.11.2 REQUIRED)
+
 add_library(quant_lstm_headers INTERFACE)
 target_include_directories(
     quant_lstm_headers
@@ -21,12 +23,16 @@ target_include_directories(
 add_library(
     quant_lstm STATIC
     src/lstm/forward_float_cpu.cc
+    src/lstm/quant_config.cc
+    src/lstm/quant_config_loader.cc
+    src/lstm/quant_params.cc
     src/quantization/numeric_safety.cc
     src/quantization/quant_param.cc
     src/quantization/real_activation.cc
     src/quantization/scale_encoding.cc
 )
 target_link_libraries(quant_lstm PUBLIC quant_lstm_headers)
+target_link_libraries(quant_lstm PRIVATE nlohmann_json::nlohmann_json)
 set_target_properties(quant_lstm PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_options(quant_lstm PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra>)
 
@@ -55,6 +61,7 @@ endif()
 if(QUANT_LSTM_BUILD_TESTS)
     include(CTest)
     enable_testing()
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
     add_library(quant_lstm_test_support STATIC tests/common/deterministic_rng.cc)
     target_include_directories(quant_lstm_test_support PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/tests)
@@ -78,6 +85,25 @@ if(QUANT_LSTM_BUILD_TESTS)
     add_executable(test_quantization_primitives tests/cpp/test_quantization_primitives.cc)
     target_link_libraries(test_quantization_primitives PRIVATE quant_lstm)
     add_test(NAME quantization_primitives COMMAND test_quantization_primitives)
+
+    add_executable(test_quant_config tests/cpp/test_quant_config.cc)
+    target_link_libraries(test_quant_config PRIVATE quant_lstm)
+    target_compile_definitions(
+        test_quant_config PRIVATE QUANT_LSTM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME quant_config COMMAND test_quant_config)
+
+    add_executable(test_quant_params tests/cpp/test_quant_params.cc)
+    target_link_libraries(test_quant_params PRIVATE quant_lstm)
+    target_compile_definitions(
+        test_quant_params PRIVATE QUANT_LSTM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME quant_params COMMAND test_quant_params)
+
+    add_test(
+        NAME quant_config_schema
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests/python/test_quant_config_schema.py
+    )
+    set_tests_properties(
+        quant_config_schema PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
     if(QUANT_LSTM_ENABLE_CUDA)
         add_executable(test_float_cuda tests/cuda/test_float_cuda.cu)
