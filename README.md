@@ -7,7 +7,8 @@ Round/Clamp 边界保存 mask，并支持 h0/c0、bias=False 和双向梯度。C
 标量 FP32 q-carrier reference 可通过无 CUDA 的安装包独立消费，统一 Golden、
 NumericSafety 和 synthetic numeric 精度门禁保持生效。量化执行语义以
 `docs/quantized-execution-spec.md` 为准；配置和双载体流程分别见
-`docs/configuration.md` 与 `docs/dual-carrier-execution.md`。
+`docs/configuration.md` 与 `docs/dual-carrier-execution.md`；标准 ONNX LSTM 导出见
+`docs/onnx-export.md`。
 
 ## 构建
 
@@ -46,6 +47,7 @@ QUANT_LSTM_TEST_SUITE=strict PYTHONPATH=. python3 tests/test_float_reference.py
 PYTHONPATH=. python3 -m unittest -v tests.test_quantized_interface
 PYTHONPATH=. python3 -m unittest -v tests.test_bidirectional_interface
 PYTHONPATH=. python3 -m unittest -v tests.test_backward
+PYTHONPATH=. python3 -m unittest -v tests.test_onnx_export
 ```
 
 典型流程是先以 `calibrating=True` 运行一个或多个校准 batch，随后调用

@@ -20,6 +20,10 @@ except ImportError as exc:
     ) from exc
 
 from lstm_autograd import float_lstm, quantized_lstm
+from lstm_onnx import (
+    ensure_quant_lstm_onnx_registered,
+    onnx_lstm,
+)
 
 
 _DEFAULT_CONFIG_PATH = (
@@ -565,6 +569,21 @@ class QuantLSTM(_UnidirectionalQuantLSTM):
         self._reverse_calibration_session = None
         self._reverse_quant_params_bundle_json: Optional[str] = None
         self._reverse_safety_report: Optional[dict[str, Any]] = None
+        self.export_mode = False
+        empty = torch.empty(
+            0,
+            device=self.weight_ih_l0.device,
+            dtype=self.weight_ih_l0.dtype,
+        )
+        self.register_buffer(
+            "_onnx_export_weight_ih", empty, persistent=False
+        )
+        self.register_buffer(
+            "_onnx_export_weight_hh", empty.clone(), persistent=False
+        )
+        self.register_buffer(
+            "_onnx_export_bias", empty.clone(), persistent=False
+        )
 
     @property
     def num_directions(self) -> int:
@@ -930,6 +949,104 @@ class QuantLSTM(_UnidirectionalQuantLSTM):
                 stacklevel=2,
             )
         return self._last_safety_report
+
+    @staticmethod
+    def _reorder_onnx_gates(value: Tensor) -> Tensor:
+        """将 PyTorch (i,f,g,o) 重排为 ONNX LSTM (i,o,f,c)。"""
+        input_gate, forget_gate, cell_gate, output_gate = value.chunk(4, dim=0)
+        return torch.cat((input_gate, output_gate, forget_gate, cell_gate))
+
+    def _pack_onnx_direction(
+        self, input: Tensor, reverse: bool
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        suffix = "_reverse" if reverse else ""
+        weight_ih = getattr(self, f"weight_ih_l0{suffix}").detach().to(
+            device=input.device, dtype=input.dtype
+        )
+        weight_hh = getattr(self, f"weight_hh_l0{suffix}").detach().to(
+            device=input.device, dtype=input.dtype
+        )
+        weight_ih = self._reorder_onnx_gates(weight_ih)
+        weight_hh = self._reorder_onnx_gates(weight_hh)
+        if self.bias:
+            bias_ih = getattr(self, f"bias_ih_l0{suffix}").detach().to(
+                device=input.device, dtype=input.dtype
+            )
+            bias_hh = getattr(self, f"bias_hh_l0{suffix}").detach().to(
+                device=input.device, dtype=input.dtype
+            )
+            bias_ih = self._reorder_onnx_gates(bias_ih)
+            bias_hh = self._reorder_onnx_gates(bias_hh)
+        else:
+            bias_ih = input.new_zeros(4 * self.hidden_size)
+            bias_hh = input.new_zeros(4 * self.hidden_size)
+        return weight_ih, weight_hh, torch.cat((bias_ih, bias_hh))
+
+    def _forward_onnx(
+        self,
+        input: Tensor,
+        hx: Optional[tuple[Tensor, Tensor]],
+    ) -> tuple[Tensor, tuple[Tensor, Tensor]]:
+        if not torch.onnx.is_in_onnx_export():
+            raise RuntimeError(
+                "export_mode=True 仅用于 torch.onnx.export(..., dynamo=False)"
+            )
+        ensure_quant_lstm_onnx_registered(opset=18)
+        input_time = (
+            input.transpose(0, 1).contiguous()
+            if self.batch_first
+            else input.contiguous()
+        )
+        batch = input_time.size(1)
+        state_shape = (self.num_directions, batch, self.hidden_size)
+        if hx is None:
+            initial_hidden = input.new_zeros(state_shape)
+            initial_cell = input.new_zeros(state_shape)
+        else:
+            if len(hx) != 2:
+                raise ValueError("hx 必须是 (h_0, c_0)")
+            initial_hidden, initial_cell = hx
+
+        packed = [
+            self._pack_onnx_direction(input_time, reverse=False)
+        ]
+        if self.bidirectional:
+            packed.append(
+                self._pack_onnx_direction(input_time, reverse=True)
+            )
+        self._onnx_export_weight_ih = torch.stack(
+            [item[0] for item in packed], dim=0
+        ).contiguous()
+        self._onnx_export_weight_hh = torch.stack(
+            [item[1] for item in packed], dim=0
+        ).contiguous()
+        self._onnx_export_bias = torch.stack(
+            [item[2] for item in packed], dim=0
+        ).contiguous()
+
+        output, final_hidden, final_cell = onnx_lstm(
+            input_time,
+            initial_hidden.contiguous(),
+            initial_cell.contiguous(),
+            self._onnx_export_weight_ih,
+            self._onnx_export_weight_hh,
+            self._onnx_export_bias,
+            self.hidden_size,
+            self.bidirectional,
+        )
+        if self.batch_first:
+            output = output.transpose(0, 1).contiguous()
+        return output, (final_hidden, final_cell)
+
+    def forward(
+        self,
+        input: Tensor,
+        hx: Optional[tuple[Tensor, Tensor]] = None,
+    ) -> tuple[Tensor, tuple[Tensor, Tensor]]:
+        if self.export_mode:
+            return self._forward_onnx(input, hx)
+        return super().forward(input, hx)
+
 
     import_quant_params = load_quant_params
 

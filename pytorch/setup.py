@@ -21,7 +21,7 @@ if not CORE_LIBRARY.exists():
 setup(
     name="quant-lstm",
     version="0.1.0",
-    py_modules=["quant_lstm", "lstm_autograd"],
+    py_modules=["quant_lstm", "lstm_autograd", "lstm_onnx"],
     ext_modules=[
         CUDAExtension(
             name="_quant_lstm",
