@@ -66,6 +66,16 @@ struct LstmQuantizedFpCudaCheckpoints {
     float* cell_states = nullptr;
     float* cell_tanh_outputs = nullptr;
     float* hidden_outputs = nullptr;
+
+    // 每个 mask 与对应 checkpoint 同形，1 表示该真实量化边界发生 Clamp。
+    // mask 只描述 Clamp，不把融合乘法临时值伪装为量化点。
+    std::uint8_t* weight_ih_linear_clamped = nullptr;
+    std::uint8_t* weight_hh_linear_clamped = nullptr;
+    std::uint8_t* gate_inputs_clamped = nullptr;
+    std::uint8_t* gate_outputs_clamped = nullptr;
+    std::uint8_t* cell_states_clamped = nullptr;
+    std::uint8_t* cell_tanh_outputs_clamped = nullptr;
+    std::uint8_t* hidden_outputs_clamped = nullptr;
 };
 
 /// 计数在 enqueue 返回前即可读取，不要求同步 GPU。

@@ -1,6 +1,6 @@
 # Quant-LSTM 纯定点量化实现计划
 
-> 状态：阶段 0 设计审核完成；执行规格已生成，等待实现期数值证据
+> 状态：阶段 6 已完成；首个单层单向 CUDA FP 载体量化 LSTM 里程碑已验收
 > 参考基线：`/home/chengxing.zou/projects/quant-gru`，commit `9c25d14`
 > 目标仓库：`/home/chengxing.zou/projects/quant-lstm`
 

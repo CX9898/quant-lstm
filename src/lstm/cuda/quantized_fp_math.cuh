@@ -33,7 +33,8 @@ QUANT_LSTM_CUDA_HOST_DEVICE inline float realTanh(float value) noexcept {
 QUANT_LSTM_CUDA_HOST_DEVICE inline float realActivationCore(
     float quantized_input, float input_scale, std::int32_t input_zero_point,
     float output_scale, std::int32_t output_zero_point, std::int32_t output_minimum,
-    std::int32_t output_maximum, quantization::RealActivationKind kind) noexcept {
+    std::int32_t output_maximum, quantization::RealActivationKind kind,
+    bool* clamped = nullptr) noexcept {
     // double 中间顺序与既有 dequantize/quantize host 边界一致；激活本身为 FP32。
     const float real_input = static_cast<float>(
         (static_cast<double>(quantized_input) -
@@ -48,10 +49,19 @@ QUANT_LSTM_CUDA_HOST_DEVICE inline float realActivationCore(
         static_cast<double>(activated) / static_cast<double>(output_scale) +
         static_cast<double>(output_zero_point);
     if (translated <= static_cast<double>(output_minimum)) {
+        if (clamped != nullptr) {
+            *clamped = translated < static_cast<double>(output_minimum);
+        }
         return static_cast<float>(output_minimum);
     }
     if (translated >= static_cast<double>(output_maximum)) {
+        if (clamped != nullptr) {
+            *clamped = translated > static_cast<double>(output_maximum);
+        }
         return static_cast<float>(output_maximum);
+    }
+    if (clamped != nullptr) {
+        *clamped = false;
     }
     return static_cast<float>(
         quantization::roundToNearestEven(translated));

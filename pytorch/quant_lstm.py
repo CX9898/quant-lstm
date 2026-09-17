@@ -1,7 +1,12 @@
-"""阶段 1 的单层、单向 FP32 LSTM PyTorch 接口。"""
+"""单层单向 LSTM 的浮点与 CUDA FP32 q-carrier PyTorch 接口。"""
 
+from __future__ import annotations
+
+import json
 import math
-from typing import Optional
+import warnings
+from pathlib import Path
+from typing import Any, Optional
 
 import torch
 from torch import Tensor, nn
@@ -11,12 +16,73 @@ try:
 except ImportError as exc:
     raise ImportError(
         "_quant_lstm 扩展未找到；请先构建 CMake 核心并运行 "
-        "`python setup.py build_ext --inplace`"
+        "python setup.py build_ext --inplace"
     ) from exc
 
 
+_DEFAULT_CONFIG_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "config"
+    / "defaults"
+    / "lstm_quant_default_v1.json"
+)
+_PARAMETER_OPERATORS = {"weight_ih", "weight_hh", "bias_ih", "bias_hh"}
+_CALIBRATION_METHODS = {"minmax", "sqnr", "percentile"}
+_MATH_MODES = {"pedantic", "tf32"}
+
+
+def _strict_json_loads(text: str) -> dict[str, Any]:
+    def reject_duplicates(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"JSON 包含重复 key: {key}")
+            result[key] = value
+        return result
+
+    value = json.loads(text, object_pairs_hook=reject_duplicates)
+    if not isinstance(value, dict):
+        raise ValueError("JSON 根必须是 object")
+    return value
+
+
+def _json_source(value: dict[str, Any] | str | Path | None) -> str:
+    if value is None:
+        return '{"schema_version":1}'
+    if isinstance(value, dict):
+        return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+    if isinstance(value, Path):
+        return value.read_text(encoding="utf-8")
+    stripped = value.lstrip()
+    if stripped.startswith("{"):
+        return value
+    return Path(value).read_text(encoding="utf-8")
+
+
+def _resolved_override(resolved: dict[str, Any]) -> dict[str, Any]:
+    operators = {}
+    for name, config in resolved["operators"].items():
+        fields = {
+            "bitwidth": config["bitwidth"],
+            "is_unsigned": config["is_unsigned"],
+            "is_symmetric": config["is_symmetric"],
+        }
+        if name in _PARAMETER_OPERATORS:
+            fields["granularity"] = config["granularity"]
+        operators[name] = fields
+    return {
+        "schema_version": 1,
+        "scale_mode": resolved["scale_mode"],
+        "operators": operators,
+    }
+
+
 class QuantLSTM(nn.Module):
-    """与 ``nn.LSTM`` 单层单向子集对齐的 FP32 前向模块。"""
+    """与单层单向 nn.LSTM 对齐的双模式模块。
+
+    use_quantization=False 使用浮点路径。校准并设置
+    use_quantization=True 后，唯一量化后端是 CUDA FP32 q-carrier。
+    """
 
     def __init__(
         self,
@@ -30,18 +96,31 @@ class QuantLSTM(nn.Module):
         *,
         device=None,
         dtype=None,
+        use_quantization: bool = False,
+        quant_config: dict[str, Any] | str | Path | None = None,
+        calibration_method: str = "minmax",
+        cublas_math_mode: str = "pedantic",
+        require_exact_accumulation: bool = False,
     ) -> None:
         super().__init__()
         if input_size <= 0 or hidden_size <= 0:
             raise ValueError("input_size 和 hidden_size 必须为正数")
         if num_layers != 1:
-            raise ValueError("阶段 1 仅支持 num_layers=1")
+            raise ValueError("当前仅支持 num_layers=1")
         if dropout != 0.0:
-            raise ValueError("阶段 1 仅支持 dropout=0")
+            raise ValueError("当前仅支持 dropout=0")
         if bidirectional:
-            raise ValueError("阶段 1 尚不支持 bidirectional=True")
+            raise ValueError("阶段 6 尚不支持 bidirectional=True")
         if dtype not in (None, torch.float32):
-            raise ValueError("阶段 1 仅支持 torch.float32")
+            raise ValueError("当前仅支持 torch.float32")
+        if calibration_method not in _CALIBRATION_METHODS:
+            raise ValueError(
+                "calibration_method 必须是 minmax、sqnr 或 percentile"
+            )
+        if cublas_math_mode not in _MATH_MODES:
+            raise ValueError("cublas_math_mode 必须是 pedantic 或 tf32")
+        if not _DEFAULT_CONFIG_PATH.is_file():
+            raise RuntimeError(f"找不到默认量化配置: {_DEFAULT_CONFIG_PATH}")
 
         self.input_size = input_size
         self.hidden_size = hidden_size
@@ -50,8 +129,16 @@ class QuantLSTM(nn.Module):
         self.batch_first = batch_first
         self.dropout = dropout
         self.bidirectional = bidirectional
+        self.use_quantization = bool(use_quantization)
+        self.calibrating = False
+        self.require_exact_accumulation = bool(require_exact_accumulation)
+        self._calibration_method = calibration_method
+        self._cublas_math_mode = cublas_math_mode
 
-        factory_kwargs = {"device": device, "dtype": torch.float32 if dtype is None else dtype}
+        factory_kwargs = {
+            "device": device,
+            "dtype": torch.float32 if dtype is None else dtype,
+        }
         self.weight_ih_l0 = nn.Parameter(
             torch.empty((4 * hidden_size, input_size), **factory_kwargs)
         )
@@ -59,12 +146,53 @@ class QuantLSTM(nn.Module):
             torch.empty((4 * hidden_size, hidden_size), **factory_kwargs)
         )
         if bias:
-            self.bias_ih_l0 = nn.Parameter(torch.empty(4 * hidden_size, **factory_kwargs))
-            self.bias_hh_l0 = nn.Parameter(torch.empty(4 * hidden_size, **factory_kwargs))
+            self.bias_ih_l0 = nn.Parameter(
+                torch.empty(4 * hidden_size, **factory_kwargs)
+            )
+            self.bias_hh_l0 = nn.Parameter(
+                torch.empty(4 * hidden_size, **factory_kwargs)
+            )
         else:
             self.register_parameter("bias_ih_l0", None)
             self.register_parameter("bias_hh_l0", None)
         self.reset_parameters()
+
+        defaults = _DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
+        override_json = _json_source(quant_config)
+        self._resolved_config_json = _quant_lstm.resolve_quant_config(
+            defaults, override_json
+        )
+        self._override_config = _resolved_override(
+            _strict_json_loads(self._resolved_config_json)
+        )
+        self._calibration_session = None
+        self._quant_params_bundle_json: Optional[str] = None
+        self._last_safety_report: Optional[dict[str, Any]] = None
+        self._qat_saved_state: Optional[dict[str, Any]] = None
+
+    @property
+    def calibration_method(self) -> str:
+        return self._calibration_method
+
+    @calibration_method.setter
+    def calibration_method(self, value: str) -> None:
+        if value not in _CALIBRATION_METHODS:
+            raise ValueError(
+                "calibration_method 必须是 minmax、sqnr 或 percentile"
+            )
+        if getattr(self, "_calibration_method", value) != value:
+            self.reset_calibration()
+        self._calibration_method = value
+
+    @property
+    def cublas_math_mode(self) -> str:
+        return self._cublas_math_mode
+
+    @cublas_math_mode.setter
+    def cublas_math_mode(self, value: str) -> None:
+        if value not in _MATH_MODES:
+            raise ValueError("cublas_math_mode 必须是 pedantic 或 tf32")
+        self._cublas_math_mode = value
 
     def reset_parameters(self) -> None:
         bound = 1.0 / math.sqrt(self.hidden_size)
@@ -72,33 +200,374 @@ class QuantLSTM(nn.Module):
             for parameter in self.parameters():
                 parameter.uniform_(-bound, bound)
 
-    def forward(
-        self,
-        input: Tensor,
-        hx: Optional[tuple[Tensor, Tensor]] = None,
-    ) -> tuple[Tensor, tuple[Tensor, Tensor]]:
+    def _invalidate_quant_params(self) -> None:
+        self._calibration_session = None
+        self._quant_params_bundle_json = None
+        self._last_safety_report = None
+        self._qat_saved_state = None
+
+    def _apply_override(self, override: dict[str, Any]) -> None:
+        defaults = _DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
+        encoded = json.dumps(override, separators=(",", ":"), ensure_ascii=False)
+        self._resolved_config_json = _quant_lstm.resolve_quant_config(
+            defaults, encoded
+        )
+        self._override_config = _resolved_override(
+            _strict_json_loads(self._resolved_config_json)
+        )
+        self._invalidate_quant_params()
+
+    def get_quant_config(self, operator: Optional[str] = None) -> dict[str, Any]:
+        """返回 C++ resolver 产生的完整 canonical resolved config。"""
+        resolved = _strict_json_loads(self._resolved_config_json)
+        if operator is None:
+            return resolved
+        if operator not in resolved["operators"]:
+            raise ValueError(f"未知量化点: {operator}")
+        return json.loads(json.dumps(resolved["operators"][operator]))
+
+    def adjust_quant_config(self, operator: str, **changes: Any) -> None:
+        """稀疏修改一个真实量化点，并立即通过 C++ resolver 校验。"""
+        allowed = {
+            "bitwidth",
+            "is_unsigned",
+            "is_symmetric",
+            "granularity",
+        }
+        unknown = set(changes) - allowed
+        if unknown:
+            raise ValueError(f"未知配置字段: {sorted(unknown)}")
+        if not changes:
+            raise ValueError("至少需要提供一个配置字段")
+        resolved = self.get_quant_config()
+        if operator not in resolved["operators"]:
+            raise ValueError(f"未知量化点: {operator}")
+        override = _resolved_override(resolved)
+        override["operators"][operator].update(changes)
+        self._apply_override(override)
+
+    def set_all_bitwidth(self, bitwidth: int = 8) -> None:
+        """一次设置全部 18 个真实量化点的位宽。"""
+        resolved = self.get_quant_config()
+        override = _resolved_override(resolved)
+        for operator in override["operators"].values():
+            operator["bitwidth"] = bitwidth
+        self._apply_override(override)
+
+    def _ensure_calibration_session(self):
+        if self._calibration_session is None:
+            self._calibration_session = _quant_lstm.CalibrationSession(
+                self._resolved_config_json,
+                self.input_size,
+                self.hidden_size,
+                self.bias,
+                self.calibration_method,
+            )
+        return self._calibration_session
+
+    @staticmethod
+    def _cpu_tensor(value: Optional[Tensor]) -> Optional[Tensor]:
+        if value is None:
+            return None
+        return value.detach().to(device="cpu", dtype=torch.float32).contiguous()
+
+    def _collect_calibration(
+        self, input: Tensor, hx: Optional[tuple[Tensor, Tensor]]
+    ) -> None:
         if hx is None:
-            initial_hidden = None
-            initial_cell = None
+            h0 = c0 = None
         else:
             if len(hx) != 2:
                 raise ValueError("hx 必须是 (h_0, c_0)")
-            initial_hidden, initial_cell = hx
+            h0, c0 = hx
+        session = self._ensure_calibration_session()
+        session.collect(
+            self._cpu_tensor(input),
+            self._cpu_tensor(self.weight_ih_l0),
+            self._cpu_tensor(self.weight_hh_l0),
+            self._cpu_tensor(self.bias_ih_l0),
+            self._cpu_tensor(self.bias_hh_l0),
+            self._cpu_tensor(h0),
+            self._cpu_tensor(c0),
+            self.batch_first,
+        )
 
+    def reset_calibration(self) -> None:
+        self._invalidate_quant_params()
+
+    def finalize_calibration(self) -> dict[str, Any]:
+        if self._calibration_session is None:
+            raise RuntimeError(
+                "未收集校准数据；请先设置 calibrating=True 并执行 forward"
+            )
+        result = self._calibration_session.finalize(
+            self.require_exact_accumulation
+        )
+        self._quant_params_bundle_json = result["bundle_json"]
+        self._resolved_config_json = result["resolved_config_json"]
+        self._last_safety_report = result["safety"]
+        if self._last_safety_report["has_precision_risk"]:
+            warnings.warn(
+                "量化配置包含 FP32 precision_risk；已保留在 safety report 中",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        return {
+            "batch_count": result["batch_count"],
+            "method": result["method"],
+            "safety": self._last_safety_report,
+        }
+
+    def is_calibrated(self) -> bool:
+        return self._quant_params_bundle_json is not None
+
+    def calibration_state(self) -> str:
+        if self._calibration_session is None:
+            return "empty"
+        return self._calibration_session.state
+
+    def _float_forward(
+        self, input: Tensor, hx: Optional[tuple[Tensor, Tensor]]
+    ) -> tuple[Tensor, tuple[Tensor, Tensor]]:
+        if hx is None:
+            h0 = c0 = None
+        else:
+            if len(hx) != 2:
+                raise ValueError("hx 必须是 (h_0, c_0)")
+            h0, c0 = hx
         output, final_hidden, final_cell = _quant_lstm.lstm_forward(
             input,
             self.weight_ih_l0,
             self.weight_hh_l0,
             self.bias_ih_l0,
             self.bias_hh_l0,
-            initial_hidden,
-            initial_cell,
+            h0,
+            c0,
             self.batch_first,
         )
         return output, (final_hidden, final_cell)
 
+    @staticmethod
+    def _quant_range(operator: dict[str, Any]) -> tuple[int, int]:
+        bitwidth = operator["bitwidth"]
+        if operator["is_unsigned"]:
+            return 0, (1 << bitwidth) - 1
+        if operator["is_symmetric"]:
+            maximum = (1 << (bitwidth - 1)) - 1
+            return -maximum, maximum
+        return -(1 << (bitwidth - 1)), (1 << (bitwidth - 1)) - 1
+
+    def _quantize_saved_tensor(
+        self,
+        value: Tensor,
+        operator_name: str,
+        bundle: dict[str, Any],
+        per_channel: bool = False,
+    ) -> tuple[Tensor, Tensor]:
+        operator = bundle["operators"][operator_name]
+        qmin, qmax = self._quant_range(operator)
+        scales = torch.tensor(
+            [float(item) for item in operator["scales"]],
+            dtype=torch.float32,
+            device=value.device,
+        ).double()
+        zero_points = torch.tensor(
+            operator["zero_points"],
+            dtype=torch.float64,
+            device=value.device,
+        )
+        if per_channel:
+            shape = [len(scales)] + [1] * (value.dim() - 1)
+            scales = scales.reshape(shape)
+            zero_points = zero_points.reshape(shape)
+        translated = value.detach().double() / scales + zero_points
+        clamped = (translated < qmin) | (translated > qmax)
+        quantized = torch.round(translated).clamp(qmin, qmax).float()
+        return quantized, clamped
+
+    def _save_qat_state(
+        self,
+        input: Tensor,
+        hx: Optional[tuple[Tensor, Tensor]],
+        checkpoints: dict[str, Any],
+    ) -> None:
+        if self._quant_params_bundle_json is None:
+            raise RuntimeError("量化参数不存在")
+        bundle = _strict_json_loads(self._quant_params_bundle_json)
+        batch = input.size(0 if self.batch_first else 1)
+        state_shape = (1, batch, self.hidden_size)
+        if hx is None:
+            h0 = torch.zeros(state_shape, device=input.device)
+            c0 = torch.zeros(state_shape, device=input.device)
+        else:
+            h0, c0 = hx
+        tensors = {
+            "input": (input, "input", False),
+            "weight_ih": (self.weight_ih_l0, "weight_ih", True),
+            "weight_hh": (self.weight_hh_l0, "weight_hh", True),
+            "h_0": (h0, "output", False),
+            "c_0": (c0, "cell_state", False),
+        }
+        if self.bias:
+            tensors["bias_ih"] = (self.bias_ih_l0, "bias_ih", True)
+            tensors["bias_hh"] = (self.bias_hh_l0, "bias_hh", True)
+        quantized = {}
+        masks = {}
+        for name, (tensor, operator, per_channel) in tensors.items():
+            quantized[name], masks[name] = self._quantize_saved_tensor(
+                tensor, operator, bundle, per_channel
+            )
+        self._qat_saved_state = {
+            "quantized_master": quantized,
+            "master_clamp_masks": masks,
+            "checkpoints": checkpoints.get("values", {}),
+            "checkpoint_clamp_masks": checkpoints.get("clamp_masks", {}),
+        }
+
+    def qat_saved_state(self) -> Optional[dict[str, Any]]:
+        return self._qat_saved_state
+
+    def _quantized_forward(
+        self, input: Tensor, hx: Optional[tuple[Tensor, Tensor]]
+    ) -> tuple[Tensor, tuple[Tensor, Tensor]]:
+        if self._quant_params_bundle_json is None:
+            raise RuntimeError(
+                "量化推理需要先校准并调用 finalize_calibration，"
+                "或加载参数包"
+            )
+        if not input.is_cuda:
+            raise RuntimeError("量化 FP 载体主路径只支持 CUDA input")
+        if hx is None:
+            h0 = c0 = None
+        else:
+            if len(hx) != 2:
+                raise ValueError("hx 必须是 (h_0, c_0)")
+            h0, c0 = hx
+        save_checkpoints = self.training
+        output, final_hidden, final_cell, checkpoints, safety = (
+            _quant_lstm.lstm_forward_quantized(
+                input,
+                self.weight_ih_l0,
+                self.weight_hh_l0,
+                self.bias_ih_l0,
+                self.bias_hh_l0,
+                h0,
+                c0,
+                self.batch_first,
+                self._quant_params_bundle_json,
+                self.cublas_math_mode,
+                self.require_exact_accumulation,
+                save_checkpoints,
+            )
+        )
+        self._last_safety_report = safety
+        if save_checkpoints:
+            self._save_qat_state(input, hx, checkpoints)
+        return output, (final_hidden, final_cell)
+
+    def forward(
+        self,
+        input: Tensor,
+        hx: Optional[tuple[Tensor, Tensor]] = None,
+    ) -> tuple[Tensor, tuple[Tensor, Tensor]]:
+        if self.calibrating:
+            self._collect_calibration(input, hx)
+            return self._float_forward(input, hx)
+        if self.use_quantization:
+            return self._quantized_forward(input, hx)
+        return self._float_forward(input, hx)
+
+    def export_quant_params(
+        self, destination: str | Path | None = None
+    ) -> dict[str, Any]:
+        if self._quant_params_bundle_json is None:
+            raise RuntimeError("模块尚未校准，不能导出量化参数")
+        resolved = self.get_quant_config()
+        document = {
+            "schema_version": 1,
+            "execution_metadata": {
+                "carrier": "cuda_fp32_qcarrier",
+                "activation_mode": "real_sigmoid_tanh",
+                "cublas_math_mode": self.cublas_math_mode,
+                "standard_scale_mode": resolved["scale_mode"],
+            },
+            "quant_params": _strict_json_loads(
+                self._quant_params_bundle_json
+            ),
+        }
+        if destination is not None:
+            Path(destination).write_text(
+                json.dumps(document, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+        return document
+
+    def load_quant_params(
+        self, source: dict[str, Any] | str | Path
+    ) -> dict[str, Any]:
+        if isinstance(source, dict):
+            document = source
+        else:
+            document = _strict_json_loads(_json_source(source))
+        if set(document) != {
+            "schema_version",
+            "execution_metadata",
+            "quant_params",
+        }:
+            raise ValueError("PyTorch 参数文档字段不完整或包含未知字段")
+        if document["schema_version"] != 1:
+            raise ValueError("只支持 PyTorch 参数文档 schema_version=1")
+        metadata = document["execution_metadata"]
+        if not isinstance(metadata, dict) or set(metadata) != {
+            "carrier",
+            "activation_mode",
+            "cublas_math_mode",
+            "standard_scale_mode",
+        }:
+            raise ValueError("execution_metadata 字段不完整或非法")
+        if metadata["carrier"] != "cuda_fp32_qcarrier":
+            raise ValueError("只支持 cuda_fp32_qcarrier")
+        if metadata["activation_mode"] != "real_sigmoid_tanh":
+            raise ValueError("只支持 real_sigmoid_tanh activation mode")
+        if metadata["cublas_math_mode"] not in _MATH_MODES:
+            raise ValueError("cublas_math_mode 非法")
+        bundle_text = json.dumps(
+            document["quant_params"],
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        audited = _quant_lstm.audit_quant_params_bundle(
+            bundle_text, self.require_exact_accumulation
+        )
+        if (
+            audited["input_size"] != self.input_size
+            or audited["hidden_size"] != self.hidden_size
+            or audited["bias_enabled"] != self.bias
+        ):
+            raise ValueError("量化参数 shape 或 bias 与模块不匹配")
+        resolved = _strict_json_loads(audited["resolved_config_json"])
+        if metadata["standard_scale_mode"] != resolved["scale_mode"]:
+            raise ValueError("standard_scale_mode 与参数包不一致")
+        self._quant_params_bundle_json = audited["bundle_json"]
+        self._resolved_config_json = audited["resolved_config_json"]
+        self._override_config = _resolved_override(resolved)
+        self._last_safety_report = audited["safety"]
+        self._calibration_session = None
+        self._qat_saved_state = None
+        self.cublas_math_mode = metadata["cublas_math_mode"]
+        if self._last_safety_report["has_precision_risk"]:
+            warnings.warn(
+                "导入配置包含 FP32 precision_risk；已保留在 safety report 中",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        return audited["safety"]
+
+    import_quant_params = load_quant_params
+
     def extra_repr(self) -> str:
         return (
             f"{self.input_size}, {self.hidden_size}, bias={self.bias}, "
-            f"batch_first={self.batch_first}"
+            f"batch_first={self.batch_first}, "
+            f"use_quantization={self.use_quantization}"
         )

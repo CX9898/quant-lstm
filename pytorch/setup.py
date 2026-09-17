@@ -1,4 +1,4 @@
-"""构建阶段 1 Torch binding。"""
+"""构建阶段 6 QuantLSTM CUDA FP 载体 binding。"""
 
 from pathlib import Path
 
@@ -11,7 +11,7 @@ ROOT = HERE.parent
 CORE_LIBRARY = ROOT / "build" / "libquant_lstm.a"
 
 if CUDA_HOME is None:
-    raise RuntimeError("未找到 CUDA toolkit，无法构建阶段 1 CUDA binding")
+    raise RuntimeError("未找到 CUDA toolkit，无法构建 QuantLSTM CUDA binding")
 if not CORE_LIBRARY.exists():
     raise RuntimeError(
         f"未找到 {CORE_LIBRARY}；请先执行 `cmake -S . -B build && cmake --build build`"

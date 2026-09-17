@@ -1,0 +1,374 @@
+"""阶段 6 QuantLSTM CUDA FP32 q-carrier 接口验收。"""
+
+import json
+import unittest
+from pathlib import Path
+
+import jsonschema
+import torch
+
+import _quant_lstm
+from quant_lstm import QuantLSTM
+
+
+ROOT = Path(__file__).resolve().parents[2]
+MANIFEST_SCHEMA = json.loads(
+    (ROOT / "config/schema/lstm_pytorch_quant_params.schema.json").read_text()
+)
+BUNDLE_SCHEMA = json.loads(
+    (ROOT / "config/schema/lstm_quant_params_bundle.schema.json").read_text()
+)
+
+
+def deterministic_tensor(shape, start=-0.35, stop=0.35, *, device="cpu"):
+    count = 1
+    for extent in shape:
+        count *= extent
+    return torch.linspace(start, stop, count, device=device).reshape(shape)
+
+
+def initialize_module(module):
+    with torch.no_grad():
+        module.weight_ih_l0.copy_(
+            deterministic_tensor(
+                module.weight_ih_l0.shape,
+                -0.18,
+                0.21,
+                device=module.weight_ih_l0.device,
+            )
+        )
+        module.weight_hh_l0.copy_(
+            deterministic_tensor(
+                module.weight_hh_l0.shape,
+                0.16,
+                -0.14,
+                device=module.weight_hh_l0.device,
+            )
+        )
+        if module.bias:
+            module.bias_ih_l0.copy_(
+                deterministic_tensor(
+                    module.bias_ih_l0.shape,
+                    -0.03,
+                    0.04,
+                    device=module.bias_ih_l0.device,
+                )
+            )
+            module.bias_hh_l0.copy_(
+                deterministic_tensor(
+                    module.bias_hh_l0.shape,
+                    0.02,
+                    -0.01,
+                    device=module.bias_hh_l0.device,
+                )
+            )
+
+
+def copy_parameters(source, target):
+    with torch.no_grad():
+        for name, parameter in source.named_parameters():
+            getattr(target, name).copy_(parameter)
+
+
+def calibrate(module, input_tensor, state):
+    module.calibrating = True
+    with torch.no_grad():
+        module(input_tensor, state)
+        module(input_tensor * 0.75, state)
+    module.calibrating = False
+    return module.finalize_calibration()
+
+
+def flatten_result(result, batch_first):
+    output, (hidden, cell) = result
+    normalized = output.transpose(0, 1) if batch_first else output
+    return normalized, hidden, cell
+
+
+def metrics(actual, expected):
+    actual = actual.detach().double().reshape(-1)
+    expected = expected.detach().double().reshape(-1)
+    difference = actual - expected
+    mae = difference.abs().mean().item()
+    mse = difference.square().mean().item()
+    denominator = (
+        torch.linalg.vector_norm(actual) * torch.linalg.vector_norm(expected)
+    ).item()
+    cosine = 1.0 if denominator <= 1.0e-12 else (
+        torch.dot(actual, expected).item() / denominator
+    )
+    return mae, mse, cosine
+
+
+class QuantizedInterfaceTest(unittest.TestCase):
+    def setUp(self):
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+
+    def test_config_api_and_error_contracts(self):
+        module = QuantLSTM(3, 4)
+        resolved = module.get_quant_config()
+        self.assertEqual(len(resolved["operators"]), 18)
+        self.assertEqual(resolved["scale_mode"], "affine")
+
+        module.set_all_bitwidth(16)
+        self.assertTrue(
+            all(
+                value["bitwidth"] == 16
+                for value in module.get_quant_config()["operators"].values()
+            )
+        )
+        module.adjust_quant_config(
+            "input", bitwidth=8, is_unsigned=True, is_symmetric=False
+        )
+        self.assertEqual(module.get_quant_config("input")["bitwidth"], 8)
+        self.assertTrue(module.get_quant_config("input")["is_unsigned"])
+
+        with self.assertRaises(ValueError):
+            module.set_all_bitwidth(7)
+        with self.assertRaises(ValueError):
+            module.adjust_quant_config("missing", bitwidth=8)
+        with self.assertRaises(ValueError):
+            module.adjust_quant_config("input", granularity="per_channel")
+        with self.assertRaises(ValueError):
+            QuantLSTM(3, 4, calibration_method="unknown")
+        with self.assertRaises(ValueError):
+            QuantLSTM(3, 4, cublas_math_mode="fast")
+
+        module = QuantLSTM(3, 4, use_quantization=True)
+        with self.assertRaisesRegex(RuntimeError, "校准"):
+            module(torch.zeros((2, 1, 3)))
+        with self.assertRaisesRegex(RuntimeError, "未收集校准数据"):
+            module.finalize_calibration()
+
+        cpu_quantized = QuantLSTM(3, 4)
+        initialize_module(cpu_quantized)
+        cpu_input = deterministic_tensor((2, 1, 3))
+        calibrate(cpu_quantized, cpu_input, None)
+        cpu_quantized.use_quantization = True
+        with self.assertRaisesRegex(RuntimeError, "CUDA input"):
+            cpu_quantized(cpu_input)
+
+    def test_all_calibration_methods_and_manifest_contract(self):
+        input_tensor = deterministic_tensor((3, 2, 3))
+        state = (
+            deterministic_tensor((1, 2, 4), -0.1, 0.12),
+            deterministic_tensor((1, 2, 4), -0.2, 0.18),
+        )
+        for method in ("minmax", "sqnr", "percentile"):
+            with self.subTest(method=method):
+                module = QuantLSTM(3, 4, calibration_method=method)
+                initialize_module(module)
+                report = calibrate(module, input_tensor, state)
+                self.assertEqual(report["batch_count"], 2)
+                self.assertEqual(report["method"], method)
+                self.assertEqual(module.calibration_state(), "locked")
+                manifest = module.export_quant_params()
+                jsonschema.Draft202012Validator(
+                    MANIFEST_SCHEMA
+                ).validate(manifest)
+                jsonschema.Draft202012Validator(
+                    BUNDLE_SCHEMA
+                ).validate(manifest["quant_params"])
+                metadata = manifest["execution_metadata"]
+                self.assertEqual(
+                    metadata["carrier"], "cuda_fp32_qcarrier"
+                )
+                self.assertEqual(
+                    metadata["activation_mode"], "real_sigmoid_tanh"
+                )
+                for name in (
+                    "weight_ih",
+                    "weight_hh",
+                    "bias_ih",
+                    "bias_hh",
+                ):
+                    params = manifest["quant_params"]["operators"][name]
+                    self.assertEqual(len(params["scales"]), 16)
+                    self.assertEqual(len(params["zero_points"]), 16)
+                encoded = json.dumps(manifest)
+                self.assertNotIn("multiplier", encoded)
+                self.assertNotIn("raw_ratio", encoded)
+
+                imported = QuantLSTM(3, 4)
+                imported.load_quant_params(manifest)
+                self.assertTrue(imported.is_calibrated())
+                self.assertEqual(
+                    imported.get_quant_config(),
+                    module.get_quant_config(),
+                )
+
+    def test_bias_disabled_bundle_omits_bias_operators(self):
+        module = QuantLSTM(2, 3, bias=False)
+        initialize_module(module)
+        input_tensor = deterministic_tensor((2, 1, 2))
+        calibrate(module, input_tensor, None)
+        operators = module.export_quant_params()["quant_params"]["operators"]
+        self.assertNotIn("bias_ih", operators)
+        self.assertNotIn("bias_hh", operators)
+        self.assertEqual(len(operators["weight_ih"]["scales"]), 12)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
+    def test_cuda_layout_direct_binding_roundtrip_and_qat_state(self):
+        time_module = QuantLSTM(3, 4, batch_first=False, device="cuda")
+        batch_module = QuantLSTM(3, 4, batch_first=True, device="cuda")
+        initialize_module(time_module)
+        copy_parameters(time_module, batch_module)
+
+        input_time = deterministic_tensor(
+            (3, 2, 3), -0.3, 0.4, device="cuda"
+        )
+        input_batch = input_time.transpose(0, 1).contiguous()
+        state = (
+            deterministic_tensor(
+                (1, 2, 4), -0.09, 0.11, device="cuda"
+            ),
+            deterministic_tensor(
+                (1, 2, 4), -0.17, 0.19, device="cuda"
+            ),
+        )
+        calibrate(time_module, input_time, state)
+        calibrate(batch_module, input_batch, state)
+        self.assertEqual(
+            time_module.export_quant_params()["quant_params"],
+            batch_module.export_quant_params()["quant_params"],
+        )
+
+        time_module.use_quantization = True
+        batch_module.use_quantization = True
+        time_module.eval()
+        batch_module.eval()
+        with torch.no_grad():
+            time_result = time_module(input_time, state)
+            batch_result = batch_module(input_batch, state)
+        for time_value, batch_value in zip(
+            flatten_result(time_result, False),
+            flatten_result(batch_result, True),
+        ):
+            self.assertTrue(torch.equal(time_value, batch_value))
+
+        bundle_json = time_module._quant_params_bundle_json
+        direct = _quant_lstm.lstm_forward_quantized(
+            input_time,
+            time_module.weight_ih_l0,
+            time_module.weight_hh_l0,
+            time_module.bias_ih_l0,
+            time_module.bias_hh_l0,
+            state[0],
+            state[1],
+            False,
+            bundle_json,
+            "pedantic",
+            False,
+            True,
+        )
+        for module_value, direct_value in zip(
+            flatten_result(time_result, False), direct[:3]
+        ):
+            self.assertTrue(torch.equal(module_value, direct_value))
+        checkpoints = direct[3]
+        self.assertEqual(
+            set(checkpoints["values"]),
+            {
+                "weight_ih_linear",
+                "weight_hh_linear",
+                "gate_inputs",
+                "gate_outputs",
+                "cell_states",
+                "cell_tanh_outputs",
+                "hidden_outputs",
+            },
+        )
+        self.assertEqual(
+            checkpoints["values"]["gate_inputs"].shape, (3, 2, 16)
+        )
+        for mask in checkpoints["clamp_masks"].values():
+            self.assertEqual(mask.dtype, torch.uint8)
+            self.assertTrue(torch.all((mask == 0) | (mask == 1)))
+
+        time_module.train()
+        with torch.no_grad():
+            training_result = time_module(input_time, state)
+        for expected, actual in zip(
+            flatten_result(time_result, False),
+            flatten_result(training_result, False),
+        ):
+            self.assertTrue(torch.equal(expected, actual))
+        saved = time_module.qat_saved_state()
+        self.assertEqual(
+            saved["quantized_master"]["weight_ih"].dtype, torch.float32
+        )
+        self.assertEqual(
+            saved["master_clamp_masks"]["input"].dtype, torch.bool
+        )
+        self.assertEqual(
+            set(saved["checkpoint_clamp_masks"]),
+            set(checkpoints["clamp_masks"]),
+        )
+
+        with torch.no_grad():
+            time_module(input_time * 100.0, state)
+        saturated = time_module.qat_saved_state()
+        self.assertTrue(saturated["master_clamp_masks"]["input"].any())
+        self.assertTrue(
+            any(
+                mask.any()
+                for mask in saturated["checkpoint_clamp_masks"].values()
+        )
+        )
+
+        imported = QuantLSTM(3, 4, device="cuda")
+        copy_parameters(time_module, imported)
+        imported.load_quant_params(time_module.export_quant_params())
+        imported.use_quantization = True
+        imported.eval()
+        with torch.no_grad():
+            imported_result = imported(input_time, state)
+        for expected, actual in zip(
+            flatten_result(time_result, False),
+            flatten_result(imported_result, False),
+        ):
+            self.assertTrue(torch.equal(expected, actual))
+
+        float_module = QuantLSTM(3, 4, device="cuda")
+        copy_parameters(time_module, float_module)
+        float_module.eval()
+        with torch.no_grad():
+            float_result = float_module(input_time, state)
+        for name, actual, expected in zip(
+            ("output", "h_n", "c_n"),
+            flatten_result(time_result, False),
+            flatten_result(float_result, False),
+        ):
+            mae, mse, cosine = metrics(actual, expected)
+            self.assertLess(mae, 0.05, f"{name}: MAE={mae}")
+            self.assertLess(mse, 0.001, f"{name}: MSE={mse}")
+            self.assertGreaterEqual(
+                cosine, 0.999, f"{name}: cosine={cosine}"
+            )
+
+    def test_import_rejects_metadata_and_compact_parameter_vectors(self):
+        module = QuantLSTM(2, 3)
+        initialize_module(module)
+        calibrate(module, deterministic_tensor((2, 1, 2)), None)
+        manifest = module.export_quant_params()
+
+        invalid_metadata = json.loads(json.dumps(manifest))
+        invalid_metadata["execution_metadata"]["carrier"] = "cpu_int32"
+        with self.assertRaises(ValueError):
+            QuantLSTM(2, 3).load_quant_params(invalid_metadata)
+
+        compact = json.loads(json.dumps(manifest))
+        compact_weight = compact["quant_params"]["operators"]["weight_ih"]
+        compact_weight["scales"] = compact_weight["scales"][:1]
+        compact_weight["zero_points"] = compact_weight["zero_points"][:1]
+        with self.assertRaises(ValueError):
+            QuantLSTM(2, 3).load_quant_params(compact)
+
+        wrong_shape = QuantLSTM(3, 3)
+        with self.assertRaises(ValueError):
+            wrong_shape.load_quant_params(manifest)
+
+
+if __name__ == "__main__":
+    unittest.main()

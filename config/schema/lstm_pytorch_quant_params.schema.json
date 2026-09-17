@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-lstm.local/schema/lstm_pytorch_quant_params.schema.json",
+  "title": "QuantLSTM PyTorch parameter document v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "execution_metadata",
+    "quant_params"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "execution_metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "carrier",
+        "activation_mode",
+        "cublas_math_mode",
+        "standard_scale_mode"
+      ],
+      "properties": {
+        "carrier": {
+          "const": "cuda_fp32_qcarrier"
+        },
+        "activation_mode": {
+          "const": "real_sigmoid_tanh"
+        },
+        "cublas_math_mode": {
+          "enum": ["pedantic", "tf32"]
+        },
+        "standard_scale_mode": {
+          "enum": ["affine", "pot2"]
+        }
+      }
+    },
+    "quant_params": {
+      "type": "object",
+      "description": "Canonical lstm_quant_params_bundle.schema.json payload"
+    }
+  }
+}

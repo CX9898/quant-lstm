@@ -504,7 +504,11 @@ unsigned int oneDimensionalBlocks(std::size_t elements) {
 }
 
 __device__ __forceinline__ float clampDevice(
-    float value, const DeviceQuantPoint& point) {
+    float value, const DeviceQuantPoint& point,
+    std::uint8_t* clamped = nullptr) {
+    if (clamped != nullptr) {
+        *clamped = value < point.minimum || value > point.maximum;
+    }
     return fminf(point.maximum, fmaxf(point.minimum, value));
 }
 
@@ -539,8 +543,9 @@ __device__ __forceinline__ float applyRescaleDevice(
 
 __device__ __forceinline__ float realActivationDevice(
     float quantized_input, const DeviceGateParams& params,
-    bool tanh_activation) {
-    return cuda_detail::realActivationCore(
+    bool tanh_activation, std::uint8_t* clamped = nullptr) {
+    bool activation_clamped = false;
+    const float result = cuda_detail::realActivationCore(
         quantized_input, params.input.scale,
         static_cast<std::int32_t>(params.input.zero_point),
         params.output.scale,
@@ -549,7 +554,12 @@ __device__ __forceinline__ float realActivationDevice(
         static_cast<std::int32_t>(params.output.maximum),
         tanh_activation
             ? quantization::RealActivationKind::Tanh
-            : quantization::RealActivationKind::Sigmoid);
+            : quantization::RealActivationKind::Sigmoid,
+        &activation_clamped);
+    if (clamped != nullptr) {
+        *clamped = activation_clamped;
+    }
+    return result;
 }
 
 __global__ void quantizeScalarKernel(
@@ -708,18 +718,22 @@ __global__ void fusedLstmPointwiseKernel(
                     linear.bias_hh_to_accumulator);
             }
 
+            std::uint8_t input_linear_clamped = 0;
+            std::uint8_t recurrent_linear_clamped = 0;
+            std::uint8_t gate_input_clamped = 0;
+            std::uint8_t gate_output_clamped = 0;
             const float input_linear = clampDevice(
                 applyRescaleDevice(
                     input_accumulator,
                     linear.input_accumulator_to_linear) +
                     linear.input_linear.zero_point,
-                linear.input_linear);
+                linear.input_linear, &input_linear_clamped);
             const float recurrent_linear = clampDevice(
                 applyRescaleDevice(
                     recurrent_accumulator,
                     linear.recurrent_accumulator_to_linear) +
                     linear.recurrent_linear.zero_point,
-                linear.recurrent_linear);
+                linear.recurrent_linear, &recurrent_linear_clamped);
             const DeviceGateParams& gate_params =
                 scalar_params.gates[gate];
             const float gate_input = clampDevice(
@@ -731,9 +745,10 @@ __global__ void fusedLstmPointwiseKernel(
                             linear.recurrent_linear.zero_point,
                         gate_params.recurrent_linear_to_gate) +
                     gate_params.input.zero_point,
-                gate_params.input);
+                gate_params.input, &gate_input_clamped);
             const float gate_output = realActivationDevice(
-                gate_input, gate_params, gate == 2);
+                gate_input, gate_params, gate == 2,
+                &gate_output_clamped);
             gate_outputs[gate] = gate_output;
 
             const std::size_t checkpoint_index =
@@ -752,6 +767,22 @@ __global__ void fusedLstmPointwiseKernel(
             if (checkpoints.gate_outputs != nullptr) {
                 checkpoints.gate_outputs[checkpoint_index] = gate_output;
             }
+            if (checkpoints.weight_ih_linear_clamped != nullptr) {
+                checkpoints.weight_ih_linear_clamped[checkpoint_index] =
+                    input_linear_clamped;
+            }
+            if (checkpoints.weight_hh_linear_clamped != nullptr) {
+                checkpoints.weight_hh_linear_clamped[checkpoint_index] =
+                    recurrent_linear_clamped;
+            }
+            if (checkpoints.gate_inputs_clamped != nullptr) {
+                checkpoints.gate_inputs_clamped[checkpoint_index] =
+                    gate_input_clamped;
+            }
+            if (checkpoints.gate_outputs_clamped != nullptr) {
+                checkpoints.gate_outputs_clamped[checkpoint_index] =
+                    gate_output_clamped;
+            }
         }
 
         const std::size_t state_index =
@@ -767,19 +798,28 @@ __global__ void fusedLstmPointwiseKernel(
             scalar_params.cell.zero_point,
             scalar_params.cell.minimum,
             scalar_params.cell.maximum};
-        const float next_cell =
+        const auto cell_result =
             cuda_detail::computeQuantizedCellFpCore(
                 gate_outputs[1], old_cell, gate_outputs[0],
-                gate_outputs[2], cell_params)
-                .value;
+                gate_outputs[2], cell_params);
+        const float cell_pre_clamp =
+            quantization::roundToNearestEven(
+                cell_result.diagnostics.pre_round_sum) +
+            scalar_params.cell.zero_point;
+        const std::uint8_t cell_clamped =
+            cell_pre_clamp < scalar_params.cell.minimum ||
+            cell_pre_clamp > scalar_params.cell.maximum;
+        const float next_cell = cell_result.value;
         cell_state[state_index] = next_cell;
 
         DeviceGateParams cell_tanh_params{
             scalar_params.cell, scalar_params.cell_tanh,
             {DeviceRescaleKind::Pot2, 0, 0},
             {DeviceRescaleKind::Pot2, 0, 0}};
+        std::uint8_t cell_tanh_clamped = 0;
         const float cell_tanh =
-            realActivationDevice(next_cell, cell_tanh_params, true);
+            realActivationDevice(next_cell, cell_tanh_params, true,
+                                 &cell_tanh_clamped);
         const auto hidden_result =
             cuda_detail::computeQuantizedHiddenFpEncodedCore(
                 gate_outputs[3],
@@ -792,6 +832,14 @@ __global__ void fusedLstmPointwiseKernel(
                 scalar_params.hidden.zero_point,
                 scalar_params.hidden.minimum,
                 scalar_params.hidden.maximum);
+        const float hidden_pre_clamp =
+            applyRescaleDevice(
+                hidden_result.diagnostics.raw_product,
+                scalar_params.hidden_product_to_output) +
+            scalar_params.hidden.zero_point;
+        const std::uint8_t hidden_clamped =
+            hidden_pre_clamp < scalar_params.hidden.minimum ||
+            hidden_pre_clamp > scalar_params.hidden.maximum;
         const float next_hidden = hidden_result.value;
         hidden_state[state_index] = next_hidden;
 
@@ -807,6 +855,17 @@ __global__ void fusedLstmPointwiseKernel(
         }
         if (checkpoints.hidden_outputs != nullptr) {
             checkpoints.hidden_outputs[output_index] = next_hidden;
+        }
+        if (checkpoints.cell_states_clamped != nullptr) {
+            checkpoints.cell_states_clamped[output_index] = cell_clamped;
+        }
+        if (checkpoints.cell_tanh_outputs_clamped != nullptr) {
+            checkpoints.cell_tanh_outputs_clamped[output_index] =
+                cell_tanh_clamped;
+        }
+        if (checkpoints.hidden_outputs_clamped != nullptr) {
+            checkpoints.hidden_outputs_clamped[output_index] =
+                hidden_clamped;
         }
     }
 }
@@ -1023,6 +1082,27 @@ void lstmForwardQuantizedFpCuda(
         validateOptionalDeviceSpan(checkpoints->hidden_outputs,
                                    state_bytes, current_device,
                                    "checkpoint hidden_outputs");
+        validateOptionalDeviceSpan(
+            checkpoints->weight_ih_linear_clamped, sequence_linears,
+            current_device, "checkpoint weight_ih_linear_clamped");
+        validateOptionalDeviceSpan(
+            checkpoints->weight_hh_linear_clamped, sequence_linears,
+            current_device, "checkpoint weight_hh_linear_clamped");
+        validateOptionalDeviceSpan(
+            checkpoints->gate_inputs_clamped, sequence_linears,
+            current_device, "checkpoint gate_inputs_clamped");
+        validateOptionalDeviceSpan(
+            checkpoints->gate_outputs_clamped, sequence_linears,
+            current_device, "checkpoint gate_outputs_clamped");
+        validateOptionalDeviceSpan(
+            checkpoints->cell_states_clamped, sequence_states,
+            current_device, "checkpoint cell_states_clamped");
+        validateOptionalDeviceSpan(
+            checkpoints->cell_tanh_outputs_clamped, sequence_states,
+            current_device, "checkpoint cell_tanh_outputs_clamped");
+        validateOptionalDeviceSpan(
+            checkpoints->hidden_outputs_clamped, sequence_states,
+            current_device, "checkpoint hidden_outputs_clamped");
     }
 
     cudaDeviceProp properties{};
