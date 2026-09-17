@@ -30,6 +30,7 @@ add_library(
     src/lstm/quant_config.cc
     src/lstm/quant_config_loader.cc
     src/lstm/quant_params.cc
+    src/lstm/quant_params_io.cc
     src/quantization/numeric_safety.cc
     src/quantization/quant_param.cc
     src/quantization/real_activation.cc
@@ -123,6 +124,14 @@ if(QUANT_LSTM_BUILD_TESTS)
         PRIVATE QUANT_LSTM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME calibration_minmax COMMAND test_calibration_minmax)
 
+    add_executable(test_quant_params_io tests/cpp/test_quant_params_io.cc)
+    target_link_libraries(
+        test_quant_params_io PRIVATE quant_lstm nlohmann_json::nlohmann_json)
+    target_compile_definitions(
+        test_quant_params_io
+        PRIVATE QUANT_LSTM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME quant_params_io COMMAND test_quant_params_io)
+
     add_executable(
         test_quantized_references tests/cpp/test_quantized_references.cc)
     target_link_libraries(
@@ -158,6 +167,15 @@ if(QUANT_LSTM_BUILD_TESTS)
     )
     set_tests_properties(
         quant_config_schema PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(
+        NAME quant_params_bundle_schema
+        COMMAND
+            ${Python3_EXECUTABLE}
+            -m unittest tests/python/test_quant_params_bundle_schema.py
+    )
+    set_tests_properties(
+        quant_params_bundle_schema
+        PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
     add_test(
         NAME precision_contract
         COMMAND ${Python3_EXECUTABLE} -m unittest tests/python/test_precision_contract.py

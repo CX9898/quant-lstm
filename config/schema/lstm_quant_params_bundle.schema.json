@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-lstm.local/schema/lstm_quant_params_bundle.schema.json",
+  "title": "LSTM canonical standard quantization parameter bundle v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "input_size",
+    "hidden_size",
+    "bias_enabled",
+    "scale_mode",
+    "operators"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "input_size": {"type": "integer", "minimum": 1},
+    "hidden_size": {"type": "integer", "minimum": 1},
+    "bias_enabled": {"type": "boolean"},
+    "scale_mode": {"enum": ["affine", "pot2"]},
+    "operators": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input",
+        "output",
+        "cell_state",
+        "weight_ih",
+        "weight_hh",
+        "weight_ih_linear",
+        "weight_hh_linear",
+        "input_gate_input",
+        "forget_gate_input",
+        "cell_gate_input",
+        "output_gate_input",
+        "input_gate_output",
+        "forget_gate_output",
+        "cell_gate_output",
+        "output_gate_output",
+        "cell_tanh_output"
+      ],
+      "properties": {
+        "input": {"$ref": "#/$defs/non_parameter"},
+        "output": {"$ref": "#/$defs/non_parameter"},
+        "cell_state": {"$ref": "#/$defs/non_parameter"},
+        "weight_ih": {"$ref": "#/$defs/parameter"},
+        "weight_hh": {"$ref": "#/$defs/parameter"},
+        "bias_ih": {"$ref": "#/$defs/parameter"},
+        "bias_hh": {"$ref": "#/$defs/parameter"},
+        "weight_ih_linear": {"$ref": "#/$defs/non_parameter"},
+        "weight_hh_linear": {"$ref": "#/$defs/non_parameter"},
+        "input_gate_input": {"$ref": "#/$defs/non_parameter"},
+        "forget_gate_input": {"$ref": "#/$defs/non_parameter"},
+        "cell_gate_input": {"$ref": "#/$defs/non_parameter"},
+        "output_gate_input": {"$ref": "#/$defs/non_parameter"},
+        "input_gate_output": {"$ref": "#/$defs/non_parameter"},
+        "forget_gate_output": {"$ref": "#/$defs/non_parameter"},
+        "cell_gate_output": {"$ref": "#/$defs/non_parameter"},
+        "output_gate_output": {"$ref": "#/$defs/non_parameter"},
+        "cell_tanh_output": {"$ref": "#/$defs/non_parameter"}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"bias_enabled": {"const": true}}},
+      "then": {
+        "properties": {
+          "operators": {"required": ["bias_ih", "bias_hh"]}
+        }
+      },
+      "else": {
+        "properties": {
+          "operators": {
+            "properties": {
+              "bias_ih": false,
+              "bias_hh": false
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "scale": {
+      "type": "string",
+      "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:e[+-]?[0-9]+)?$"
+    },
+    "common": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bitwidth",
+        "is_unsigned",
+        "is_symmetric",
+        "granularity",
+        "scales",
+        "zero_points"
+      ],
+      "properties": {
+        "bitwidth": {"type": "integer", "enum": [8, 16]},
+        "is_unsigned": {"type": "boolean"},
+        "is_symmetric": {"type": "boolean"},
+        "granularity": {
+          "enum": ["per_tensor", "per_gate", "per_channel"]
+        },
+        "scales": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/scale"}
+        },
+        "zero_points": {
+          "type": "array",
+          "items": {"type": "integer"}
+        }
+      }
+    },
+    "non_parameter": {
+      "allOf": [
+        {"$ref": "#/$defs/common"},
+        {
+          "properties": {
+            "granularity": {"const": "per_tensor"},
+            "scales": {"minItems": 1, "maxItems": 1},
+            "zero_points": {"minItems": 1, "maxItems": 1}
+          }
+        }
+      ]
+    },
+    "parameter": {
+      "allOf": [
+        {"$ref": "#/$defs/common"},
+        {
+          "properties": {
+            "is_unsigned": {"const": false},
+            "is_symmetric": {"const": true},
+            "scales": {"minItems": 4},
+            "zero_points": {
+              "minItems": 4,
+              "items": {"type": "integer", "const": 0}
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -8,6 +8,7 @@
 #include "lstm/quant_config.h"
 #include "lstm/quant_config_loader.h"
 #include "lstm/quant_params.h"
+#include "lstm/quant_params_io.h"
 
 #if defined(QUANT_LSTM_WITH_CUDA)
 #include "lstm/forward_float_cuda.h"
