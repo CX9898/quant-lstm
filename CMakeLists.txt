@@ -147,7 +147,6 @@ if(QUANT_LSTM_BUILD_TESTS)
     )
     set_tests_properties(
         precision_contract PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-
     file(
         GLOB_RECURSE GOLDEN_FILES
         CONFIGURE_DEPENDS
@@ -223,6 +222,24 @@ if(QUANT_LSTM_BUILD_TESTS)
         target_link_libraries(test_rounding_cuda PRIVATE quant_lstm_headers CUDA::cudart)
         set_target_properties(test_rounding_cuda PROPERTIES CUDA_ARCHITECTURES native)
         add_test(NAME rounding_cuda COMMAND test_rounding_cuda)
+
+        add_executable(
+            test_quantized_fp_cuda tests/cuda/test_quantized_fp_cuda.cu
+            ${GOLDEN_FIXTURE})
+        target_include_directories(
+            test_quantized_fp_cuda
+            PRIVATE
+                ${CMAKE_CURRENT_BINARY_DIR}/generated
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+        target_link_libraries(
+            test_quantized_fp_cuda
+            PRIVATE
+                quant_lstm
+                nlohmann_json::nlohmann_json)
+        set_target_properties(
+            test_quantized_fp_cuda PROPERTIES CUDA_ARCHITECTURES native)
+        add_test(NAME quantized_fp_cuda COMMAND test_quantized_fp_cuda)
+
     endif()
 endif()
 
