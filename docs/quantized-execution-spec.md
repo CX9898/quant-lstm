@@ -1,6 +1,6 @@
 # LSTM 量化执行规格
 
-> 状态：阶段 4 已完成 CUDA FP32 q-carrier 主路径、跨后端 NumericSafety 门禁及 sanitizer/Nsight/结构化性能证据；真实数据精度仍待后续阶段接入
+> 状态：阶段 5 已完成 18 点多 batch 校准、MinMax/SQNR/Percentile、参数审计与 canonical standard scale/zp 导入导出；真实数据精度仍待后续阶段接入
 > 参考基线：`/home/chengxing.zou/projects/quant-gru`，commit `9c25d14`
 > 公式推导：`docs/lstm-quantization-formula-derivation.md`
 > 分阶段计划：`docs/implementation-plan.md`
@@ -330,6 +330,8 @@ Golden 使用显式 `dtype/shape/data`、row-major 一维 data。Standard scale 
 2. 待后续真实数据阶段完成：两套 CPU reference 相对 `torch.nn.LSTM` 的实测 MAE、MSE、余弦相似度及逐时间步最差值。
 3. 已完成：CUDA FP32 `exact_integer_range/precision_risk` 逐量化点结果及每 operator/channel `NumericSafetyReport`。
 4. 已完成：compute-sanitizer memcheck/racecheck、Nsight GEMM kernel 计数和可复现 Pedantic/TF32 结构化性能基线。
-5. 待后续阶段完成：代表性真实数据和模型级指标；接入前只能声明 `synthetic_numeric` 数值验证通过。
+5. 已完成：正式 FP32 checkpoint 的 18 点 MinMax/直方图收集、Empty/Dirty/Locked 生命周期、逐组 fallback 报告，以及完整 `4H` 参数包 canonical round-trip。
+6. 已完成：SQNR/Percentile 独立候选范围搜索复用统一 MinMax、minimum-scale、POT2 CoverRange 和执行参数派生链；参数包导入后 CUDA FP 主路径结果逐值一致。
+7. 待后续阶段完成：代表性真实数据和模型级指标；接入前只能声明 `synthetic_numeric` 数值验证通过。
 
 上述证据文件按次生成且不提交仓库；审核通过的 schema、配置、阈值和规则变更必须入库并单独审查。

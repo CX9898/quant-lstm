@@ -1,6 +1,6 @@
 # LSTM 量化融合公式推导
 
-> 状态：阶段 4 已通过 CPU/CUDA 跨后端、exact/risk NumericSafety、sanitizer 与 Nsight 实现期证据；Cell 固定 Q31 整数编码保持冻结
+> 状态：阶段 5 已通过 18 点多 batch MinMax/直方图校准、minimum-scale 边界、canonical 参数 round-trip 与 CUDA FP 验收；Cell 固定 Q31 整数编码保持冻结
 > 参考实现：`/mnt/data2/chengxing.zou/projects/quant-gru`，commit `9c25d14`
 > 待完成证据：真实数据 LSTM 精度与模型级门禁；当前没有待审核的数学设计项
 
@@ -931,6 +931,12 @@ Golden 只使用一个入库的版本化 JSON schema。根对象以 `kind=primit
 1. 静态边界证明和不安全配置 fail fast 已通过。
 2. 缩小整数域穷举相对独立整数公式 mismatch 为 0。
 3. 固定 seed 的 8/16 bit、极端 scale、Affine/POT2、抵消、同号、饱和及长递推随机/对抗测试已通过；报告由测试写入构建目录且不入库。
+
+阶段 5 校准参数生成已完成以下实现期证据：
+
+1. 正式 FP32 reference 输出两路 Linear、四门输入/输出、Cell、`tanh(Cell)` 与 Hidden checkpoint，18 个真实量化点跨 batch/time 取并集；`h_0/c_0` 分别并入 Output/CellState。
+2. MinMax、SQNR 和 Percentile 仅产生候选连续范围，统一经 minimum-scale 与 POT2 CoverRange 生成 standard scale/zp；恰等于 `S_min` 不 fallback、刚低于时 fallback。
+3. 外部参数包只保存完整 `4H` standard scale/zp 与 granularity/config 元数据；canonical FP32 字符串导出导入后重新派生执行编码，CUDA FP `output/h_n/c_n` 保持逐值一致。
 
 最终冻结继续受以下回归门禁保护：
 
