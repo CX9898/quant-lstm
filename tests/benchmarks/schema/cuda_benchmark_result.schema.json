@@ -1,0 +1,222 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-lstm.local/schema/cuda_benchmark_result.schema.json",
+  "title": "Stage 4 quantized FP CUDA benchmark report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "benchmark_id",
+    "device",
+    "matrix_version",
+    "environment",
+    "total_profiled_cublas_sgemm_calls",
+    "cases"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 2},
+    "benchmark_id": {"const": "quantized_fp_cuda_lstm_v1"},
+    "device": {"type": "integer", "minimum": 0},
+    "matrix_version": {"const": "strict_matrix_v2"},
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gpu_name",
+        "compute_capability",
+        "cuda_driver_version",
+        "cuda_runtime_version",
+        "cublas_version"
+      ],
+      "properties": {
+        "gpu_name": {"type": "string", "minLength": 1},
+        "compute_capability": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        },
+        "cuda_driver_version": {"type": "integer", "minimum": 1},
+        "cuda_runtime_version": {"type": "integer", "minimum": 1},
+        "cublas_version": {"type": "integer", "minimum": 1}
+      }
+    },
+    "total_profiled_cublas_sgemm_calls": {
+      "type": "integer",
+      "minimum": 4
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {"$ref": "#/$defs/case"}
+    }
+  },
+  "$defs": {
+    "finite_nonnegative": {"type": "number", "minimum": 0},
+    "timing_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimum", "maximum", "mean", "p50", "p95"],
+      "properties": {
+        "minimum": {"$ref": "#/$defs/finite_nonnegative"},
+        "maximum": {"$ref": "#/$defs/finite_nonnegative"},
+        "mean": {"$ref": "#/$defs/finite_nonnegative"},
+        "p50": {"$ref": "#/$defs/finite_nonnegative"},
+        "p95": {"$ref": "#/$defs/finite_nonnegative"}
+      }
+    },
+    "metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_absolute_error",
+        "mae",
+        "mse",
+        "cosine_similarity",
+        "sqnr_db",
+        "saturation_rate"
+      ],
+      "properties": {
+        "max_absolute_error": {"$ref": "#/$defs/finite_nonnegative"},
+        "mae": {"$ref": "#/$defs/finite_nonnegative"},
+        "mse": {"$ref": "#/$defs/finite_nonnegative"},
+        "cosine_similarity": {
+          "type": ["number", "null"],
+          "minimum": -1,
+          "maximum": 1
+        },
+        "sqnr_db": {"type": "number", "minimum": -300, "maximum": 300},
+        "saturation_rate": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "quantized_input_bytes",
+        "quantized_weight_ih_bytes",
+        "quantized_weight_hh_bytes",
+        "quantized_bias_bytes",
+        "quantized_state_bytes",
+        "input_linear_bytes",
+        "recurrent_linear_bytes",
+        "weight_sum_bytes",
+        "device_parameter_bytes",
+        "alignment_padding_bytes",
+        "total_bytes"
+      ],
+      "properties": {
+        "quantized_input_bytes": {"type": "integer", "minimum": 1},
+        "quantized_weight_ih_bytes": {"type": "integer", "minimum": 1},
+        "quantized_weight_hh_bytes": {"type": "integer", "minimum": 1},
+        "quantized_bias_bytes": {"type": "integer", "minimum": 0},
+        "quantized_state_bytes": {"type": "integer", "minimum": 1},
+        "input_linear_bytes": {"type": "integer", "minimum": 1},
+        "recurrent_linear_bytes": {"type": "integer", "minimum": 1},
+        "weight_sum_bytes": {"type": "integer", "minimum": 1},
+        "device_parameter_bytes": {"type": "integer", "minimum": 1},
+        "alignment_padding_bytes": {"type": "integer", "minimum": 0},
+        "total_bytes": {"type": "integer", "minimum": 1}
+      }
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "shape_profile",
+        "shape",
+        "math_mode",
+        "fp32_accumulation_class",
+        "warmup_iterations",
+        "measured_iterations",
+        "timing_scope",
+        "timing_ms",
+        "throughput",
+        "workspace",
+        "gemm_calls",
+        "precision"
+      ],
+      "properties": {
+        "case_id": {"type": "string", "minLength": 1},
+        "shape_profile": {"enum": ["cuda_gru_basic", "large_batch"]},
+        "shape": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 1},
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "math_mode": {"enum": ["pedantic", "tf32"]},
+        "fp32_accumulation_class": {
+          "enum": ["exact_integer_range", "precision_risk"]
+        },
+        "warmup_iterations": {"type": "integer", "minimum": 0},
+        "measured_iterations": {"type": "integer", "minimum": 1},
+        "timing_scope": {
+          "const": "cuda_event_quantize_core_dequantize_cached_execution_params"
+        },
+        "timing_ms": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "end_to_end",
+            "quantization_overhead",
+            "quantized_core"
+          ],
+          "properties": {
+            "end_to_end": {"$ref": "#/$defs/timing_summary"},
+            "quantization_overhead": {"$ref": "#/$defs/timing_summary"},
+            "quantized_core": {"$ref": "#/$defs/timing_summary"}
+          }
+        },
+        "throughput": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sequences_per_second",
+            "time_steps_per_second",
+            "output_elements_per_second"
+          ],
+          "properties": {
+            "sequences_per_second": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "time_steps_per_second": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "output_elements_per_second": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
+        },
+        "workspace": {"$ref": "#/$defs/workspace"},
+        "gemm_calls": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "input_per_forward",
+            "recurrent_per_forward",
+            "total_per_forward"
+          ],
+          "properties": {
+            "input_per_forward": {"const": 1},
+            "recurrent_per_forward": {"type": "integer", "minimum": 1},
+            "total_per_forward": {"type": "integer", "minimum": 2}
+          }
+        },
+        "precision": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["output", "h_n", "c_n"],
+          "properties": {
+            "output": {"$ref": "#/$defs/metric"},
+            "h_n": {"$ref": "#/$defs/metric"},
+            "c_n": {"$ref": "#/$defs/metric"}
+          }
+        }
+      }
+    }
+  }
+}

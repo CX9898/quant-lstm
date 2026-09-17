@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-lstm.local/schema/cuda_benchmark_config.schema.json",
+  "title": "Stage 4 CUDA benchmark 编排配置",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "config_id",
+    "stage",
+    "benchmark",
+    "tools",
+    "timeouts_seconds",
+    "nsys",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "config_id": {"const": "cuda_benchmark_v1"},
+    "stage": {"type": "integer", "const": 4},
+    "benchmark": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["benchmark_id", "executable", "argv", "profile_argv"],
+      "properties": {
+        "benchmark_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*_v[1-9][0-9]*$"
+        },
+        "executable": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^{}\\u0000]+$"
+        },
+        "argv": {"$ref": "#/$defs/benchmark_argv"},
+        "profile_argv": {"$ref": "#/$defs/profile_argv"}
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nvidia_smi", "compute_sanitizer", "nsys"],
+      "properties": {
+        "nvidia_smi": {"$ref": "#/$defs/tool_name"},
+        "compute_sanitizer": {"$ref": "#/$defs/tool_name"},
+        "nsys": {"$ref": "#/$defs/tool_name"}
+      }
+    },
+    "timeouts_seconds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "environment",
+        "benchmark",
+        "memcheck",
+        "racecheck",
+        "nsys_profile",
+        "nsys_stats"
+      ],
+      "properties": {
+        "environment": {"$ref": "#/$defs/timeout"},
+        "benchmark": {"$ref": "#/$defs/timeout"},
+        "memcheck": {"$ref": "#/$defs/timeout"},
+        "racecheck": {"$ref": "#/$defs/timeout"},
+        "nsys_profile": {"$ref": "#/$defs/timeout"},
+        "nsys_stats": {"$ref": "#/$defs/timeout"}
+      }
+    },
+    "nsys": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trace",
+        "stats_reports",
+        "cublas_sgemm_name_pattern",
+        "gemm_kernel_name_pattern",
+        "gemm_kernel_exclude_pattern"
+      ],
+      "properties": {
+        "trace": {
+          "type": "array",
+          "prefixItems": [
+            {"const": "cuda"},
+            {"const": "cublas"},
+            {"const": "nvtx"}
+          ],
+          "items": false,
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "stats_reports": {
+          "type": "array",
+          "contains": {"const": "nvtx_sum"},
+          "minContains": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "cublas_sgemm_name_pattern": {
+          "const": "^cublasSgemm(_v2)?$"
+        },
+        "gemm_kernel_name_pattern": {
+          "const": "(?i)(?:sgemm|gemm)"
+        },
+        "gemm_kernel_exclude_pattern": {
+          "const": "(?i)splitKreduce"
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["default_root"],
+      "properties": {
+        "default_root": {"const": "tests/benchmarks/results"}
+      }
+    }
+  },
+  "$defs": {
+    "tool_name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]*$"
+    },
+    "timeout": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 7200
+    },
+    "argv_item": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\u0000]*$"
+    },
+    "benchmark_argv": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          {"$ref": "#/$defs/argv_item"},
+          {
+            "pattern": "^(?:[^{}\\u0000]|\\{device\\}|\\{benchmark_report\\})+$"
+          }
+        ]
+      },
+      "allOf": [
+        {
+          "contains": {"const": "{device}"},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"const": "{benchmark_report}"},
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ],
+      "minItems": 2
+    },
+    "profile_argv": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          {"$ref": "#/$defs/argv_item"},
+          {
+            "pattern": "^(?:[^{}\\u0000]|\\{device\\}|\\{profile_benchmark_report\\})+$"
+          }
+        ]
+      },
+      "allOf": [
+        {
+          "contains": {"const": "{device}"},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"const": "{profile_benchmark_report}"},
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ],
+      "minItems": 2
+    }
+  }
+}

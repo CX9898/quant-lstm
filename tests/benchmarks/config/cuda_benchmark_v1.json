@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "config_id": "cuda_benchmark_v1",
+  "stage": 4,
+  "benchmark": {
+    "benchmark_id": "quantized_fp_cuda_lstm_v1",
+    "executable": "tests/benchmarks/quant_lstm_cuda_benchmark",
+    "argv": [
+      "--device",
+      "{device}",
+      "--warmup-iterations",
+      "10",
+      "--iterations",
+      "100",
+      "--json-report",
+      "{benchmark_report}"
+    ],
+    "profile_argv": [
+      "--device",
+      "{device}",
+      "--warmup-iterations",
+      "0",
+      "--iterations",
+      "1",
+      "--json-report",
+      "{profile_benchmark_report}"
+    ]
+  },
+  "tools": {
+    "nvidia_smi": "nvidia-smi",
+    "compute_sanitizer": "compute-sanitizer",
+    "nsys": "nsys"
+  },
+  "timeouts_seconds": {
+    "environment": 30,
+    "benchmark": 600,
+    "memcheck": 900,
+    "racecheck": 900,
+    "nsys_profile": 900,
+    "nsys_stats": 300
+  },
+  "nsys": {
+    "trace": ["cuda", "cublas", "nvtx"],
+    "stats_reports": ["nvtx_sum"],
+    "cublas_sgemm_name_pattern": "^cublasSgemm(_v2)?$",
+    "gemm_kernel_name_pattern": "(?i)(?:sgemm|gemm)",
+    "gemm_kernel_exclude_pattern": "(?i)splitKreduce"
+  },
+  "artifacts": {
+    "default_root": "tests/benchmarks/results"
+  }
+}

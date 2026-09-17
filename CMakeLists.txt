@@ -162,6 +162,15 @@ if(QUANT_LSTM_BUILD_TESTS)
     )
     set_tests_properties(
         precision_contract_v2 PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(
+        NAME stage4_cuda_benchmark_contract
+        COMMAND
+            ${Python3_EXECUTABLE}
+            -m unittest tests/python/test_stage4_cuda_benchmark_contract.py
+    )
+    set_tests_properties(
+        stage4_cuda_benchmark_contract
+        PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
     file(
         GLOB_RECURSE GOLDEN_FILES
         CONFIGURE_DEPENDS
@@ -283,6 +292,27 @@ if(QUANT_LSTM_BUILD_TESTS)
                 --selection strict
                 --report
                 ${CMAKE_CURRENT_BINARY_DIR}/cuda_synthetic_strict_report.json)
+
+        add_executable(
+            quant_lstm_cuda_benchmark
+            tests/benchmarks/quantized_fp_cuda_benchmark.cu)
+        target_link_libraries(
+            quant_lstm_cuda_benchmark
+            PRIVATE
+                quant_lstm
+                quant_lstm_test_support
+                nlohmann_json::nlohmann_json
+                CUDA::nvtx3)
+        target_compile_definitions(
+            quant_lstm_cuda_benchmark
+            PRIVATE QUANT_LSTM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+        set_target_properties(
+            quant_lstm_cuda_benchmark
+            PROPERTIES
+                CUDA_ARCHITECTURES native
+                OUTPUT_NAME quant_lstm_cuda_benchmark
+                RUNTIME_OUTPUT_DIRECTORY
+                    "${CMAKE_BINARY_DIR}/tests/benchmarks")
 
     endif()
 endif()
