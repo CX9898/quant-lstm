@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "threshold_id": "rtx_6000d_sm120_cuda13_2_cublas13_4_v1",
+  "benchmark_id": "quantized_fp_cuda_lstm_v1",
+  "review": {
+    "reviewed_on": "2026-09-17",
+    "baseline_commit": "ef412d1073684691339f403e49c1f8323c57c985",
+    "optimized_commit": "ebbbc64ee1f878f59e7dc4b10e557bb0276c3da1",
+    "independent_sample_counts": [200, 100],
+    "headroom_policy": "约 10% 人工余量；四个阈值组均拒绝优化前基线"
+  },
+  "environment": {
+    "gpu_name": "NVIDIA RTX 6000D",
+    "compute_capability": "12.0",
+    "cuda_driver_version": 13030,
+    "cuda_runtime_version": 13020,
+    "cublas_version": 130400
+  },
+  "measurement_contract": {
+    "minimum_warmup_iterations": 10,
+    "minimum_measured_iterations": 100,
+    "timing_scope": "cuda_event_quantize_core_dequantize_cached_execution_and_static_params"
+  },
+  "profiles": [
+    {
+      "case_id": "stage4_basic_cuda_fp32_pedantic_int8_bias_time",
+      "shape_profile": "cuda_gru_basic",
+      "shape": [50, 64, 128, 256],
+      "math_mode": "pedantic",
+      "maximum_p50_ms": 1.42,
+      "maximum_p95_ms": 1.43,
+      "minimum_sequences_per_second": 45000
+    },
+    {
+      "case_id": "stage4_basic_cuda_fp32_tf32_int16_no_bias_batch",
+      "shape_profile": "cuda_gru_basic",
+      "shape": [50, 64, 128, 256],
+      "math_mode": "tf32",
+      "maximum_p50_ms": 1.15,
+      "maximum_p95_ms": 1.16,
+      "minimum_sequences_per_second": 55000
+    },
+    {
+      "case_id": "stage4_performance_cuda_fp32_large_batch_pedantic",
+      "shape_profile": "large_batch",
+      "shape": [16, 128, 64, 128],
+      "math_mode": "pedantic",
+      "maximum_p50_ms": 0.46,
+      "maximum_p95_ms": 0.47,
+      "minimum_sequences_per_second": 275000
+    },
+    {
+      "case_id": "stage4_performance_cuda_fp32_large_batch_tf32",
+      "shape_profile": "large_batch",
+      "shape": [16, 128, 64, 128],
+      "math_mode": "tf32",
+      "maximum_p50_ms": 0.36,
+      "maximum_p95_ms": 0.37,
+      "minimum_sequences_per_second": 350000
+    }
+  ]
+}

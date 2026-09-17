@@ -221,6 +221,16 @@ if(QUANT_LSTM_BUILD_TESTS)
     set_tests_properties(
         stage4_cuda_benchmark_contract
         PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(
+        NAME stage9_cuda_performance_thresholds
+        COMMAND
+            ${Python3_EXECUTABLE}
+            -m unittest
+            tests/python/test_stage9_cuda_performance_thresholds.py
+    )
+    set_tests_properties(
+        stage9_cuda_performance_thresholds
+        PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
     file(
         GLOB_RECURSE GOLDEN_FILES
         CONFIGURE_DEPENDS

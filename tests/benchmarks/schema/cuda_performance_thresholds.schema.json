@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-lstm.local/schema/cuda_performance_thresholds.schema.json",
+  "title": "Stage 9 CUDA performance regression thresholds",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "threshold_id",
+    "benchmark_id",
+    "review",
+    "environment",
+    "measurement_contract",
+    "profiles"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "threshold_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]+_v[1-9][0-9]*$"
+    },
+    "benchmark_id": {"const": "quantized_fp_cuda_lstm_v1"},
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reviewed_on",
+        "baseline_commit",
+        "optimized_commit",
+        "independent_sample_counts",
+        "headroom_policy"
+      ],
+      "properties": {
+        "reviewed_on": {"type": "string", "format": "date"},
+        "baseline_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "optimized_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "independent_sample_counts": {
+          "type": "array",
+          "prefixItems": [
+            {"type": "integer", "const": 200},
+            {"type": "integer", "const": 100}
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "headroom_policy": {"type": "string", "minLength": 1}
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gpu_name",
+        "compute_capability",
+        "cuda_driver_version",
+        "cuda_runtime_version",
+        "cublas_version"
+      ],
+      "properties": {
+        "gpu_name": {"const": "NVIDIA RTX 6000D"},
+        "compute_capability": {"const": "12.0"},
+        "cuda_driver_version": {"type": "integer", "const": 13030},
+        "cuda_runtime_version": {"type": "integer", "const": 13020},
+        "cublas_version": {"type": "integer", "const": 130400}
+      }
+    },
+    "measurement_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minimum_warmup_iterations",
+        "minimum_measured_iterations",
+        "timing_scope"
+      ],
+      "properties": {
+        "minimum_warmup_iterations": {"type": "integer", "const": 10},
+        "minimum_measured_iterations": {"type": "integer", "const": 100},
+        "timing_scope": {
+          "const": "cuda_event_quantize_core_dequantize_cached_execution_and_static_params"
+        }
+      }
+    },
+    "profiles": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/profile"},
+      "minItems": 4,
+      "maxItems": 4
+    }
+  },
+  "$defs": {
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "shape_profile",
+        "shape",
+        "math_mode",
+        "maximum_p50_ms",
+        "maximum_p95_ms",
+        "minimum_sequences_per_second"
+      ],
+      "properties": {
+        "case_id": {"type": "string", "minLength": 1},
+        "shape_profile": {
+          "enum": ["cuda_gru_basic", "large_batch"]
+        },
+        "shape": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 1},
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "math_mode": {"enum": ["pedantic", "tf32"]},
+        "maximum_p50_ms": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "maximum_p95_ms": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "minimum_sequences_per_second": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    }
+  }
+}
