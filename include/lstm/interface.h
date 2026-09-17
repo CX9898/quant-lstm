@@ -10,4 +10,5 @@
 
 #if defined(QUANT_LSTM_WITH_CUDA)
 #include "lstm/forward_float_cuda.h"
+#include "lstm/forward_quantized_fp_cuda.h"
 #endif

@@ -50,7 +50,12 @@ if(QUANT_LSTM_ENABLE_CUDA)
     set(CMAKE_CUDA_STANDARD_REQUIRED ON)
     find_package(CUDAToolkit REQUIRED)
 
-    target_sources(quant_lstm PRIVATE src/lstm/forward_float_cuda.cu)
+    target_sources(
+        quant_lstm
+        PRIVATE
+            src/lstm/forward_float_cuda.cu
+            src/lstm/forward_quantized_fp_cuda.cu
+    )
     target_compile_definitions(quant_lstm PUBLIC QUANT_LSTM_WITH_CUDA=1)
     target_link_libraries(quant_lstm PUBLIC CUDA::cublas CUDA::cudart)
     set_target_properties(
