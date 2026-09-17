@@ -1,6 +1,6 @@
 # LSTM 量化执行规格
 
-> 状态：阶段 3 已完成 Q31 三层验证并冻结 CPU Cell 整数编码；真实数据精度和 CUDA 量化性能仍待后续阶段提供证据
+> 状态：阶段 4 已完成 CUDA FP32 q-carrier 主路径、跨后端 NumericSafety 门禁及 sanitizer/Nsight/结构化性能证据；真实数据精度仍待后续阶段接入
 > 参考基线：`/home/chengxing.zou/projects/quant-gru`，commit `9c25d14`
 > 公式推导：`docs/lstm-quantization-formula-derivation.md`
 > 分阶段计划：`docs/implementation-plan.md`
@@ -322,14 +322,14 @@ Golden 使用显式 `dtype/shape/data`、row-major 一维 data。Standard scale 
 
 缺少上述任一项时阶段 4 验收失败。阶段 9 取得稳定基线后，再按 GPU/profile 人工冻结版本化性能回归阈值；禁止自动更新或跨设备复用绝对数值。
 
-## 12. 尚需实现后提供的证据
+## 12. 实现证据状态
 
-以下不是未决设计，而是进入后续阶段前必须产出的证据：
+以下不是未决设计，而是分阶段验收证据：
 
-1. Q31 Cell 静态上界证明、缩小域穷举和全范围随机/对抗报告。
-2. 两套 CPU reference 相对 `torch.nn.LSTM` 的 LSTM 实测 MAE、MSE、余弦相似度及逐时间步最差值。
-3. CUDA FP32 `exact_integer_range/precision_risk` 的逐量化点结果。
-4. cuBLAS 调用与可复现性能基线。
-5. 代表性真实数据和模型级指标；接入前只能声明 `synthetic_numeric` 数值验证通过。
+1. 已完成：Q31 Cell 静态上界证明、缩小域穷举和全范围随机/对抗报告。
+2. 待后续真实数据阶段完成：两套 CPU reference 相对 `torch.nn.LSTM` 的实测 MAE、MSE、余弦相似度及逐时间步最差值。
+3. 已完成：CUDA FP32 `exact_integer_range/precision_risk` 逐量化点结果及每 operator/channel `NumericSafetyReport`。
+4. 已完成：compute-sanitizer memcheck/racecheck、Nsight GEMM kernel 计数和可复现 Pedantic/TF32 结构化性能基线。
+5. 待后续阶段完成：代表性真实数据和模型级指标；接入前只能声明 `synthetic_numeric` 数值验证通过。
 
 上述证据文件按次生成且不提交仓库；审核通过的 schema、配置、阈值和规则变更必须入库并单独审查。

@@ -1,8 +1,8 @@
 # LSTM 量化融合公式推导
 
-> 状态：阶段 3 已通过三层实现期证据，Cell 固定 Q31 整数编码现已最终冻结
+> 状态：阶段 4 已通过 CPU/CUDA 跨后端、exact/risk NumericSafety、sanitizer 与 Nsight 实现期证据；Cell 固定 Q31 整数编码保持冻结
 > 参考实现：`/mnt/data2/chengxing.zou/projects/quant-gru`，commit `9c25d14`
-> 待完成证据：真实数据 LSTM 精度门禁复核和 CUDA FP 载体精度/性能报告；当前没有待审核的数学设计项
+> 待完成证据：真实数据 LSTM 精度与模型级门禁；当前没有待审核的数学设计项
 
 ## 1. 文档目的与边界
 
