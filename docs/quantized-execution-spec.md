@@ -1,6 +1,6 @@
 # LSTM 量化执行规格
 
-> 状态：阶段 7 已完成双向 QuantLSTM、方向独立参数与 CPU-only 安装包；真实数据精度仍待后续阶段接入
+> 状态：阶段 8 已完成浮点 backward 与 FP32 q-carrier QAT；真实数据精度仍待后续阶段接入
 > 参考基线：`/home/chengxing.zou/projects/quant-gru`，commit `9c25d14`
 > 公式推导：`docs/lstm-quantization-formula-derivation.md`
 > 分阶段计划：`docs/implementation-plan.md`
@@ -16,7 +16,7 @@
 
 首版 CPU int32 reference 不是端到端纯整数实现。三个 sigmoid 和两个 tanh 的整数 PWL LUT 是阶段 10 待办，未来必须使用独立 `cpu_int32_lut` execution model、Golden 和精度门禁接入。
 
-首版支持单层、单向 LSTM，随后按计划扩展双向；必须支持 `bias=True/False` 和 `batch_first=True/False`。内部统一使用 time-major 和 PyTorch 门顺序 `(i,f,g,o)`。
+当前支持单层单向/双向 LSTM、`bias=True/False` 和 `batch_first=True/False`。内部统一使用 time-major 和 PyTorch 门顺序 `(i,f,g,o)`。
 
 ## 2. LSTM 数学语义
 
@@ -288,6 +288,17 @@ q_h_new = Clamp(
 
 GEMM/普通乘积使用 int64，Cell Q31 合并使用 `__int128`。普通 rescale 执行整数 multiplier+shift/POT2 shift。首版真实激活桥接包含浮点函数，因此只冻结整数算术与融合公式，不代表完整硬件 LUT 语义。
 
+### 9.4 FP32 q-carrier QAT backward
+
+训练态保存量化后的 input、W/R、可选 bias、h0/c0，以及 7 类真实 checkpoint：
+两路 Linear、四门 input/output、Cell、`tanh(Cell)` 和 Hidden。Backward 将 q 值按
+standard scale/zp 反量化到 real domain，并复用已验证的浮点 LSTM backward。
+
+每个真实量化边界的 Clamp mask 中 `1` 表示发生 Clamp；STE 只在这些位置把梯度置零，
+未 Clamp 的 Round 使用恒等梯度。Cell 两路 contribution、Hidden 原始乘积及其他融合
+临时值没有独立 mask。双向模块分别执行两个单向 backward，再由时间翻转和拼接算子
+恢复 PyTorch 的 input、h0/c0 与参数梯度顺序。本节不改变第 8 节冻结的前向公式。
+
 ## 10. Golden 与验证
 
 Canonical Golden JSON 按 `primitive/cell/recurrent` 分类，一个文件一个自包含用例。每个文件只包含一个 `execution_model=common|cpu_int32|cpu_fp32` 和一份 expected；未来 LUT 通过 schema 新版本增加 `cpu_int32_lut`。
@@ -334,6 +345,7 @@ Golden 使用显式 `dtype/shape/data`、row-major 一维 data。Standard scale 
 6. 已完成：SQNR/Percentile 独立候选范围搜索复用统一 MinMax、minimum-scale、POT2 CoverRange 和执行参数派生链；参数包导入后 CUDA FP 主路径结果逐值一致。
 7. 已完成：PyTorch 接口只通过 C++ resolver 消费 canonical resolved config；校准、完整 `4H` 参数包导入导出、CUDA 直接调用、两种布局和真实 Clamp mask 已通过阶段 6 验收。
 8. 已完成：双向 forward/reverse 分别校准并强制共享 input 网格，输出与 `h_n/c_n` 顺序对齐 PyTorch；CPU-only 构建、测试、安装、外部消费和无 CUDA 链接门禁通过。
-9. 待后续阶段完成：代表性真实数据和模型级指标；接入前只能声明 `synthetic_numeric` 数值验证通过。
+9. 已完成：浮点 backward 对齐 PyTorch；QAT gradient、h0/c0、bias disabled、双向、Clamp STE、单步优化和多步 loss 下降通过阶段 8 验收。
+10. 待后续阶段完成：代表性真实数据和模型级指标；接入前只能声明 `synthetic_numeric` 数值验证通过。
 
 上述证据文件按次生成且不提交仓库；审核通过的 schema、配置、阈值和规则变更必须入库并单独审查。

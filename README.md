@@ -1,9 +1,10 @@
 # quant-lstm
 
-基于 CUDA FP32 载体的量化 LSTM 实现。当前已完成阶段 7：支持单层单向/双向
+基于 CUDA FP32 载体的量化 LSTM 实现。当前已完成阶段 8：支持单层单向/双向
 `QuantLSTM`、双方向独立校准参数、共享 input 网格、完整 `4H` standard scale/zp
-参数导入导出，以及训练态 checkpoint/真实 Clamp mask 保存。CPU int32 与标量
-FP32 q-carrier reference 可通过无 CUDA 的安装包独立消费，统一 Golden、
+参数导入导出，以及复用浮点 backward 的 FP32 q-carrier QAT。训练态只为真实
+Round/Clamp 边界保存 mask，并支持 h0/c0、bias=False 和双向梯度。CPU int32 与
+标量 FP32 q-carrier reference 可通过无 CUDA 的安装包独立消费，统一 Golden、
 NumericSafety 和 synthetic numeric 精度门禁保持生效。量化执行语义以
 `docs/quantized-execution-spec.md` 为准；配置和双载体流程分别见
 `docs/configuration.md` 与 `docs/dual-carrier-execution.md`。
@@ -44,6 +45,7 @@ QUANT_LSTM_TEST_SUITE=basic PYTHONPATH=. python3 tests/test_float_reference.py
 QUANT_LSTM_TEST_SUITE=strict PYTHONPATH=. python3 tests/test_float_reference.py
 PYTHONPATH=. python3 -m unittest -v tests.test_quantized_interface
 PYTHONPATH=. python3 -m unittest -v tests.test_bidirectional_interface
+PYTHONPATH=. python3 -m unittest -v tests.test_backward
 ```
 
 典型流程是先以 `calibrating=True` 运行一个或多个校准 batch，随后调用
@@ -59,5 +61,5 @@ M+shift、POT2 shift 或 raw ratio。
 
 正确性模式固定使用 Pedantic math；TF32 仅作为显式性能模式并独立报告精度。
 当前精度范围仍为 `synthetic_numeric`，真实数据状态为 `not_configured`。
-阶段 8 backward、阶段 9 ONNX/性能优化尚未实现；
+阶段 9 ONNX/性能优化尚未实现；
 CUDA int32 与整数 LUT 仍受阶段 10 的条件性启动规则约束。

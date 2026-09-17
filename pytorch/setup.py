@@ -1,4 +1,4 @@
-"""构建阶段 6 QuantLSTM CUDA FP 载体 binding。"""
+"""构建 QuantLSTM CUDA FP 载体 binding 与 Python 模块。"""
 
 from pathlib import Path
 
@@ -21,7 +21,7 @@ if not CORE_LIBRARY.exists():
 setup(
     name="quant-lstm",
     version="0.1.0",
-    py_modules=["quant_lstm"],
+    py_modules=["quant_lstm", "lstm_autograd"],
     ext_modules=[
         CUDAExtension(
             name="_quant_lstm",

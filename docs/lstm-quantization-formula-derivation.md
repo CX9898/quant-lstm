@@ -1,6 +1,6 @@
 # LSTM 量化融合公式推导
 
-> 状态：阶段 5 已通过 18 点多 batch MinMax/直方图校准、minimum-scale 边界、canonical 参数 round-trip 与 CUDA FP 验收；Cell 固定 Q31 整数编码保持冻结
+> 状态：阶段 8 已通过浮点 backward 与 FP32 q-carrier QAT 验收；前向量化公式和 Cell 固定 Q31 整数编码保持冻结
 > 参考实现：`/mnt/data2/chengxing.zou/projects/quant-gru`，commit `9c25d14`
 > 待完成证据：真实数据 LSTM 精度与模型级门禁；当前没有待审核的数学设计项
 
@@ -881,6 +881,36 @@ Rescale：POT2 shift 或 integer multiplier+shift
 - GEMM 的载体精度和性能实现。
 - 后续 `cpu_int32_lut` execution model 相对真实激活的近似误差；首版不包含该分支。
 
+### 12.4 QAT backward 的浮点代理公式
+
+浮点 backward 对每个时间步从后向前计算。将 output、最终 h/c 和下一时间步的梯度
+合并为 `dh`、`dc` 后，固定使用：
+
+```text
+do = dh * tanh(c_t)
+dc = dc + dh * o_t * (1 - tanh(c_t)^2)
+
+df = dc * c_(t-1)
+di = dc * g_t
+dg = dc * i_t
+dc_(t-1) = dc * f_t
+
+da_i = di * i_t * (1 - i_t)
+da_f = df * f_t * (1 - f_t)
+da_g = dg * (1 - g_t^2)
+da_o = do * o_t * (1 - o_t)
+```
+
+随后 `da=(da_i,da_f,da_g,da_o)` 分别用于 input/recurrent Linear 的 input、weight
+和 bias 梯度。浮点模式从 master input/parameter 重建这些最少 trace；量化模式把
+前向保存的 q-carrier master 和 gate/cell/hidden checkpoint 按各自 standard
+scale/zp 反量化后代入同一组公式。
+
+QAT 对 Round 使用恒等 STE。对任意真实量化边界 `y=Clamp(Round(x))`，只有前向
+记录为 Clamp 的位置使用 `dy/dx=0`，其余位置使用 `dy/dx=1`。Mask 按计算图逆序
+应用到 Hidden、`tanh(Cell)`、Cell、gate output、gate input、两路 Linear 和
+master input/parameter/state；融合乘法临时值没有量化边界，因此不产生 mask。
+
 ## 13. 配置约束
 
 JSON 只允许配置第 4 节列出的真实量化点。以下 GRU 风格字段不得出现在 LSTM schema 中：
@@ -937,6 +967,13 @@ Golden 只使用一个入库的版本化 JSON schema。根对象以 `kind=primit
 1. 正式 FP32 reference 输出两路 Linear、四门输入/输出、Cell、`tanh(Cell)` 与 Hidden checkpoint，18 个真实量化点跨 batch/time 取并集；`h_0/c_0` 分别并入 Output/CellState。
 2. MinMax、SQNR 和 Percentile 仅产生候选连续范围，统一经 minimum-scale 与 POT2 CoverRange 生成 standard scale/zp；恰等于 `S_min` 不 fallback、刚低于时 fallback。
 3. 外部参数包只保存完整 `4H` standard scale/zp 与 granularity/config 元数据；canonical FP32 字符串导出导入后重新派生执行编码，CUDA FP `output/h_n/c_n` 保持逐值一致。
+
+阶段 8 backward 已完成以下实现期证据：
+
+1. 浮点 input、h0/c0、W/R 和可选 bias 梯度在单向/双向、两种布局上对齐 `torch.nn.LSTM`。
+2. INT16 QAT 梯度相对浮点代理满足 MAE、MSE 和余弦门禁；双向 `bias=False` 同时覆盖。
+3. 单步参数更新、12 步 loss 下降以及 master input 被 Clamp/未 Clamp 的梯度行为通过。
+4. 证据写入忽略目录 `tests/precision/results/stage8_backward_report.json`，验证范围仍为 `synthetic_numeric`。
 
 最终冻结继续受以下回归门禁保护：
 

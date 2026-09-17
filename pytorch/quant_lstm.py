@@ -19,6 +19,8 @@ except ImportError as exc:
         "python setup.py build_ext --inplace"
     ) from exc
 
+from lstm_autograd import float_lstm, quantized_lstm
+
 
 _DEFAULT_CONFIG_PATH = (
     Path(__file__).resolve().parent.parent
@@ -335,7 +337,7 @@ class _UnidirectionalQuantLSTM(nn.Module):
             if len(hx) != 2:
                 raise ValueError("hx 必须是 (h_0, c_0)")
             h0, c0 = hx
-        output, final_hidden, final_cell = _quant_lstm.lstm_forward(
+        output, final_hidden, final_cell = float_lstm(
             input,
             self.weight_ih_l0,
             self.weight_hh_l0,
@@ -346,83 +348,6 @@ class _UnidirectionalQuantLSTM(nn.Module):
             self.batch_first,
         )
         return output, (final_hidden, final_cell)
-
-    @staticmethod
-    def _quant_range(operator: dict[str, Any]) -> tuple[int, int]:
-        bitwidth = operator["bitwidth"]
-        if operator["is_unsigned"]:
-            return 0, (1 << bitwidth) - 1
-        if operator["is_symmetric"]:
-            maximum = (1 << (bitwidth - 1)) - 1
-            return -maximum, maximum
-        return -(1 << (bitwidth - 1)), (1 << (bitwidth - 1)) - 1
-
-    def _quantize_saved_tensor(
-        self,
-        value: Tensor,
-        operator_name: str,
-        bundle: dict[str, Any],
-        per_channel: bool = False,
-    ) -> tuple[Tensor, Tensor]:
-        operator = bundle["operators"][operator_name]
-        qmin, qmax = self._quant_range(operator)
-        scales = torch.tensor(
-            [float(item) for item in operator["scales"]],
-            dtype=torch.float32,
-            device=value.device,
-        ).double()
-        zero_points = torch.tensor(
-            operator["zero_points"],
-            dtype=torch.float64,
-            device=value.device,
-        )
-        if per_channel:
-            shape = [len(scales)] + [1] * (value.dim() - 1)
-            scales = scales.reshape(shape)
-            zero_points = zero_points.reshape(shape)
-        translated = value.detach().double() / scales + zero_points
-        clamped = (translated < qmin) | (translated > qmax)
-        quantized = torch.round(translated).clamp(qmin, qmax).float()
-        return quantized, clamped
-
-    def _save_qat_state(
-        self,
-        input: Tensor,
-        hx: Optional[tuple[Tensor, Tensor]],
-        checkpoints: dict[str, Any],
-    ) -> None:
-        if self._quant_params_bundle_json is None:
-            raise RuntimeError("量化参数不存在")
-        bundle = _strict_json_loads(self._quant_params_bundle_json)
-        batch = input.size(0 if self.batch_first else 1)
-        state_shape = (1, batch, self.hidden_size)
-        if hx is None:
-            h0 = torch.zeros(state_shape, device=input.device)
-            c0 = torch.zeros(state_shape, device=input.device)
-        else:
-            h0, c0 = hx
-        tensors = {
-            "input": (input, "input", False),
-            "weight_ih": (self.weight_ih_l0, "weight_ih", True),
-            "weight_hh": (self.weight_hh_l0, "weight_hh", True),
-            "h_0": (h0, "output", False),
-            "c_0": (c0, "cell_state", False),
-        }
-        if self.bias:
-            tensors["bias_ih"] = (self.bias_ih_l0, "bias_ih", True)
-            tensors["bias_hh"] = (self.bias_hh_l0, "bias_hh", True)
-        quantized = {}
-        masks = {}
-        for name, (tensor, operator, per_channel) in tensors.items():
-            quantized[name], masks[name] = self._quantize_saved_tensor(
-                tensor, operator, bundle, per_channel
-            )
-        self._qat_saved_state = {
-            "quantized_master": quantized,
-            "master_clamp_masks": masks,
-            "checkpoints": checkpoints.get("values", {}),
-            "checkpoint_clamp_masks": checkpoints.get("clamp_masks", {}),
-        }
 
     def qat_saved_state(self) -> Optional[dict[str, Any]]:
         return self._qat_saved_state
@@ -443,26 +368,23 @@ class _UnidirectionalQuantLSTM(nn.Module):
             if len(hx) != 2:
                 raise ValueError("hx 必须是 (h_0, c_0)")
             h0, c0 = hx
-        save_checkpoints = self.training
-        output, final_hidden, final_cell, checkpoints, safety = (
-            _quant_lstm.lstm_forward_quantized(
-                input,
-                self.weight_ih_l0,
-                self.weight_hh_l0,
-                self.bias_ih_l0,
-                self.bias_hh_l0,
-                h0,
-                c0,
-                self.batch_first,
-                self._quant_params_bundle_json,
-                self.cublas_math_mode,
-                self.require_exact_accumulation,
-                save_checkpoints,
-            )
+        save_checkpoints = self.training or torch.is_grad_enabled()
+        output, final_hidden, final_cell, qat_state, safety = quantized_lstm(
+            input,
+            self.weight_ih_l0,
+            self.weight_hh_l0,
+            self.bias_ih_l0,
+            self.bias_hh_l0,
+            h0,
+            c0,
+            self.batch_first,
+            self._quant_params_bundle_json,
+            self.cublas_math_mode,
+            self.require_exact_accumulation,
+            save_checkpoints,
         )
         self._last_safety_report = safety
-        if save_checkpoints:
-            self._save_qat_state(input, hx, checkpoints)
+        self._qat_saved_state = qat_state if self.training else None
         return output, (final_hidden, final_cell)
 
     def forward(
@@ -791,7 +713,7 @@ class QuantLSTM(_UnidirectionalQuantLSTM):
     ) -> tuple[Tensor, Tensor, Tensor]:
         direction_input = self._reverse_sequence(input) if reverse else input
         suffix = "_reverse" if reverse else ""
-        output, hidden, cell = _quant_lstm.lstm_forward(
+        output, hidden, cell = float_lstm(
             direction_input,
             getattr(self, f"weight_ih_l0{suffix}"),
             getattr(self, f"weight_hh_l0{suffix}"),
@@ -831,7 +753,7 @@ class QuantLSTM(_UnidirectionalQuantLSTM):
             if reverse
             else self._quant_params_bundle_json
         )
-        result = _quant_lstm.lstm_forward_quantized(
+        output, hidden, cell, qat_state, safety = quantized_lstm(
             direction_input,
             getattr(self, f"weight_ih_l0{suffix}"),
             getattr(self, f"weight_hh_l0{suffix}"),
@@ -843,75 +765,10 @@ class QuantLSTM(_UnidirectionalQuantLSTM):
             bundle_json,
             self.cublas_math_mode,
             self.require_exact_accumulation,
-            self.training,
+            self.training or torch.is_grad_enabled(),
         )
-        output = self._reverse_sequence(result[0]) if reverse else result[0]
-        return output, result[1], result[2], result[3], result[4]
-
-    def _direction_qat_state(
-        self,
-        input: Tensor,
-        state: tuple[Optional[Tensor], Optional[Tensor]],
-        checkpoints: dict[str, Any],
-        reverse: bool,
-    ) -> dict[str, Any]:
-        bundle_json = (
-            self._reverse_quant_params_bundle_json
-            if reverse
-            else self._quant_params_bundle_json
-        )
-        bundle = _strict_json_loads(bundle_json)
-        batch = input.size(0 if self.batch_first else 1)
-        state_shape = (1, batch, self.hidden_size)
-        hidden = (
-            torch.zeros(state_shape, device=input.device)
-            if state[0] is None
-            else state[0]
-        )
-        cell = (
-            torch.zeros(state_shape, device=input.device)
-            if state[1] is None
-            else state[1]
-        )
-        suffix = "_reverse" if reverse else ""
-        tensors = {
-            "input": (input, "input", False),
-            "weight_ih": (
-                getattr(self, f"weight_ih_l0{suffix}"),
-                "weight_ih",
-                True,
-            ),
-            "weight_hh": (
-                getattr(self, f"weight_hh_l0{suffix}"),
-                "weight_hh",
-                True,
-            ),
-            "h_0": (hidden, "output", False),
-            "c_0": (cell, "cell_state", False),
-        }
-        if self.bias:
-            tensors["bias_ih"] = (
-                getattr(self, f"bias_ih_l0{suffix}"),
-                "bias_ih",
-                True,
-            )
-            tensors["bias_hh"] = (
-                getattr(self, f"bias_hh_l0{suffix}"),
-                "bias_hh",
-                True,
-            )
-        quantized = {}
-        masks = {}
-        for name, (tensor, operator, per_channel) in tensors.items():
-            quantized[name], masks[name] = self._quantize_saved_tensor(
-                tensor, operator, bundle, per_channel
-            )
-        return {
-            "quantized_master": quantized,
-            "master_clamp_masks": masks,
-            "checkpoints": checkpoints.get("values", {}),
-            "checkpoint_clamp_masks": checkpoints.get("clamp_masks", {}),
-        }
+        output = self._reverse_sequence(output) if reverse else output
+        return output, hidden, cell, qat_state, safety
 
     def _quantized_forward(
         self, input: Tensor, hx: Optional[tuple[Tensor, Tensor]]
@@ -928,7 +785,6 @@ class QuantLSTM(_UnidirectionalQuantLSTM):
         forward = self._run_quantized_direction(
             input, forward_state, False
         )
-        reverse_input = self._reverse_sequence(input)
         reverse = self._run_quantized_direction(
             input, reverse_state, True
         )
@@ -938,13 +794,11 @@ class QuantLSTM(_UnidirectionalQuantLSTM):
         }
         if self.training:
             self._qat_saved_state = {
-                "forward": self._direction_qat_state(
-                    input, forward_state, forward[3], False
-                ),
-                "reverse": self._direction_qat_state(
-                    reverse_input, reverse_state, reverse[3], True
-                ),
+                "forward": forward[3],
+                "reverse": reverse[3],
             }
+        else:
+            self._qat_saved_state = None
         return torch.cat((forward[0], reverse[0]), dim=-1), (
             torch.cat((forward[1], reverse[1]), dim=0),
             torch.cat((forward[2], reverse[2]), dim=0),

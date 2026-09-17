@@ -1,6 +1,6 @@
 # Quant-LSTM 纯定点量化实现计划
 
-> 状态：阶段 7 已完成；双向 CUDA FP 主路径与 CPU-only 工程化已验收
+> 状态：阶段 8 已完成；浮点 backward 与 FP32 q-carrier QAT 已验收
 > 参考基线：`/home/chengxing.zou/projects/quant-gru`，commit `9c25d14`
 > 目标仓库：`/home/chengxing.zou/projects/quant-lstm`
 
