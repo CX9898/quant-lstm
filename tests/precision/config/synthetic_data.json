@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "validation_scope": "synthetic_numeric",
+  "real_data_status": "not_configured",
+  "rng_version": "pcg32-xsh-rr-v1",
+  "rng_stream_registry": "v1",
+  "distribution_profile": "pytorch_typical_v1",
+  "basic_seed": 0,
+  "strict_seeds": {
+    "calibration": [1001, 1002, 1003],
+    "evaluation": [2001, 2002, 2003, 2004, 2005]
+  },
+  "stream_ids": {
+    "input": 1,
+    "h0": 2,
+    "c0": 3,
+    "weight_ih": 10,
+    "weight_hh": 11,
+    "bias_ih": 12,
+    "bias_hh": 13
+  },
+  "shape_profiles": {
+    "cpu_basic": [8, 4, 16, 32],
+    "cuda_gru_basic": [50, 64, 128, 256],
+    "minimal": [1, 1, 1, 1],
+    "short_recurrent": [3, 1, 2, 2],
+    "non_aligned": [7, 3, 31, 33],
+    "long_sequence": [256, 1, 64, 128],
+    "large_batch": [16, 128, 64, 128]
+  },
+  "parameter_seeds": {
+    "cpu_basic": 3001,
+    "cuda_gru_basic": 3002,
+    "minimal": 3003,
+    "short_recurrent": 3004,
+    "non_aligned": 3005,
+    "long_sequence": 3006,
+    "large_batch": 3007
+  },
+  "state_profiles": [
+    "omitted",
+    "explicit_zero",
+    "typical_random",
+    "near_quant_boundary",
+    "mixed_h_random_c_boundary"
+  ],
+  "bias_profiles": ["enabled_random", "disabled"],
+  "layout_profiles": {
+    "time_major": {"batch_first": false, "input_layout": "TBI"},
+    "batch_major": {"batch_first": true, "input_layout": "BTI"}
+  },
+  "adversarial_profiles": [
+    "saturation",
+    "gate_near_zero_one",
+    "cell_growth",
+    "disparate_scales",
+    "contribution_cancellation",
+    "contribution_same_sign",
+    "state_quant_boundary",
+    "fp32_exact_2pow24"
+  ]
+}

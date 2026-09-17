@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "accumulator_dtype": "float64",
+  "flatten_before_compute": true,
+  "metrics": ["mae", "mse", "cosine_similarity"],
+  "cosine": {
+    "l2_norm_epsilon": 1e-12,
+    "both_near_zero": "not_applicable_use_exact_mae_mse",
+    "one_near_zero": "fail",
+    "statuses": ["valid", "both_near_zero", "one_near_zero"]
+  },
+  "tensor_targets": ["output", "h_n", "c_n"],
+  "strict_time_step_aggregation": {
+    "output": ["max_mae", "max_mse", "min_valid_cosine", "worst_time_step"],
+    "case_summary": ["mean", "p50", "p95", "worst", "failed_samples"]
+  }
+}

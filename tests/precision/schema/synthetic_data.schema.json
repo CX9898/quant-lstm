@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-lstm.local/schema/synthetic_data.schema.json",
+  "title": "阶段 3 合成数据契约 v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "validation_scope",
+    "real_data_status",
+    "rng_version",
+    "rng_stream_registry",
+    "distribution_profile",
+    "basic_seed",
+    "strict_seeds",
+    "stream_ids",
+    "shape_profiles",
+    "parameter_seeds",
+    "state_profiles",
+    "bias_profiles",
+    "layout_profiles",
+    "adversarial_profiles"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "validation_scope": {"const": "synthetic_numeric"},
+    "real_data_status": {"const": "not_configured"},
+    "rng_version": {"const": "pcg32-xsh-rr-v1"},
+    "rng_stream_registry": {"const": "v1"},
+    "distribution_profile": {"const": "pytorch_typical_v1"},
+    "basic_seed": {"type": "integer", "const": 0},
+    "strict_seeds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["calibration", "evaluation"],
+      "properties": {
+        "calibration": {"type": "array", "const": [1001, 1002, 1003]},
+        "evaluation": {"type": "array", "const": [2001, 2002, 2003, 2004, 2005]}
+      }
+    },
+    "stream_ids": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "h0", "c0", "weight_ih", "weight_hh", "bias_ih", "bias_hh"],
+      "properties": {
+        "input": {"type": "integer", "const": 1},
+        "h0": {"type": "integer", "const": 2},
+        "c0": {"type": "integer", "const": 3},
+        "weight_ih": {"type": "integer", "const": 10},
+        "weight_hh": {"type": "integer", "const": 11},
+        "bias_ih": {"type": "integer", "const": 12},
+        "bias_hh": {"type": "integer", "const": 13}
+      }
+    },
+    "shape_profiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpu_basic", "cuda_gru_basic", "minimal", "short_recurrent", "non_aligned", "long_sequence", "large_batch"],
+      "properties": {
+        "cpu_basic": {"const": [8, 4, 16, 32]},
+        "cuda_gru_basic": {"const": [50, 64, 128, 256]},
+        "minimal": {"const": [1, 1, 1, 1]},
+        "short_recurrent": {"const": [3, 1, 2, 2]},
+        "non_aligned": {"const": [7, 3, 31, 33]},
+        "long_sequence": {"const": [256, 1, 64, 128]},
+        "large_batch": {"const": [16, 128, 64, 128]}
+      }
+    },
+    "parameter_seeds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpu_basic", "cuda_gru_basic", "minimal", "short_recurrent", "non_aligned", "long_sequence", "large_batch"],
+      "properties": {
+        "cpu_basic": {"type": "integer", "const": 3001},
+        "cuda_gru_basic": {"type": "integer", "const": 3002},
+        "minimal": {"type": "integer", "const": 3003},
+        "short_recurrent": {"type": "integer", "const": 3004},
+        "non_aligned": {"type": "integer", "const": 3005},
+        "long_sequence": {"type": "integer", "const": 3006},
+        "large_batch": {"type": "integer", "const": 3007}
+      }
+    },
+    "state_profiles": {
+      "type": "array",
+      "const": ["omitted", "explicit_zero", "typical_random", "near_quant_boundary", "mixed_h_random_c_boundary"]
+    },
+    "bias_profiles": {
+      "type": "array",
+      "const": ["enabled_random", "disabled"]
+    },
+    "layout_profiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["time_major", "batch_major"],
+      "properties": {
+        "time_major": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["batch_first", "input_layout"],
+          "properties": {
+            "batch_first": {"const": false},
+            "input_layout": {"const": "TBI"}
+          }
+        },
+        "batch_major": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["batch_first", "input_layout"],
+          "properties": {
+            "batch_first": {"const": true},
+            "input_layout": {"const": "BTI"}
+          }
+        }
+      }
+    },
+    "adversarial_profiles": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "saturation",
+          "gate_near_zero_one",
+          "cell_growth",
+          "disparate_scales",
+          "contribution_cancellation",
+          "contribution_same_sign",
+          "state_quant_boundary",
+          "fp32_exact_2pow24"
+        ]
+      },
+      "minItems": 8,
+      "maxItems": 8
+    }
+  }
+}

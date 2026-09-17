@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-lstm.local/schema/strict_thresholds.schema.json",
+  "title": "阶段 3 严格绝对阈值 v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "validation_scope",
+    "data_layer",
+    "tensor_targets",
+    "comparison",
+    "profiles",
+    "quantized_profile_selection"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "validation_scope": {"const": "synthetic_numeric"},
+    "data_layer": {"const": "synthetic"},
+    "tensor_targets": {"type": "array", "const": ["output", "h_n", "c_n"]},
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mse", "mae", "cosine_similarity"],
+      "properties": {
+        "mse": {"const": "strict_less_than"},
+        "mae": {"const": "strict_less_than"},
+        "cosine_similarity": {"const": "greater_than_or_equal"}
+      }
+    },
+    "profiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["non_quantized", "int8", "int16"],
+      "properties": {
+        "non_quantized": {"$ref": "#/$defs/threshold"},
+        "int8": {"$ref": "#/$defs/threshold"},
+        "int16": {"$ref": "#/$defs/threshold"}
+      }
+    },
+    "quantized_profile_selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "mapping", "excluded_fields", "unmapped"],
+      "properties": {
+        "source": {"const": "minimum_effective_operator_bitwidth"},
+        "mapping": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["8", "16"],
+          "properties": {
+            "8": {"const": "int8"},
+            "16": {"const": "int16"}
+          }
+        },
+        "excluded_fields": {
+          "type": "array",
+          "const": ["carrier", "accumulator", "m_shift", "q31", "diagnostics"]
+        },
+        "unmapped": {"const": "fail_fast"}
+      }
+    }
+  },
+  "$defs": {
+    "threshold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mse", "mae", "cosine_similarity"],
+      "properties": {
+        "mse": {"type": "number", "exclusiveMinimum": 0},
+        "mae": {"type": "number", "exclusiveMinimum": 0},
+        "cosine_similarity": {"type": "number", "minimum": 0.999, "maximum": 1}
+      }
+    }
+  }
+}
