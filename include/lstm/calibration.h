@@ -4,8 +4,10 @@
 #include "lstm/lstm_execution_params.h"
 #include "lstm/quant_config.h"
 #include "lstm/quant_params.h"
+#include "quantization/histogram.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -60,7 +62,9 @@ struct FinalizedLstmCalibration {
 class LstmCalibrationCollector {
    public:
     LstmCalibrationCollector(LstmOperatorQuantConfig config, std::int64_t input_size,
-                             std::int64_t hidden_size, bool bias_enabled);
+                             std::int64_t hidden_size, bool bias_enabled,
+                             bool collect_histograms = false,
+                             std::size_t histogram_bin_count = 2048);
 
     void reset();
     void collect(const LstmShape& shape, const LstmFloatWeights& weights,
@@ -74,8 +78,13 @@ class LstmCalibrationCollector {
     std::int64_t hiddenSize() const noexcept;
     bool biasEnabled() const noexcept;
     const LstmOperatorQuantConfig& config() const noexcept;
+    const std::array<std::vector<quantization::HistogramCollector>,
+                     kQuantOperatorCount>&
+    histograms() const noexcept;
 
    private:
+    void observeOperator(QuantOperator id, const float* values,
+                         std::size_t count);
     void observeParameter(QuantOperator id, const float* values,
                           std::size_t row_width);
 
@@ -86,6 +95,11 @@ class LstmCalibrationCollector {
     std::uint64_t batch_count_ = 0;
     LstmQuantizationRanges ranges_;
     LstmContributionRanges contributions_;
+    bool collect_histograms_;
+    std::size_t histogram_bin_count_;
+    std::array<std::vector<quantization::HistogramCollector>,
+               kQuantOperatorCount>
+        histograms_;
 };
 
 // 会话封装 Empty -> Dirty -> Locked 生命周期。finalize 幂等；Locked 后
@@ -94,7 +108,10 @@ class LstmCalibrationSession {
    public:
     LstmCalibrationSession(LstmOperatorQuantConfig config, std::int64_t input_size,
                            std::int64_t hidden_size, bool bias_enabled,
-                           CalibrationMethod method = CalibrationMethod::MinMax);
+                           CalibrationMethod method = CalibrationMethod::MinMax,
+                           quantization::HistogramCalibrationOptions
+                               histogram_options = {},
+                           std::size_t histogram_bin_count = 2048);
 
     void collect(const LstmShape& shape, const LstmFloatWeights& weights,
                  const float* input, const float* initial_hidden,
@@ -110,6 +127,7 @@ class LstmCalibrationSession {
 
    private:
     CalibrationMethod method_;
+    quantization::HistogramCalibrationOptions histogram_options_;
     CalibrationState state_ = CalibrationState::Empty;
     LstmCalibrationCollector collector_;
     FinalizedLstmCalibration finalized_;

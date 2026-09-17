@@ -54,14 +54,20 @@ std::size_t finalizedGroupValueIndex(QuantGranularity granularity,
 
 LstmCalibrationCollector::LstmCalibrationCollector(
     LstmOperatorQuantConfig config, std::int64_t input_size,
-    std::int64_t hidden_size, bool bias_enabled)
+    std::int64_t hidden_size, bool bias_enabled, bool collect_histograms,
+    std::size_t histogram_bin_count)
     : config_(std::move(config)),
       input_size_(input_size),
       hidden_size_(hidden_size),
-      bias_enabled_(bias_enabled) {
+      bias_enabled_(bias_enabled),
+      collect_histograms_(collect_histograms),
+      histogram_bin_count_(histogram_bin_count) {
     config_.validate();
     checkedSize(input_size_, "input_size");
     checkedSize(hidden_size_, "hidden_size");
+    if (histogram_bin_count_ < 2) {
+        throw std::invalid_argument("histogram_bin_count 必须至少为 2");
+    }
     reset();
 }
 
@@ -69,6 +75,29 @@ void LstmCalibrationCollector::reset() {
     batch_count_ = 0;
     ranges_.reset(config_, hidden_size_, bias_enabled_);
     contributions_ = {};
+    for (std::size_t index = 0; index < kQuantOperatorCount; ++index) {
+        const auto id = static_cast<QuantOperator>(index);
+        auto& collectors = histograms_[index];
+        if (!collect_histograms_ ||
+            (!bias_enabled_ && isBiasOperator(id))) {
+            collectors.clear();
+            continue;
+        }
+        collectors.assign(
+            quantizationGroupCount(id, config_.operators[index].granularity,
+                                   hidden_size_),
+            quantization::HistogramCollector(histogram_bin_count_));
+    }
+}
+
+void LstmCalibrationCollector::observeOperator(QuantOperator id,
+                                               const float* values,
+                                               std::size_t count) {
+    ranges_.at(id).front().observe(values, count);
+    if (collect_histograms_) {
+        histograms_[static_cast<std::size_t>(id)].front().collect(values,
+                                                                  count);
+    }
 }
 
 void LstmCalibrationCollector::observeParameter(QuantOperator id,
@@ -81,10 +110,33 @@ void LstmCalibrationCollector::observeParameter(QuantOperator id,
     const std::size_t channels = kGateCount * hidden;
     const QuantGranularity granularity = config_.at(id).granularity;
     auto& groups = ranges_.at(id);
+    auto& histograms = histograms_[static_cast<std::size_t>(id)];
+    if (granularity == QuantGranularity::PerTensor) {
+        groups.front().observe(values, channels * row_width);
+        if (collect_histograms_) {
+            histograms.front().collect(values, channels * row_width);
+        }
+        return;
+    }
+    if (granularity == QuantGranularity::PerGate) {
+        for (std::size_t gate = 0; gate < kGateCount; ++gate) {
+            const float* gate_values =
+                values + gate * hidden * row_width;
+            groups[gate].observe(gate_values, hidden * row_width);
+            if (collect_histograms_) {
+                histograms[gate].collect(gate_values, hidden * row_width);
+            }
+        }
+        return;
+    }
     for (std::size_t channel = 0; channel < channels; ++channel) {
         const std::size_t group =
             quantizationGroupIndex(id, granularity, channel, hidden_size_);
         groups[group].observe(values + channel * row_width, row_width);
+        if (collect_histograms_) {
+            histograms[group].collect(values + channel * row_width,
+                                      row_width);
+        }
     }
 }
 
@@ -111,8 +163,8 @@ void LstmCalibrationCollector::collect(
     lstmForwardFloatCpu(shape, weights, input, initial_hidden, initial_cell,
                         output.data(), final_hidden.data(), final_cell.data(), &trace);
 
-    ranges_.at(QuantOperator::Input).front().observe(
-        input, steps * batch * input_size);
+    observeOperator(QuantOperator::Input, input,
+                    steps * batch * input_size);
 
     std::vector<float> zero_hidden;
     std::vector<float> zero_cell;
@@ -120,14 +172,14 @@ void LstmCalibrationCollector::collect(
         stateOrZeros(initial_hidden, &zero_hidden, state_count);
     const float* initial_cell_values =
         stateOrZeros(initial_cell, &zero_cell, state_count);
-    ranges_.at(QuantOperator::Output).front().observe(
-        initial_hidden_values, state_count);
-    ranges_.at(QuantOperator::CellState).front().observe(
-        initial_cell_values, state_count);
-    ranges_.at(QuantOperator::Output).front().observe(
-        trace.hidden_outputs.data(), trace.hidden_outputs.size());
-    ranges_.at(QuantOperator::CellState).front().observe(
-        trace.cell_states.data(), trace.cell_states.size());
+    observeOperator(QuantOperator::Output, initial_hidden_values,
+                    state_count);
+    observeOperator(QuantOperator::CellState, initial_cell_values,
+                    state_count);
+    observeOperator(QuantOperator::Output, trace.hidden_outputs.data(),
+                    trace.hidden_outputs.size());
+    observeOperator(QuantOperator::CellState, trace.cell_states.data(),
+                    trace.cell_states.size());
 
     observeParameter(QuantOperator::WeightInputHidden, weights.weight_ih,
                      input_size);
@@ -138,22 +190,22 @@ void LstmCalibrationCollector::collect(
         observeParameter(QuantOperator::BiasHiddenHidden, weights.bias_hh, 1);
     }
 
-    ranges_.at(QuantOperator::WeightInputHiddenLinear).front().observe(
+    observeOperator(QuantOperator::WeightInputHiddenLinear,
         trace.weight_input_hidden_linear.data(),
         trace.weight_input_hidden_linear.size());
-    ranges_.at(QuantOperator::WeightHiddenHiddenLinear).front().observe(
+    observeOperator(QuantOperator::WeightHiddenHiddenLinear,
         trace.weight_hidden_hidden_linear.data(),
         trace.weight_hidden_hidden_linear.size());
-    ranges_.at(QuantOperator::CellTanhOutput).front().observe(
+    observeOperator(QuantOperator::CellTanhOutput,
         trace.cell_tanh_outputs.data(), trace.cell_tanh_outputs.size());
 
     const std::size_t gate_stride = kGateCount * hidden;
     for (std::size_t row = 0; row < steps * batch; ++row) {
         for (std::size_t gate = 0; gate < kGateCount; ++gate) {
             const std::size_t offset = row * gate_stride + gate * hidden;
-            ranges_.at(kGateInputOperators[gate]).front().observe(
+            observeOperator(kGateInputOperators[gate],
                 trace.gate_inputs.data() + offset, hidden);
-            ranges_.at(kGateOutputOperators[gate]).front().observe(
+            observeOperator(kGateOutputOperators[gate],
                 trace.gate_outputs.data() + offset, hidden);
         }
     }
@@ -219,11 +271,22 @@ LstmCalibrationCollector::config() const noexcept {
     return config_;
 }
 
+const std::array<std::vector<quantization::HistogramCollector>,
+                 kQuantOperatorCount>&
+LstmCalibrationCollector::histograms() const noexcept {
+    return histograms_;
+}
+
 LstmCalibrationSession::LstmCalibrationSession(
     LstmOperatorQuantConfig config, std::int64_t input_size,
-    std::int64_t hidden_size, bool bias_enabled, CalibrationMethod method)
+    std::int64_t hidden_size, bool bias_enabled, CalibrationMethod method,
+    quantization::HistogramCalibrationOptions histogram_options,
+    std::size_t histogram_bin_count)
     : method_(method),
-      collector_(std::move(config), input_size, hidden_size, bias_enabled) {
+      histogram_options_(histogram_options),
+      collector_(std::move(config), input_size, hidden_size, bias_enabled,
+                 method != CalibrationMethod::MinMax,
+                 histogram_bin_count) {
     if (method_ != CalibrationMethod::MinMax &&
         method_ != CalibrationMethod::Sqnr &&
         method_ != CalibrationMethod::Percentile) {
@@ -236,9 +299,6 @@ void LstmCalibrationSession::collect(
     const float* initial_hidden, const float* initial_cell) {
     if (state_ == CalibrationState::Locked) {
         throw std::logic_error("Locked 校准会话拒绝继续采集");
-    }
-    if (method_ != CalibrationMethod::MinMax) {
-        throw std::logic_error("直方图校准后端尚未初始化");
     }
     collector_.collect(shape, weights, input, initial_hidden, initial_cell);
     state_ = CalibrationState::Dirty;
@@ -254,8 +314,31 @@ const FinalizedLstmCalibration& LstmCalibrationSession::finalize(
         throw std::logic_error("Empty 校准会话不能 finalize");
     }
 
+    LstmQuantizationRanges selected_ranges = collector_.ranges();
+    if (method_ != CalibrationMethod::MinMax) {
+        const auto histogram_method =
+            method_ == CalibrationMethod::Sqnr
+                ? quantization::HistogramCalibrationMethod::Sqnr
+                : quantization::HistogramCalibrationMethod::Percentile;
+        for (std::size_t index = 0; index < kQuantOperatorCount; ++index) {
+            const auto id = static_cast<QuantOperator>(index);
+            if (!collector_.biasEnabled() && isBiasOperator(id)) {
+                continue;
+            }
+            auto& ranges = selected_ranges.operators[index];
+            const auto& histograms = collector_.histograms()[index];
+            for (std::size_t group = 0; group < ranges.size(); ++group) {
+                const auto candidate = quantization::calibrateHistogramRange(
+                    histograms[group].histogram(),
+                    collector_.config().operators[index].type,
+                    histogram_method, histogram_options_);
+                ranges[group].minimum = candidate.first;
+                ranges[group].maximum = candidate.second;
+            }
+        }
+    }
     finalized_.quant_params = finalizeQuantParams(
-        collector_.config(), collector_.ranges(), collector_.hiddenSize(),
+        collector_.config(), selected_ranges, collector_.hiddenSize(),
         collector_.biasEnabled());
     finalized_.execution_params = deriveLstmExecutionParams(
         collector_.config(), finalized_.quant_params, collector_.inputSize(),

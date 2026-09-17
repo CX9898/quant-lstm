@@ -31,6 +31,7 @@ add_library(
     src/lstm/quant_config_loader.cc
     src/lstm/quant_params.cc
     src/lstm/quant_params_io.cc
+    src/quantization/histogram.cc
     src/quantization/numeric_safety.cc
     src/quantization/quant_param.cc
     src/quantization/real_activation.cc
@@ -123,6 +124,14 @@ if(QUANT_LSTM_BUILD_TESTS)
         test_calibration_minmax
         PRIVATE QUANT_LSTM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME calibration_minmax COMMAND test_calibration_minmax)
+
+    add_executable(
+        test_calibration_histogram tests/cpp/test_calibration_histogram.cc)
+    target_link_libraries(test_calibration_histogram PRIVATE quant_lstm)
+    target_compile_definitions(
+        test_calibration_histogram
+        PRIVATE QUANT_LSTM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME calibration_histogram COMMAND test_calibration_histogram)
 
     add_executable(test_quant_params_io tests/cpp/test_quant_params_io.cc)
     target_link_libraries(
