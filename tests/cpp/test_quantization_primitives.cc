@@ -103,6 +103,28 @@ int main() {
             require(mode_fallback.diagnostics.fallback_used &&
                         mode_fallback.param.scale == q::minimumScale(type),
                     "all four fallback modes");
+            const auto quantized_range = type.range();
+            const float scale = q::minimumScale(type);
+            const float multiplier =
+                type.is_symmetric && !type.is_unsigned
+                    ? static_cast<float>(quantized_range.maximum)
+                    : static_cast<float>(
+                          static_cast<std::int64_t>(quantized_range.maximum) -
+                          quantized_range.minimum);
+            const float exact_extent = multiplier * scale;
+            const float below_extent = std::nextafter(exact_extent, 0.0F);
+            const auto exact_threshold =
+                type.is_symmetric && !type.is_unsigned
+                    ? q::calibrateMinMax(-exact_extent, exact_extent, type)
+                    : q::calibrateMinMax(0.0F, exact_extent, type);
+            const auto below_threshold =
+                type.is_symmetric && !type.is_unsigned
+                    ? q::calibrateMinMax(-below_extent, below_extent, type)
+                    : q::calibrateMinMax(0.0F, below_extent, type);
+            require(!exact_threshold.diagnostics.fallback_used,
+                    "candidate scale equal to S_min must not fallback");
+            require(below_threshold.diagnostics.fallback_used,
+                    "candidate scale below S_min must fallback");
         }
         require(q::calibrateMinMax(1.0F, 2.0F, signed_asymmetric_8).param.zero_point == -128,
                 "positive-only signed asymmetric zero point");

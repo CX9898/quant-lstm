@@ -300,6 +300,24 @@ if(QUANT_LSTM_BUILD_TESTS)
         add_test(NAME quantized_fp_cuda COMMAND test_quantized_fp_cuda)
 
         add_executable(
+            test_calibration_roundtrip_cuda
+            tests/cuda/test_calibration_roundtrip_cuda.cu)
+        target_include_directories(
+            test_calibration_roundtrip_cuda
+            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+        target_link_libraries(
+            test_calibration_roundtrip_cuda PRIVATE quant_lstm)
+        target_compile_definitions(
+            test_calibration_roundtrip_cuda
+            PRIVATE QUANT_LSTM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+        set_target_properties(
+            test_calibration_roundtrip_cuda
+            PROPERTIES CUDA_ARCHITECTURES native)
+        add_test(
+            NAME calibration_roundtrip_cuda
+            COMMAND test_calibration_roundtrip_cuda)
+
+        add_executable(
             test_synthetic_precision_cuda
             tests/cuda/test_synthetic_precision_cuda.cu)
         target_link_libraries(
