@@ -23,6 +23,9 @@ target_include_directories(
 add_library(
     quant_lstm STATIC
     src/lstm/forward_float_cpu.cc
+    src/lstm/forward_int32_cpu.cc
+    src/lstm/forward_quantized_fp_cpu.cc
+    src/lstm/lstm_execution_params.cc
     src/lstm/quant_config.cc
     src/lstm/quant_config_loader.cc
     src/lstm/quant_params.cc
@@ -98,45 +101,96 @@ if(QUANT_LSTM_BUILD_TESTS)
         test_quant_params PRIVATE QUANT_LSTM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME quant_params COMMAND test_quant_params)
 
+    add_executable(
+        test_quantized_references tests/cpp/test_quantized_references.cc)
+    target_link_libraries(
+        test_quantized_references PRIVATE quant_lstm quant_lstm_test_support)
+    add_test(NAME quantized_references COMMAND test_quantized_references)
+
+    add_executable(test_quantized_cell tests/cpp/test_quantized_cell.cc)
+    target_link_libraries(test_quantized_cell PRIVATE quant_lstm)
+    add_test(NAME quantized_cell COMMAND test_quantized_cell)
+
+    add_executable(test_q31_verification tests/cpp/test_q31_verification.cc)
+    target_link_libraries(
+        test_q31_verification PRIVATE quant_lstm quant_lstm_test_support)
+    add_test(NAME q31_verification COMMAND test_q31_verification)
+
+    add_executable(
+        test_synthetic_precision tests/cpp/test_synthetic_precision.cc)
+    target_link_libraries(
+        test_synthetic_precision
+        PRIVATE quant_lstm quant_lstm_test_support nlohmann_json::nlohmann_json)
+    target_compile_definitions(
+        test_synthetic_precision
+        PRIVATE QUANT_LSTM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(
+        NAME synthetic_precision
+        COMMAND
+            test_synthetic_precision
+            ${CMAKE_CURRENT_BINARY_DIR}/synthetic_numeric_report.json)
+
     add_test(
         NAME quant_config_schema
         COMMAND ${Python3_EXECUTABLE} -m unittest tests/python/test_quant_config_schema.py
     )
     set_tests_properties(
         quant_config_schema PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(
+        NAME precision_contract
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests/python/test_precision_contract.py
+    )
+    set_tests_properties(
+        precision_contract PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
     file(
-        GLOB PRIMITIVE_GOLDEN_FILES
+        GLOB_RECURSE GOLDEN_FILES
         CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/golden/primitive/*.json"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/golden/spec/*.json"
     )
-    set(PRIMITIVE_GOLDEN_FIXTURE
-        "${CMAKE_CURRENT_BINARY_DIR}/generated/primitive_golden_fixtures.h")
+    set(GOLDEN_FIXTURE
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/golden_fixtures.h")
     add_custom_command(
-        OUTPUT ${PRIMITIVE_GOLDEN_FIXTURE}
+        OUTPUT ${GOLDEN_FIXTURE}
         COMMAND
             ${Python3_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_primitive_golden_fixture.py
-            --golden-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden/primitive
-            --schema ${CMAKE_CURRENT_SOURCE_DIR}/config/schema/primitive_golden.schema.json
-            --output ${PRIMITIVE_GOLDEN_FIXTURE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_golden.py
+            --golden-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden/spec
+            --schema ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden/schema/golden_case.schema.json
+            --output ${GOLDEN_FIXTURE}
         DEPENDS
-            ${PRIMITIVE_GOLDEN_FILES}
-            ${CMAKE_CURRENT_SOURCE_DIR}/config/schema/primitive_golden.schema.json
-            ${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_primitive_golden_fixture.py
+            ${GOLDEN_FILES}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden/schema/golden_case.schema.json
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_golden.py
             ${CMAKE_CURRENT_SOURCE_DIR}/tools/strict_jsonschema.py
         VERBATIM
     )
     add_executable(
         test_primitive_golden
         tests/cpp/test_primitive_golden.cc
-        ${PRIMITIVE_GOLDEN_FIXTURE}
+        ${GOLDEN_FIXTURE}
     )
     target_include_directories(
         test_primitive_golden PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
     target_link_libraries(
         test_primitive_golden PRIVATE quant_lstm nlohmann_json::nlohmann_json)
     add_test(NAME primitive_golden COMMAND test_primitive_golden)
+
+    add_executable(
+        test_reference_golden
+        tests/cpp/test_reference_golden.cc
+        ${GOLDEN_FIXTURE}
+    )
+    target_include_directories(
+        test_reference_golden PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+    target_link_libraries(
+        test_reference_golden PRIVATE quant_lstm nlohmann_json::nlohmann_json)
+    add_test(NAME reference_golden COMMAND test_reference_golden)
+
+    add_executable(
+        golden_reference_generator tools/golden_reference_generator.cc)
+    target_link_libraries(
+        golden_reference_generator PRIVATE quant_lstm nlohmann_json::nlohmann_json)
     add_test(
         NAME primitive_golden_schema
         COMMAND ${Python3_EXECUTABLE} -m unittest tests/python/test_primitive_golden_schema.py
@@ -144,13 +198,13 @@ if(QUANT_LSTM_BUILD_TESTS)
     set_tests_properties(
         primitive_golden_schema PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
     add_test(
-        NAME primitive_golden_fixture_current
+        NAME golden_fixture_current
         COMMAND
             ${Python3_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_primitive_golden_fixture.py
-            --golden-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden/primitive
-            --schema ${CMAKE_CURRENT_SOURCE_DIR}/config/schema/primitive_golden.schema.json
-            --output ${PRIMITIVE_GOLDEN_FIXTURE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_golden.py
+            --golden-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden/spec
+            --schema ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden/schema/golden_case.schema.json
+            --output ${GOLDEN_FIXTURE}
             --check
     )
 
