@@ -265,10 +265,14 @@ void runGolden(const Json& document, bool caller_workspace,
     const auto workspace_breakdown =
         quant_lstm::lstmQuantizedFpCudaWorkspaceBreakdown(
             fixture.shape, fixture.params.bias_enabled);
+    const std::size_t static_parameter_bytes =
+        quant_lstm::lstmQuantizedFpCudaStaticParameterBytes(
+            fixture.shape, fixture.params.bias_enabled);
     DeviceBuffer<std::byte> workspace(
         caller_workspace ? workspace_bytes : 0);
     quant_lstm::test::QuantizedCudaContextOwner context(
-        workspace_breakdown.device_parameter_bytes);
+        workspace_breakdown.device_parameter_bytes,
+        static_parameter_bytes);
 
     if (test_small_workspace) {
         bool rejected = false;
@@ -297,12 +301,43 @@ void runGolden(const Json& document, bool caller_workspace,
         fixture.params, fixture.execution, d_output.get(), d_hn.get(),
         d_cn.get(), context.get(),
         quant_lstm::LstmQuantizedFpCudaMathMode::Pedantic,
-        {workspace.get(), workspace.bytes()}, &checkpoints, &stats);
+        {workspace.get(), workspace.bytes()}, &checkpoints, &stats,
+        nullptr, 1);
     context.synchronize();
     require(stats.input_gemm_calls == 1 &&
                 stats.recurrent_gemm_calls == steps,
             case_id + " GEMM 次数非法");
+    require(!stats.static_parameter_cache_hit,
+            case_id + " 首次静态参数缓存必须 miss");
 
+    quant_lstm::LstmQuantizedFpCudaStats cached_stats;
+    quant_lstm::lstmForwardQuantizedFpCuda(
+        fixture.shape,
+        {d_weight_ih.get(), d_weight_hh.get(), d_bias_ih.get(),
+         d_bias_hh.get()},
+        d_input.get(), d_h0.get(), d_c0.get(), fixture.config,
+        fixture.params, fixture.execution, d_output.get(), d_hn.get(),
+        d_cn.get(), context.get(),
+        quant_lstm::LstmQuantizedFpCudaMathMode::Pedantic,
+        {workspace.get(), workspace.bytes()}, &checkpoints,
+        &cached_stats, nullptr, 1);
+    context.synchronize();
+    require(cached_stats.static_parameter_cache_hit,
+            case_id + " 第二次静态参数缓存必须 hit");
+    quant_lstm::LstmQuantizedFpCudaStats invalidated_stats;
+    quant_lstm::lstmForwardQuantizedFpCuda(
+        fixture.shape,
+        {d_weight_ih.get(), d_weight_hh.get(), d_bias_ih.get(),
+         d_bias_hh.get()},
+        d_input.get(), d_h0.get(), d_c0.get(), fixture.config,
+        fixture.params, fixture.execution, d_output.get(), d_hn.get(),
+        d_cn.get(), context.get(),
+        quant_lstm::LstmQuantizedFpCudaMathMode::Pedantic,
+        {workspace.get(), workspace.bytes()}, &checkpoints,
+        &invalidated_stats, nullptr, 2);
+    context.synchronize();
+    require(!invalidated_stats.static_parameter_cache_hit,
+            case_id + " generation key 变化后必须 cache miss");
     compareExact(d_linear_ih.copyToHost(),
                  values<std::int32_t>(expected, "weight_ih_linear"),
                  case_id + " weight_ih_linear");

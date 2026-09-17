@@ -200,7 +200,8 @@ Json metricsJson(
 }
 
 Json workspaceJson(
-    const quant_lstm::LstmQuantizedFpCudaWorkspaceBreakdown& value) {
+    const quant_lstm::LstmQuantizedFpCudaWorkspaceBreakdown& value,
+    std::size_t persistent_parameter_cache_bytes) {
     return {
         {"quantized_input_bytes", value.quantized_input_bytes},
         {"quantized_weight_ih_bytes", value.quantized_weight_ih_bytes},
@@ -211,6 +212,8 @@ Json workspaceJson(
         {"recurrent_linear_bytes", value.recurrent_linear_bytes},
         {"weight_sum_bytes", value.weight_sum_bytes},
         {"device_parameter_bytes", value.device_parameter_bytes},
+        {"persistent_parameter_cache_bytes",
+         persistent_parameter_cache_bytes},
         {"alignment_padding_bytes", value.alignment_padding_bytes},
         {"total_bytes", value.total_bytes},
     };
@@ -251,9 +254,12 @@ Json runCase(const Json& profile, const Arguments& arguments) {
     const auto breakdown =
         quant_lstm::lstmQuantizedFpCudaWorkspaceBreakdown(
             fixture.shape, fixture.master.bias_enabled);
+    const std::size_t static_parameter_cache_bytes =
+        quant_lstm::lstmQuantizedFpCudaStaticParameterBytes(
+            fixture.shape, fixture.master.bias_enabled);
     DeviceBuffer<std::byte> workspace(breakdown.total_bytes);
     quant_lstm::test::QuantizedCudaContextOwner context(
-        breakdown.device_parameter_bytes);
+        breakdown.device_parameter_bytes, static_parameter_cache_bytes);
     quant_lstm::LstmQuantizedFpCudaCheckpoints checkpoints{};
     checkpoints.hidden_outputs = q_output.get();
     checkpoints.cell_states = q_cell.get();
@@ -261,6 +267,10 @@ Json runCase(const Json& profile, const Arguments& arguments) {
     const auto math_mode =
         pedantic ? quant_lstm::LstmQuantizedFpCudaMathMode::Pedantic
                  : quant_lstm::LstmQuantizedFpCudaMathMode::Tf32;
+    constexpr std::uint64_t kStaticParameterCacheKey = 1;
+    std::size_t static_cache_hits = 0;
+    std::size_t static_cache_misses = 0;
+    bool static_cache_primed = false;
 
     const auto forward = [&](const auto* timing) {
         quant_lstm::LstmQuantizedFpCudaStats stats;
@@ -280,12 +290,20 @@ Json runCase(const Json& profile, const Arguments& arguments) {
             fixture.config, fixture.params, fixture.execution, output.get(),
             hn.get(), cn.get(), context.get(), math_mode,
             {workspace.get(), workspace.bytes()}, &checkpoints, &stats,
-            timing);
+            timing, kStaticParameterCacheKey);
         nvtxRangePop();
         if (stats.input_gemm_calls != 1 ||
             stats.recurrent_gemm_calls != steps) {
             throw std::runtime_error("benchmark GEMM 计数非法");
         }
+        if (stats.static_parameter_cache_hit !=
+            static_cache_primed) {
+            throw std::runtime_error(
+                "benchmark static parameter cache 状态非法");
+        }
+        static_cache_primed = true;
+        stats.static_parameter_cache_hit ? ++static_cache_hits
+                                         : ++static_cache_misses;
     };
 
     for (int index = 0; index < arguments.warmup; ++index) {
@@ -360,7 +378,15 @@ Json runCase(const Json& profile, const Arguments& arguments) {
         {"warmup_iterations", arguments.warmup},
         {"measured_iterations", arguments.iterations},
         {"timing_scope",
-         "cuda_event_quantize_core_dequantize_cached_execution_params"},
+         "cuda_event_quantize_core_dequantize_"
+         "cached_execution_and_static_params"},
+        {"static_parameter_cache",
+         {{"enabled", true},
+          {"generation_key", kStaticParameterCacheKey},
+          {"persistent_bytes", static_parameter_cache_bytes},
+          {"total_hits", static_cache_hits},
+          {"total_misses", static_cache_misses},
+          {"measured_region_all_hits", arguments.warmup > 0}}},
         {"timing_ms",
          {{"end_to_end", end_to_end_summary},
           {"quantization_overhead", summary(quantization)},
@@ -372,7 +398,9 @@ Json runCase(const Json& profile, const Arguments& arguments) {
            static_cast<double>(steps * batch) / seconds},
           {"output_elements_per_second",
            static_cast<double>(output_count) / seconds}}},
-        {"workspace", workspaceJson(breakdown)},
+        {"workspace",
+         workspaceJson(breakdown,
+                       static_parameter_cache_bytes)},
         {"gemm_calls",
          {{"input_per_forward", 1},
           {"recurrent_per_forward", steps},
@@ -437,7 +465,7 @@ int main(int argc, char** argv) {
                                            arguments.warmup);
         }
         const Json report{
-            {"schema_version", 2},
+            {"schema_version", 3},
             {"benchmark_id", "quantized_fp_cuda_lstm_v1"},
             {"device", arguments.device},
             {"matrix_version", matrix.at("matrix_version")},

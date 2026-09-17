@@ -98,7 +98,8 @@ class DeviceBuffer {
 class QuantizedCudaContextOwner {
    public:
     explicit QuantizedCudaContextOwner(
-        std::size_t execution_parameter_bytes = 0) {
+        std::size_t execution_parameter_bytes = 0,
+        std::size_t static_parameter_bytes = 0) {
         try {
             for (cudaStream_t& stream : context_.streams) {
                 checkCuda(cudaStreamCreateWithFlags(
@@ -120,6 +121,14 @@ class QuantizedCudaContextOwner {
                           "cudaMalloc execution parameter cache");
                 context_.device_execution_params_bytes =
                     execution_parameter_bytes;
+            }
+            if (static_parameter_bytes != 0) {
+                checkCuda(cudaMalloc(
+                              &context_.device_static_parameters,
+                              static_parameter_bytes),
+                          "cudaMalloc static parameter cache");
+                context_.device_static_parameters_bytes =
+                    static_parameter_bytes;
             }
         } catch (...) {
             release();
@@ -145,6 +154,12 @@ class QuantizedCudaContextOwner {
 
    private:
     void release() noexcept {
+        if (context_.device_static_parameters != nullptr) {
+            cudaFree(context_.device_static_parameters);
+            context_.device_static_parameters = nullptr;
+            context_.device_static_parameters_bytes = 0;
+            context_.cached_static_parameter_signature = 0;
+        }
         if (context_.device_execution_params != nullptr) {
             cudaFree(context_.device_execution_params);
             context_.device_execution_params = nullptr;

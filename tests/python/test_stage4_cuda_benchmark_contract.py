@@ -60,6 +60,7 @@ def benchmark_result(*, warmup: int = 10, measured: int = 100) -> dict:
         "recurrent_linear_bytes": 1,
         "weight_sum_bytes": 1,
         "device_parameter_bytes": 1,
+        "persistent_parameter_cache_bytes": 4,
         "alignment_padding_bytes": 0,
         "total_bytes": 10,
     }
@@ -81,8 +82,16 @@ def benchmark_result(*, warmup: int = 10, measured: int = 100) -> dict:
                     "measured_iterations": measured,
                     "timing_scope": (
                         "cuda_event_quantize_core_dequantize_"
-                        "cached_execution_params"
+                        "cached_execution_and_static_params"
                     ),
+                    "static_parameter_cache": {
+                        "enabled": True,
+                        "generation_key": 1,
+                        "persistent_bytes": 4,
+                        "total_hits": warmup + measured - 1,
+                        "total_misses": 1,
+                        "measured_region_all_hits": warmup > 0,
+                    },
                     "timing_ms": {
                         "end_to_end": timing(),
                         "quantization_overhead": timing(),
@@ -107,7 +116,7 @@ def benchmark_result(*, warmup: int = 10, measured: int = 100) -> dict:
                 }
             )
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "benchmark_id": "quantized_fp_cuda_lstm_v1",
         "device": 0,
         "matrix_version": "strict_matrix_v2",
@@ -278,6 +287,28 @@ class Stage4CudaBenchmarkContractTest(unittest.TestCase):
         for invalid in (extra, boolean_length, float_iterations):
             with self.subTest(invalid=invalid):
                 self.assertFalse(validator.is_valid(invalid))
+
+    def test_iteration_contract_validates_static_parameter_cache(self) -> None:
+        valid = benchmark_result()
+        runner._require_iteration_contract(valid, 10, 100, "benchmark")
+
+        invalid_hits = copy.deepcopy(valid)
+        invalid_hits["cases"][0]["static_parameter_cache"][
+            "total_hits"
+        ] -= 1
+        with self.assertRaisesRegex(runner.Stage4ValidationError, "缓存"):
+            runner._require_iteration_contract(
+                invalid_hits, 10, 100, "benchmark"
+            )
+
+        invalid_capacity = copy.deepcopy(valid)
+        invalid_capacity["cases"][0]["static_parameter_cache"][
+            "persistent_bytes"
+        ] += 1
+        with self.assertRaisesRegex(runner.Stage4ValidationError, "缓存"):
+            runner._require_iteration_contract(
+                invalid_capacity, 10, 100, "benchmark"
+            )
 
     def test_aggregate_report_matches_schema_and_rejects_unknown_fields(self) -> None:
         validator = StrictDraft202012Validator(

@@ -26,7 +26,9 @@ enum class LstmQuantizedFpCudaMathMode : std::uint8_t {
 /// handles/streams[1] 用于一次性的 all-time input GEMM。
 /// events[0] 表示 input GEMM ready，events[1] 表示整个调用完成。
 /// device_execution_params 可为空；非空时由调用方分配/释放，函数按签名缓存
-/// 已展开的 4H 参数。复用同一 context 前必须等待 events[1]。
+/// 已展开的 4H 参数。device_static_parameters 可为空；非空且 forward 提供非零
+/// static_parameter_cache_key 时缓存量化后的 W/R/bias 和 weight sums。调用方必须在
+/// master 参数内容变化时更换 key。复用同一 context 前必须等待 events[1]。
 struct LstmQuantizedFpCudaContext {
     std::array<cublasHandle_t, 2> handles{};
     std::array<cudaStream_t, 2> streams{};
@@ -34,6 +36,9 @@ struct LstmQuantizedFpCudaContext {
     void* device_execution_params = nullptr;
     std::size_t device_execution_params_bytes = 0;
     std::uint64_t cached_execution_signature = 0;
+    void* device_static_parameters = nullptr;
+    std::size_t device_static_parameters_bytes = 0;
+    std::uint64_t cached_static_parameter_signature = 0;
 };
 
 struct LstmQuantizedFpCudaWorkspace {
@@ -85,6 +90,7 @@ struct LstmQuantizedFpCudaStats {
     std::size_t workspace_bytes = 0;
     bool used_internal_workspace = false;
     bool execution_parameter_cache_hit = false;
+    bool static_parameter_cache_hit = false;
 };
 
 /// 可选的调用方计时事件；函数仅记录、不创建或销毁。
@@ -105,6 +111,9 @@ lstmQuantizedFpCudaWorkspaceBreakdown(const LstmShape& shape,
 
 std::size_t lstmQuantizedFpCudaWorkspaceBytes(const LstmShape& shape,
                                               bool bias_enabled);
+
+std::size_t lstmQuantizedFpCudaStaticParameterBytes(
+    const LstmShape& shape, bool bias_enabled);
 
 /// 异步执行单层、单向 LSTM。
 ///
@@ -128,6 +137,7 @@ void lstmForwardQuantizedFpCuda(
     LstmQuantizedFpCudaWorkspace workspace = {},
     const LstmQuantizedFpCudaCheckpoints* checkpoints = nullptr,
     LstmQuantizedFpCudaStats* stats = nullptr,
-    const LstmQuantizedFpCudaTimingEvents* timing_events = nullptr);
+    const LstmQuantizedFpCudaTimingEvents* timing_events = nullptr,
+    std::uint64_t static_parameter_cache_key = 0);
 
 }  // namespace quant_lstm

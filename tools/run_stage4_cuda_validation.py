@@ -426,6 +426,18 @@ def _require_iteration_contract(
                 f"{description} 的 {case['case_id']} 必须报告 "
                 f"warmup_iterations={warmup}、measured_iterations={measured}"
             )
+        cache = case["static_parameter_cache"]
+        total_iterations = warmup + measured
+        if (
+            cache["total_hits"] != total_iterations - 1
+            or cache["total_misses"] != 1
+            or cache["measured_region_all_hits"] != (warmup > 0)
+            or cache["persistent_bytes"]
+            != case["workspace"]["persistent_parameter_cache_bytes"]
+        ):
+            raise Stage4ValidationError(
+                f"{description} 的 {case['case_id']} 静态参数缓存计数或容量非法"
+            )
         shape = case["shape"]
         expected = 1 + shape[0]
         calls = case["gemm_calls"]

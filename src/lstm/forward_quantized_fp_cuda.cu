@@ -85,6 +85,14 @@ struct WorkspaceLayout {
     std::size_t device_parameters = 0;
 };
 
+struct StaticParameterLayout {
+    std::size_t quantized_weight_ih = 0;
+    std::size_t quantized_weight_hh = 0;
+    std::size_t quantized_bias = 0;
+    std::size_t weight_sum = 0;
+    std::size_t total_bytes = 0;
+};
+
 void appendRegion(std::size_t bytes, std::size_t* cursor,
                   std::size_t* offset) {
     const std::size_t aligned = alignUp(*cursor);
@@ -165,6 +173,24 @@ WorkspaceLayout makeWorkspaceLayout(const LstmShape& shape,
     payload = checkedAdd(payload, result.weight_sum_bytes, "workspace");
     payload = checkedAdd(payload, result.device_parameter_bytes, "workspace");
     result.alignment_padding_bytes = result.total_bytes - payload;
+    return layout;
+}
+
+StaticParameterLayout makeStaticParameterLayout(
+    const LstmShape& shape, bool bias_enabled) {
+    const auto workspace = makeWorkspaceLayout(shape, bias_enabled);
+    const auto& breakdown = workspace.breakdown;
+    StaticParameterLayout layout;
+    std::size_t cursor = 0;
+    appendRegion(breakdown.quantized_weight_ih_bytes, &cursor,
+                 &layout.quantized_weight_ih);
+    appendRegion(breakdown.quantized_weight_hh_bytes, &cursor,
+                 &layout.quantized_weight_hh);
+    appendRegion(breakdown.quantized_bias_bytes, &cursor,
+                 &layout.quantized_bias);
+    appendRegion(breakdown.weight_sum_bytes, &cursor,
+                 &layout.weight_sum);
+    layout.total_bytes = alignUp(cursor);
     return layout;
 }
 
@@ -351,19 +377,83 @@ std::vector<DeviceLinearChannelParams> packLinearParameters(
     return packed;
 }
 
+constexpr std::uint64_t kSignatureOffset = 1469598103934665603ULL;
+constexpr std::uint64_t kSignaturePrime = 1099511628211ULL;
+
+void appendSignatureBytes(std::uint64_t* result, const void* data,
+                          std::size_t count) {
+    const auto* bytes =
+        reinterpret_cast<const unsigned char*>(data);
+    for (std::size_t index = 0; index < count; ++index) {
+        *result ^= bytes[index];
+        *result *= kSignaturePrime;
+    }
+}
+
+template <typename T>
+void appendSignatureValue(std::uint64_t* result, const T& value) {
+    appendSignatureBytes(result, &value, sizeof(value));
+}
+
+void appendPointSignature(std::uint64_t* result,
+                          const DeviceQuantPoint& point) {
+    appendSignatureValue(result, point.scale);
+    appendSignatureValue(result, point.zero_point);
+    appendSignatureValue(result, point.minimum);
+    appendSignatureValue(result, point.maximum);
+}
+
+void appendRescaleSignature(std::uint64_t* result,
+                            const DeviceRescale& rescale) {
+    const auto kind = static_cast<std::uint8_t>(rescale.kind);
+    appendSignatureValue(result, kind);
+    appendSignatureValue(result, rescale.multiplier);
+    appendSignatureValue(result, rescale.shift);
+}
+
 std::uint64_t parameterSignature(
     const std::vector<DeviceLinearChannelParams>& params) {
-    constexpr std::uint64_t kOffset = 1469598103934665603ULL;
-    constexpr std::uint64_t kPrime = 1099511628211ULL;
-    std::uint64_t result = kOffset;
-    const auto* bytes =
-        reinterpret_cast<const unsigned char*>(params.data());
-    const std::size_t count =
-        params.size() * sizeof(DeviceLinearChannelParams);
-    for (std::size_t index = 0; index < count; ++index) {
-        result ^= bytes[index];
-        result *= kPrime;
+    std::uint64_t result = kSignatureOffset;
+    for (const auto& value : params) {
+        appendPointSignature(&result, value.weight_ih);
+        appendPointSignature(&result, value.weight_hh);
+        appendPointSignature(&result, value.bias_ih);
+        appendPointSignature(&result, value.bias_hh);
+        appendPointSignature(&result, value.input_linear);
+        appendPointSignature(&result, value.recurrent_linear);
+        appendRescaleSignature(
+            &result, value.bias_ih_to_accumulator);
+        appendRescaleSignature(
+            &result, value.input_accumulator_to_linear);
+        appendRescaleSignature(
+            &result, value.bias_hh_to_accumulator);
+        appendRescaleSignature(
+            &result, value.recurrent_accumulator_to_linear);
     }
+    return result == 0 ? 1 : result;
+}
+
+std::uint64_t staticParameterSignature(
+    const std::vector<DeviceLinearChannelParams>& params,
+    const LstmFloatWeights& weights, const LstmShape& shape,
+    std::uint64_t cache_key, bool bias_enabled) {
+    std::uint64_t result = parameterSignature(params);
+    constexpr std::uint64_t kPrime = 1099511628211ULL;
+    const auto append = [&result](std::uint64_t value) {
+        for (int index = 0; index < 8; ++index) {
+            result ^= static_cast<unsigned char>(value & 0xFFU);
+            result *= kPrime;
+            value >>= 8;
+        }
+    };
+    append(cache_key);
+    append(reinterpret_cast<std::uintptr_t>(weights.weight_ih));
+    append(reinterpret_cast<std::uintptr_t>(weights.weight_hh));
+    append(reinterpret_cast<std::uintptr_t>(weights.bias_ih));
+    append(reinterpret_cast<std::uintptr_t>(weights.bias_hh));
+    append(static_cast<std::uint64_t>(shape.input_size));
+    append(static_cast<std::uint64_t>(shape.hidden_size));
+    append(bias_enabled ? 1U : 0U);
     return result == 0 ? 1 : result;
 }
 
@@ -904,6 +994,11 @@ std::size_t lstmQuantizedFpCudaWorkspaceBytes(const LstmShape& shape,
     return makeWorkspaceLayout(shape, bias_enabled).breakdown.total_bytes;
 }
 
+std::size_t lstmQuantizedFpCudaStaticParameterBytes(
+    const LstmShape& shape, bool bias_enabled) {
+    return makeStaticParameterLayout(shape, bias_enabled).total_bytes;
+}
+
 void lstmForwardQuantizedFpCuda(
     const LstmShape& shape, const LstmFloatWeights& master_weights,
     const float* input, const float* initial_hidden,
@@ -917,9 +1012,12 @@ void lstmForwardQuantizedFpCuda(
     LstmQuantizedFpCudaWorkspace workspace,
     const LstmQuantizedFpCudaCheckpoints* checkpoints,
     LstmQuantizedFpCudaStats* stats,
-    const LstmQuantizedFpCudaTimingEvents* timing_events) {
+    const LstmQuantizedFpCudaTimingEvents* timing_events,
+    std::uint64_t static_parameter_cache_key) {
     const WorkspaceLayout layout =
         makeWorkspaceLayout(shape, quant_params.bias_enabled);
+    const StaticParameterLayout static_layout =
+        makeStaticParameterLayout(shape, quant_params.bias_enabled);
     validateExecutionParams(shape, resolved_config, quant_params,
                             execution_params);
     validateContext(context);
@@ -966,6 +1064,22 @@ void lstmForwardQuantizedFpCuda(
             layout.breakdown.device_parameter_bytes) {
         throw std::invalid_argument(
             "context device execution params 容量不足");
+    }
+    if ((context.device_static_parameters == nullptr) !=
+        (context.device_static_parameters_bytes == 0)) {
+        throw std::invalid_argument(
+            "context static parameters pointer/bytes 必须同时提供或省略");
+    }
+    if (static_parameter_cache_key != 0 &&
+        context.device_static_parameters == nullptr) {
+        throw std::invalid_argument(
+            "非零 static parameter cache key 要求提供 context cache");
+    }
+    if (context.device_static_parameters != nullptr &&
+        context.device_static_parameters_bytes <
+            static_layout.total_bytes) {
+        throw std::invalid_argument(
+            "context static parameters 容量不足");
     }
 
     const int sequence_length = cuda_detail::checkedCublasInt(
@@ -1052,6 +1166,11 @@ void lstmForwardQuantizedFpCuda(
             context.device_execution_params,
             layout.breakdown.device_parameter_bytes, current_device,
             "context device execution params");
+    }
+    if (context.device_static_parameters != nullptr) {
+        validateDeviceSpan(context.device_static_parameters,
+                           static_layout.total_bytes, current_device,
+                           "context static parameters");
     }
 
     LstmQuantizedFpCudaCheckpoints device_checkpoints{};
@@ -1143,13 +1262,28 @@ void lstmForwardQuantizedFpCuda(
 
     float* quantized_input =
         region<float>(workspace.data, layout.quantized_input);
+    const bool static_cache_enabled =
+        static_parameter_cache_key != 0;
+    void* static_base = context.device_static_parameters;
     float* quantized_weight_ih =
-        region<float>(workspace.data, layout.quantized_weight_ih);
+        static_cache_enabled
+            ? region<float>(static_base,
+                            static_layout.quantized_weight_ih)
+            : region<float>(workspace.data,
+                            layout.quantized_weight_ih);
     float* quantized_weight_hh =
-        region<float>(workspace.data, layout.quantized_weight_hh);
+        static_cache_enabled
+            ? region<float>(static_base,
+                            static_layout.quantized_weight_hh)
+            : region<float>(workspace.data,
+                            layout.quantized_weight_hh);
     float* quantized_bias_ih =
         quant_params.bias_enabled
-            ? region<float>(workspace.data, layout.quantized_bias)
+            ? (static_cache_enabled
+                   ? region<float>(static_base,
+                                   static_layout.quantized_bias)
+                   : region<float>(workspace.data,
+                                   layout.quantized_bias))
             : nullptr;
     float* quantized_bias_hh =
         quant_params.bias_enabled ? quantized_bias_ih + channels : nullptr;
@@ -1161,7 +1295,9 @@ void lstmForwardQuantizedFpCuda(
     float* recurrent_linear =
         region<float>(workspace.data, layout.recurrent_linear);
     float* weight_ih_sums =
-        region<float>(workspace.data, layout.weight_sum);
+        static_cache_enabled
+            ? region<float>(static_base, static_layout.weight_sum)
+            : region<float>(workspace.data, layout.weight_sum);
     float* weight_hh_sums = weight_ih_sums + channels;
     auto* device_channel_params =
         context.device_execution_params != nullptr
@@ -1178,6 +1314,22 @@ void lstmForwardQuantizedFpCuda(
         context.handles[0], context.streams[0], shared_math_mode);
     cuda_detail::ScopedCublasSettings input_settings(
         context.handles[1], context.streams[1], shared_math_mode);
+    const std::uint64_t signature =
+        parameterSignature(host_channel_params);
+    const bool parameters_cached =
+        context.device_execution_params != nullptr &&
+        context.cached_execution_signature == signature;
+    const std::uint64_t static_signature =
+        static_cache_enabled
+            ? staticParameterSignature(
+                  host_channel_params, master_weights, shape,
+                  static_parameter_cache_key,
+                  quant_params.bias_enabled)
+            : 0;
+    const bool static_parameters_cached =
+        static_cache_enabled &&
+        context.cached_static_parameter_signature == static_signature;
+
     if (timing_events != nullptr) {
         checkCuda(cudaEventRecord(timing_events->start, context.streams[0]),
                   "record quantized FP timing start");
@@ -1186,11 +1338,6 @@ void lstmForwardQuantizedFpCuda(
                   "input stream wait timing start");
     }
 
-    const std::uint64_t signature =
-        parameterSignature(host_channel_params);
-    const bool parameters_cached =
-        context.device_execution_params != nullptr &&
-        context.cached_execution_signature == signature;
     if (!parameters_cached) {
         // 同步只保护临时 host flatten buffer 的生命周期；启用 context cache
         // 后，相同执行参数的后续调用不会重复上传。
@@ -1211,7 +1358,6 @@ void lstmForwardQuantizedFpCuda(
     checkCuda(cudaStreamWaitEvent(context.streams[1],
                                   context.events[1], 0),
               "input stream wait device parameters");
-
     const std::size_t input_elements =
         checkedMul(sequence_batch_size, input_width, "T*B*I");
     quantizeScalarKernel<<<oneDimensionalBlocks(input_elements),
@@ -1219,50 +1365,57 @@ void lstmForwardQuantizedFpCuda(
         input, quantized_input, input_elements, scalar_params.input);
     checkKernel("quantize input kernel");
 
-    const std::size_t weight_ih_elements =
-        checkedMul(channels, input_width, "4H*I");
-    quantizeWeightKernel<true>
-        <<<oneDimensionalBlocks(weight_ih_elements), kThreads, 0,
-           context.streams[1]>>>(
-            master_weights.weight_ih, quantized_weight_ih,
-            weight_ih_elements, input_width, device_channel_params);
-    checkKernel("quantize weight_ih kernel");
-    weightSumKernel<<<oneDimensionalBlocks(channels), kThreads, 0,
-                      context.streams[1]>>>(
-        quantized_weight_ih, weight_ih_sums, channels, input_width);
-    checkKernel("weight_ih sum kernel");
+    if (!static_parameters_cached) {
+        const std::size_t weight_ih_elements =
+            checkedMul(channels, input_width, "4H*I");
+        quantizeWeightKernel<true>
+            <<<oneDimensionalBlocks(weight_ih_elements), kThreads, 0,
+               context.streams[1]>>>(
+                master_weights.weight_ih, quantized_weight_ih,
+                weight_ih_elements, input_width, device_channel_params);
+        checkKernel("quantize weight_ih kernel");
+        weightSumKernel<<<oneDimensionalBlocks(channels), kThreads, 0,
+                          context.streams[1]>>>(
+            quantized_weight_ih, weight_ih_sums, channels, input_width);
+        checkKernel("weight_ih sum kernel");
+    }
     if (timing_events != nullptr) {
         checkCuda(cudaEventRecord(timing_events->input_quantized,
                                   context.streams[1]),
                   "record input quantization complete");
     }
 
-    const std::size_t weight_hh_elements =
-        checkedMul(channels, hidden, "4H*H");
-    quantizeWeightKernel<false>
-        <<<oneDimensionalBlocks(weight_hh_elements), kThreads, 0,
-           context.streams[0]>>>(
-            master_weights.weight_hh, quantized_weight_hh,
-            weight_hh_elements, hidden, device_channel_params);
-    checkKernel("quantize weight_hh kernel");
-    weightSumKernel<<<oneDimensionalBlocks(channels), kThreads, 0,
-                      context.streams[0]>>>(
-        quantized_weight_hh, weight_hh_sums, channels, hidden);
-    checkKernel("weight_hh sum kernel");
+    if (!static_parameters_cached) {
+        const std::size_t weight_hh_elements =
+            checkedMul(channels, hidden, "4H*H");
+        quantizeWeightKernel<false>
+            <<<oneDimensionalBlocks(weight_hh_elements), kThreads, 0,
+               context.streams[0]>>>(
+                master_weights.weight_hh, quantized_weight_hh,
+                weight_hh_elements, hidden, device_channel_params);
+        checkKernel("quantize weight_hh kernel");
+        weightSumKernel<<<oneDimensionalBlocks(channels), kThreads, 0,
+                          context.streams[0]>>>(
+            quantized_weight_hh, weight_hh_sums, channels, hidden);
+        checkKernel("weight_hh sum kernel");
 
-    if (quant_params.bias_enabled) {
-        quantizeBiasKernel<true>
-            <<<oneDimensionalBlocks(channels), kThreads, 0,
-               context.streams[0]>>>(
-                master_weights.bias_ih, quantized_bias_ih, channels,
-                device_channel_params);
-        checkKernel("quantize bias_ih kernel");
-        quantizeBiasKernel<false>
-            <<<oneDimensionalBlocks(channels), kThreads, 0,
-               context.streams[0]>>>(
-                master_weights.bias_hh, quantized_bias_hh, channels,
-                device_channel_params);
-        checkKernel("quantize bias_hh kernel");
+        if (quant_params.bias_enabled) {
+            quantizeBiasKernel<true>
+                <<<oneDimensionalBlocks(channels), kThreads, 0,
+                   context.streams[0]>>>(
+                    master_weights.bias_ih, quantized_bias_ih, channels,
+                    device_channel_params);
+            checkKernel("quantize bias_ih kernel");
+            quantizeBiasKernel<false>
+                <<<oneDimensionalBlocks(channels), kThreads, 0,
+                   context.streams[0]>>>(
+                    master_weights.bias_hh, quantized_bias_hh, channels,
+                    device_channel_params);
+            checkKernel("quantize bias_hh kernel");
+        }
+    }
+    if (static_cache_enabled) {
+        context.cached_static_parameter_signature = static_signature;
     }
 
     quantizeInitialStateKernel
@@ -1357,6 +1510,8 @@ void lstmForwardQuantizedFpCuda(
         stats->workspace_bytes = layout.breakdown.total_bytes;
         stats->used_internal_workspace = uses_internal_workspace;
         stats->execution_parameter_cache_hit = parameters_cached;
+        stats->static_parameter_cache_hit =
+            static_parameters_cached;
     }
 }
 
