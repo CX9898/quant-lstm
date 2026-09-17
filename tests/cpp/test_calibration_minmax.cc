@@ -117,6 +117,11 @@ int main() {
                         [static_cast<std::size_t>(QuantOperator::WeightHiddenHidden)]
                             .groups.size() == 4,
                 "report must retain compact calibration groups");
+        require(finalized.report.operators
+                        [static_cast<std::size_t>(QuantOperator::Input)]
+                            .groups.front()
+                            .quantized_steps == 254,
+                "report must include quantized step count N");
         require(!finalized.report.contributions.forget_times_old_cell.empty() &&
                     finalized.report.contributions.input_times_cell.minimum == 0.0F,
                 "contributions are diagnostics");

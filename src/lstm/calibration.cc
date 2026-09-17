@@ -367,8 +367,14 @@ const FinalizedLstmCalibration& LstmCalibrationSession::finalize(
         for (std::size_t group = 0; group < ranges.size(); ++group) {
             const std::size_t value_index = finalizedGroupValueIndex(
                 params.source_granularity, group, hidden);
+            const auto quantized_range =
+                collector_.config().operators[index].type.range();
+            const std::int64_t quantized_steps =
+                static_cast<std::int64_t>(quantized_range.maximum) -
+                quantized_range.minimum;
             operator_report.groups.push_back(
-                {ranges[group], params.group_diagnostics[group],
+                {ranges[group], quantized_steps,
+                 params.group_diagnostics[group],
                  params.values[value_index]});
         }
     }

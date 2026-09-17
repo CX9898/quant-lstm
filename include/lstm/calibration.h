@@ -34,6 +34,7 @@ struct LstmContributionRanges {
 
 struct CalibrationGroupReport {
     CalibrationRange observed;
+    std::int64_t quantized_steps = 0;
     quantization::CalibrationDiagnostics diagnostics;
     quantization::QuantParam finalized;
 };
