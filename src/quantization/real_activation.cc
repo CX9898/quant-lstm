@@ -1,34 +1,25 @@
 #include "quantization/real_activation.h"
 
-#include "quantization/fixed_point_ops.h"
 #include "quantization/rounding.h"
+#include "../lstm/cuda/quantized_fp_math.cuh"
 
 #include <cmath>
 #include <stdexcept>
 
 namespace quant_lstm::quantization {
-namespace {
-
-float activate(float value, RealActivationKind kind) {
-    if (kind == RealActivationKind::Tanh) {
-        return std::tanh(value);
-    }
-    if (value >= 0.0F) {
-        const float exponential = std::exp(-value);
-        return 1.0F / (1.0F + exponential);
-    }
-    const float exponential = std::exp(value);
-    return exponential / (1.0F + exponential);
-}
-
-}  // namespace
 
 std::int32_t realActivation(std::int32_t quantized_input, const QuantParam& input_param,
                             const QuantizationType& input_type,
                             const QuantParam& output_param,
                             const QuantizationType& output_type, RealActivationKind kind) {
-    const float real_input = dequantize(quantized_input, input_param, input_type);
-    return quantize(activate(real_input, kind), output_param, output_type);
+    input_param.validate(input_type);
+    input_type.validateValue(quantized_input);
+    output_param.validate(output_type);
+    const auto output_range = output_type.range();
+    return static_cast<std::int32_t>(cuda_detail::realActivationCore(
+        static_cast<float>(quantized_input), input_param.scale,
+        input_param.zero_point, output_param.scale, output_param.zero_point,
+        output_range.minimum, output_range.maximum, kind));
 }
 
 float realActivation(float quantized_input, const QuantParam& input_param,
