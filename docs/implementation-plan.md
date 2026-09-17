@@ -1,6 +1,6 @@
 # Quant-LSTM 纯定点量化实现计划
 
-> 状态：阶段 8 已完成；浮点 backward 与 FP32 q-carrier QAT 已验收
+> 状态：阶段 9 已完成；标准 ONNX 导出、CUDA 静态参数缓存与版本化性能门禁已验收
 > 参考基线：`/home/chengxing.zou/projects/quant-gru`，commit `9c25d14`
 > 目标仓库：`/home/chengxing.zou/projects/quant-lstm`
 
@@ -649,6 +649,14 @@ quant-lstm/
 
 验收：ONNX Runtime 浮点语义一致；优化前后满足 FP 主路径精度门禁；性能结论包含完整环境和可复现命令。性能阈值经单独审核入库后，后续回归必须通过对应 GPU/profile 门禁。
 
+完成证据：
+
+- 单向/双向、bias 开关与两种布局均导出为恰好一个标准 ONNX `LSTM` 节点，ONNX Runtime 的 `output/h_n/c_n` 通过门禁。
+- CUDA context 以显式非零 generation key 缓存量化 W/R/bias 与 weight sums；同 key 命中、key 变化失效及 Golden 逐值一致均有测试。
+- RTX 6000D 的四个 Pedantic/TF32 profile 相对优化前基线，P50 降低 11.6%–19.6%，P95 降低 11.6%–18.3%；memcheck、racecheck 和 Nsight 136 次 SGEMM 交叉计数通过。
+- `cuda_performance_thresholds_v1.json` 按 GPU/CUDA/cuBLAS/profile 冻结 P50/P95/吞吐门禁，只读检查器拒绝环境错配和优化前基线。
+- cuBLASLt、CUDA Graph 与额外 pointwise fusion 经评估未采用；具体理由、workspace 代价、命令和指标见 `docs/cuda-performance.md`。
+
 ### 阶段 10：条件性 CUDA int32 载体与整数集成
 
 只有满足以下任一条件并经审核确认后才启动：
@@ -1001,7 +1009,7 @@ GRU 的位宽遍历 shell 测试另外采用 `MSE<=1e-4`、余弦相似度 `>=0.
 52. Operator JSON 分为版本化稀疏 override 和完整 canonical resolved 两种严格 schema。唯一 C++ resolver 按字段应用入库默认 profile；所有 forward、Golden 和报告只消费 resolved config。未知/重复/null/非法字段失败，resolved round-trip 必须字节稳定。
 53. 首版所有真实量化点只支持 8/16 bit，允许混合配置；其他 bitwidth 在 schema/resolver 阶段直接失败。内部 carrier、累加器、M+shift 和 Q31 宽度不是 operator bitwidth。未来扩展必须升级 schema 并先补齐安全证明、Golden、严格测试和阈值。
 54. 严格测试使用入库的显式 `strict_matrix_v1.json`：约束 pairwise 覆盖主要维度并追加不可删除的高风险定向 case。覆盖检查器只验证、不生成或改写 case；矩阵变更作为测试契约单独审核。基础测试不经过该矩阵。
-55. 首版性能不设置硬编码延迟或加速比；阶段 4 强制证明 cuBLAS SGEMM 生效并提交环境完整、可复现的 P50/P95/吞吐/workspace/量化开销和精度报告。阶段 9 基于稳定实测按 GPU/profile 人工冻结回归阈值。
+55. 阶段 4 不设置硬编码延迟或加速比，并强制证明 cuBLAS SGEMM 生效；阶段 9 已基于两次稳定实测为 RTX 6000D/CUDA 13.2/cuBLAS 13.4 的四个具名 profile 人工冻结 P50/P95/吞吐阈值。检查器只读，环境不匹配直接失败。
 
 ## 9. Git 提交规范与预期顺序
 
@@ -1033,5 +1041,6 @@ perf(cuda): optimize the float-carrier execution path
 feat(quantization): add optional integer activation LUTs
 feat(integer): add optional CUDA integer execution
 ```
+test(cuda): freeze device-specific performance thresholds
 
 最后两条 LUT/CUDA integer 提交都是条件性的，不属于首个生产里程碑；LUT 提交及其独立精度门禁必须先于 CUDA integer 提交。阶段内部按依赖顺序拆分，最后一个 commit 前必须完成该阶段全部验收，不能用“后续补测试”结束阶段。

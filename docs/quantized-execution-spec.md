@@ -1,6 +1,6 @@
 # LSTM 量化执行规格
 
-> 状态：阶段 8 已完成浮点 backward 与 FP32 q-carrier QAT；真实数据精度仍待后续阶段接入
+> 状态：阶段 9 已完成标准 ONNX 导出、CUDA 静态参数缓存和版本化性能门禁；真实数据精度仍待后续阶段接入
 > 参考基线：`/home/chengxing.zou/projects/quant-gru`，commit `9c25d14`
 > 公式推导：`docs/lstm-quantization-formula-derivation.md`
 > 分阶段计划：`docs/implementation-plan.md`
@@ -284,6 +284,9 @@ q_h_new = Clamp(
 - Bias/rescale、四门真实激活、Cell 和 Hidden 更新在融合 pointwise kernel 中完成。
 - 正确性模式关闭 TF32/Tensor Core；性能模式显式开启并单独报告精度。
 
+- 调用方可提供持久 buffer 和非零 generation key，缓存量化 W/R/bias 与 weight sums；master 参数内容变化时必须更换 key，key 为 0 时保持逐调用量化。
+- 缓存命中不得改变量化点、融合公式、checkpoint 或输出；持久缓存字节数与临时 workspace 分别报告。
+- host 签名与 hit 判定属于 setup，不计入 CUDA event 的 quantize/core/dequantize 设备计时范围。
 ### 9.3 CPU int32 载体 reference
 
 GEMM/普通乘积使用 int64，Cell Q31 合并使用 `__int128`。普通 rescale 执行整数 multiplier+shift/POT2 shift。首版真实激活桥接包含浮点函数，因此只冻结整数算术与融合公式，不代表完整硬件 LUT 语义。
@@ -331,7 +334,7 @@ Golden 使用显式 `dtype/shape/data`、row-major 一维 data。Standard scale 
 - 记录 GPU、驱动、CUDA/cuBLAS、时钟/功耗模式、shape、math mode、计时范围、预热/迭代次数和同步方法。
 - 性能比较同时报告 MAE、MSE 和余弦相似度。
 
-缺少上述任一项时阶段 4 验收失败。阶段 9 取得稳定基线后，再按 GPU/profile 人工冻结版本化性能回归阈值；禁止自动更新或跨设备复用绝对数值。
+缺少上述任一项时阶段 4 验收失败。阶段 9 已在两次独立稳定测量后，将 RTX 6000D/CUDA 13.2/cuBLAS 13.4 的四个具名 profile 冻结到 `tests/benchmarks/config/cuda_performance_thresholds_v1.json`。阈值由 `tools/check_stage9_cuda_performance.py` 只读检查；禁止自动更新，环境不匹配时禁止复用绝对数值。完整证据与命令见 `docs/cuda-performance.md`。
 
 ## 12. 实现证据状态
 
@@ -346,6 +349,7 @@ Golden 使用显式 `dtype/shape/data`、row-major 一维 data。Standard scale 
 7. 已完成：PyTorch 接口只通过 C++ resolver 消费 canonical resolved config；校准、完整 `4H` 参数包导入导出、CUDA 直接调用、两种布局和真实 Clamp mask 已通过阶段 6 验收。
 8. 已完成：双向 forward/reverse 分别校准并强制共享 input 网格，输出与 `h_n/c_n` 顺序对齐 PyTorch；CPU-only 构建、测试、安装、外部消费和无 CUDA 链接门禁通过。
 9. 已完成：浮点 backward 对齐 PyTorch；QAT gradient、h0/c0、bias disabled、双向、Clamp STE、单步优化和多步 loss 下降通过阶段 8 验收。
-10. 待后续阶段完成：代表性真实数据和模型级指标；接入前只能声明 `synthetic_numeric` 数值验证通过。
+10. 已完成：标准 ONNX `LSTM` 单节点导出；量化静态参数缓存保持 Golden 与精度指标不变，P50/P95 获得稳定收益，memcheck/racecheck、Nsight SGEMM 计数和版本化设备阈值通过。
+11. 待后续阶段完成：代表性真实数据和模型级指标；接入前只能声明 `synthetic_numeric` 数值验证通过。
 
 上述证据文件按次生成且不提交仓库；审核通过的 schema、配置、阈值和规则变更必须入库并单独审查。

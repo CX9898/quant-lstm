@@ -1,14 +1,16 @@
 # quant-lstm
 
-基于 CUDA FP32 载体的量化 LSTM 实现。当前已完成阶段 8：支持单层单向/双向
+基于 CUDA FP32 载体的量化 LSTM 实现。当前已完成阶段 9：支持单层单向/双向
 `QuantLSTM`、双方向独立校准参数、共享 input 网格、完整 `4H` standard scale/zp
 参数导入导出，以及复用浮点 backward 的 FP32 q-carrier QAT。训练态只为真实
-Round/Clamp 边界保存 mask，并支持 h0/c0、bias=False 和双向梯度。CPU int32 与
-标量 FP32 q-carrier reference 可通过无 CUDA 的安装包独立消费，统一 Golden、
-NumericSafety 和 synthetic numeric 精度门禁保持生效。量化执行语义以
+Round/Clamp 边界保存 mask，并支持 h0/c0、bias=False 和双向梯度。标准 ONNX
+`LSTM` 导出、显式 generation-key 量化静态参数缓存，以及 RTX 6000D
+设备/profile/version 性能门禁均已验收。CPU int32 与标量 FP32 q-carrier
+reference 可通过无 CUDA 的安装包独立消费，统一 Golden、NumericSafety 和
+synthetic numeric 精度门禁保持生效。量化执行语义以
 `docs/quantized-execution-spec.md` 为准；配置和双载体流程分别见
 `docs/configuration.md` 与 `docs/dual-carrier-execution.md`；标准 ONNX LSTM 导出见
-`docs/onnx-export.md`。
+`docs/onnx-export.md`，CUDA 性能证据见 `docs/cuda-performance.md`。
 
 ## 构建
 
@@ -19,6 +21,9 @@ ctest --test-dir build --output-on-failure
 
 python3 tools/run_stage4_cuda_validation.py \
   --build-dir build --device 0 --artifacts-root build
+
+python3 tools/check_stage9_cuda_performance.py \
+  --report build/stage4-validation-results/<run>/benchmark_report.json
 
 cd pytorch
 python3 setup.py build_ext --inplace
@@ -31,7 +36,6 @@ CPU-only 构建、安装和外部消费验收：
 ```bash
 tools/run_cpu_only_package_check.sh
 ```
-
 
 C++ 配置 resolver 使用系统提供的 `nlohmann_json 3.11.2`；schema 与 Golden
 生成测试需要 Python `jsonschema`。构建测试目标时会从
@@ -63,5 +67,6 @@ M+shift、POT2 shift 或 raw ratio。
 
 正确性模式固定使用 Pedantic math；TF32 仅作为显式性能模式并独立报告精度。
 当前精度范围仍为 `synthetic_numeric`，真实数据状态为 `not_configured`。
-阶段 9 ONNX/性能优化尚未实现；
+阶段 9 已完成标准 ONNX 单节点导出和 CUDA 静态参数缓存优化；版本化绝对性能阈值
+只适用于配置中精确匹配的 GPU/CUDA/cuBLAS 环境，不跨设备复用。
 CUDA int32 与整数 LUT 仍受阶段 10 的条件性启动规则约束。

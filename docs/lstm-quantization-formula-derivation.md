@@ -1,6 +1,6 @@
 # LSTM 量化融合公式推导
 
-> 状态：阶段 8 已通过浮点 backward 与 FP32 q-carrier QAT 验收；前向量化公式和 Cell 固定 Q31 整数编码保持冻结
+> 状态：阶段 9 已通过标准 ONNX 导出与 CUDA 静态参数缓存性能验收；前向量化公式和 Cell 固定 Q31 整数编码保持冻结
 > 参考实现：`/mnt/data2/chengxing.zou/projects/quant-gru`，commit `9c25d14`
 > 待完成证据：真实数据 LSTM 精度与模型级门禁；当前没有待审核的数学设计项
 
@@ -852,6 +852,8 @@ Rescale ratio：Affine 使用 M+shift 编码，POT2 使用 shift
 
 FP32 只能连续精确表示绝对值小于 `2^24` 的整数。即使输入和权重是 8/16 bit，GEMM 累加或 Cell contribution 超过该范围后也可能丢失低位。所有配置先按第 2.6 节分类；正确性模式必须显式关闭 TF32/Tensor Core，性能模式单独评估。
 
+阶段 9 的 generation-key 缓存只复用已经按本节公式量化的 W/R/bias 和 weight sums，不新增量化点、舍入或 Clamp。key 变化后重新执行相同量化边界；cache hit 与 miss 的 checkpoint 必须逐值一致。host 签名和缓存判定属于 setup，不改变 CUDA 设备计算图。
+
 ### 12.2 CPU int32 reference
 
 ```text
@@ -974,6 +976,13 @@ Golden 只使用一个入库的版本化 JSON schema。根对象以 `kind=primit
 2. INT16 QAT 梯度相对浮点代理满足 MAE、MSE 和余弦门禁；双向 `bias=False` 同时覆盖。
 3. 单步参数更新、12 步 loss 下降以及 master input 被 Clamp/未 Clamp 的梯度行为通过。
 4. 证据写入忽略目录 `tests/precision/results/stage8_backward_report.json`，验证范围仍为 `synthetic_numeric`。
+
+阶段 9 已完成以下不改变公式的后端与交换格式证据：
+
+1. ONNX 边界显式执行 `(i,f,g,o) -> (i,o,f,c)`，单向/双向图均只有一个标准 `LSTM` 节点，ONNX Runtime 的 `output/h_n/c_n` 与浮点语义一致。
+2. 静态参数 cache miss、hit 和 generation key 失效路径的所有 Golden checkpoint 逐值一致；优化前后精度指标完全一致。
+3. 两次稳定 CUDA benchmark、memcheck/racecheck 和 Nsight SGEMM 计数通过；版本化阈值按环境和 profile 隔离。
+4. 缓存、ONNX 重排和性能门禁均未引入新的量化点、乘法配置或执行公式分支。
 
 最终冻结继续受以下回归门禁保护：
 

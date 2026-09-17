@@ -22,6 +22,13 @@ Round/Clamp 位置。乘法临时值没有独立量化参数。
 cuBLAS SGEMM，每个时间步的 recurrent Linear 使用一次 SGEMM，门、Cell 和 Hidden
 由融合 pointwise kernel 完成。
 
+推理调用方可分配持久静态参数缓存，并以非零 generation key 显式启用。首次调用
+量化 W/R/可选 bias 并计算 weight sums，后续相同 key 调用直接复用；master 参数
+内容变化时调用方必须更换 key。key 为 0 时保持逐调用量化。缓存不覆盖 input、
+h0/c0，不改变任何 checkpoint 或 Clamp 边界。持久缓存容量通过
+`lstmQuantizedFpCudaStaticParameterBytes()` 独立查询，不混入临时 workspace
+统计；性能证据和适用阈值见 `docs/cuda-performance.md`。
+
 Pedantic 模式关闭 TF32/Tensor Core，用于正确性验收；TF32 只能显式选择并独立报告
 精度。每次执行都会消费导入参数重新派生出的编码，不接受 raw ratio。训练态前向会
 保存量化后的 master tensor、最少 backward checkpoint 和对应真实 Clamp mask。
