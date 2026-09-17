@@ -71,8 +71,17 @@ if(QUANT_LSTM_BUILD_TESTS)
     enable_testing()
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
-    add_library(quant_lstm_test_support STATIC tests/common/deterministic_rng.cc)
+    add_library(
+        quant_lstm_test_support
+        STATIC
+            tests/common/deterministic_rng.cc
+            tests/common/synthetic_precision_fixture.cc
+    )
     target_include_directories(quant_lstm_test_support PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+    target_link_libraries(
+        quant_lstm_test_support
+        PUBLIC quant_lstm nlohmann_json::nlohmann_json
+    )
     set_target_properties(quant_lstm_test_support PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_options(
         quant_lstm_test_support PRIVATE -Wall -Wextra -Wpedantic
@@ -147,6 +156,12 @@ if(QUANT_LSTM_BUILD_TESTS)
     )
     set_tests_properties(
         precision_contract PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(
+        NAME precision_contract_v2
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests/python/test_precision_contract_v2.py
+    )
+    set_tests_properties(
+        precision_contract_v2 PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
     file(
         GLOB_RECURSE GOLDEN_FILES
         CONFIGURE_DEPENDS
@@ -239,6 +254,35 @@ if(QUANT_LSTM_BUILD_TESTS)
         set_target_properties(
             test_quantized_fp_cuda PROPERTIES CUDA_ARCHITECTURES native)
         add_test(NAME quantized_fp_cuda COMMAND test_quantized_fp_cuda)
+
+        add_executable(
+            test_synthetic_precision_cuda
+            tests/cuda/test_synthetic_precision_cuda.cu)
+        target_link_libraries(
+            test_synthetic_precision_cuda
+            PRIVATE
+                quant_lstm
+                quant_lstm_test_support
+                nlohmann_json::nlohmann_json)
+        target_compile_definitions(
+            test_synthetic_precision_cuda
+            PRIVATE QUANT_LSTM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+        set_target_properties(
+            test_synthetic_precision_cuda PROPERTIES CUDA_ARCHITECTURES native)
+        add_test(
+            NAME synthetic_precision_cuda_basic
+            COMMAND
+                test_synthetic_precision_cuda
+                --selection basic
+                --report
+                ${CMAKE_CURRENT_BINARY_DIR}/cuda_synthetic_basic_report.json)
+        add_test(
+            NAME synthetic_precision_cuda_strict
+            COMMAND
+                test_synthetic_precision_cuda
+                --selection strict
+                --report
+                ${CMAKE_CURRENT_BINARY_DIR}/cuda_synthetic_strict_report.json)
 
     endif()
 endif()

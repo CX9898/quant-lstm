@@ -1,0 +1,852 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-lstm.local/schema/strict_matrix_v2.schema.json",
+  "title": "阶段 4 CPU/CUDA synthetic precision 矩阵 v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "matrix_version",
+    "stage",
+    "validation_scope",
+    "real_data_status",
+    "expanded_case_id_format",
+    "cases"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 2
+    },
+    "matrix_version": {
+      "const": "strict_matrix_v2"
+    },
+    "stage": {
+      "type": "integer",
+      "const": 4
+    },
+    "validation_scope": {
+      "const": "synthetic_numeric"
+    },
+    "real_data_status": {
+      "const": "not_configured"
+    },
+    "expanded_case_id_format": {
+      "const": "{case_id}_{seed_role}_{seed}"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    }
+  },
+  "$defs": {
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "tier",
+        "backend",
+        "execution_model",
+        "carrier",
+        "shape_profile",
+        "shape",
+        "state_profile",
+        "bias_profile",
+        "layout_profile",
+        "batch_first",
+        "math_mode",
+        "data_seeds",
+        "parameter_seed",
+        "parameter_source",
+        "bitwidth_profile",
+        "threshold_profile",
+        "activation_profile",
+        "activation_probe",
+        "parameter_granularities",
+        "directed_profiles",
+        "resolved_quant_config"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "pattern": "^stage(3|4)_(basic|strict|performance)_[a-z0-9_]+$"
+        },
+        "tier": {
+          "enum": [
+            "basic",
+            "strict",
+            "performance"
+          ]
+        },
+        "backend": {
+          "enum": [
+            "cpu_int32_reference",
+            "cpu_fp32_reference",
+            "cuda_fp32"
+          ]
+        },
+        "execution_model": {
+          "enum": [
+            "cpu_int32",
+            "cpu_fp32"
+          ]
+        },
+        "carrier": {
+          "enum": [
+            "int32",
+            "float32_quantized_values"
+          ]
+        },
+        "shape_profile": {
+          "enum": [
+            "cpu_basic",
+            "minimal",
+            "short_recurrent",
+            "non_aligned",
+            "long_sequence",
+            "cuda_gru_basic",
+            "large_batch"
+          ]
+        },
+        "shape": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "integer",
+              "minimum": 1
+            }
+          ],
+          "items": false,
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "state_profile": {
+          "enum": [
+            "omitted",
+            "explicit_zero",
+            "typical_random",
+            "near_quant_boundary",
+            "mixed_h_random_c_boundary"
+          ]
+        },
+        "bias_profile": {
+          "enum": [
+            "enabled_random",
+            "disabled"
+          ]
+        },
+        "layout_profile": {
+          "enum": [
+            "time_major",
+            "batch_major"
+          ]
+        },
+        "batch_first": {
+          "type": "boolean"
+        },
+        "math_mode": {
+          "enum": [
+            "not_applicable",
+            "pedantic",
+            "tf32"
+          ]
+        },
+        "data_seeds": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "calibration",
+            "evaluation",
+            "calibration_equals_evaluation"
+          ],
+          "properties": {
+            "calibration": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              },
+              "uniqueItems": true,
+              "minItems": 1
+            },
+            "evaluation": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              },
+              "uniqueItems": true,
+              "minItems": 1
+            },
+            "calibration_equals_evaluation": {
+              "type": "boolean"
+            }
+          }
+        },
+        "parameter_seed": {
+          "type": "integer",
+          "minimum": 3001,
+          "maximum": 3007
+        },
+        "parameter_source": {
+          "const": "pytorch_typical_v1"
+        },
+        "bitwidth_profile": {
+          "enum": [
+            "all_int8",
+            "all_int16",
+            "mixed_8_16"
+          ]
+        },
+        "threshold_profile": {
+          "enum": [
+            "int8",
+            "int16"
+          ]
+        },
+        "activation_profile": {
+          "enum": [
+            "domain_default",
+            "signed_symmetric",
+            "signed_asymmetric",
+            "unsigned_symmetric",
+            "unsigned_asymmetric"
+          ]
+        },
+        "activation_probe": {
+          "$ref": "#/$defs/non_parameter_name"
+        },
+        "parameter_granularities": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "weight_ih",
+            "weight_hh",
+            "bias_ih",
+            "bias_hh"
+          ],
+          "properties": {
+            "weight_ih": {
+              "$ref": "#/$defs/enabled_granularity"
+            },
+            "weight_hh": {
+              "$ref": "#/$defs/enabled_granularity"
+            },
+            "bias_ih": {
+              "$ref": "#/$defs/optional_granularity"
+            },
+            "bias_hh": {
+              "$ref": "#/$defs/optional_granularity"
+            }
+          }
+        },
+        "directed_profiles": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "signed_symmetric_minimum_boundary",
+              "signed_asymmetric_minimum_boundary",
+              "unsigned_symmetric_boundary",
+              "unsigned_asymmetric_boundary",
+              "contribution_cancellation",
+              "contribution_same_sign",
+              "fp32_exact_2pow24",
+              "fp32_precision_risk"
+            ]
+          }
+        },
+        "resolved_quant_config": {
+          "$ref": "#/$defs/resolved_quant_config"
+        },
+        "fp32_accumulation_class": {
+          "enum": [
+            "exact_integer_range",
+            "precision_risk"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "backend": {
+                "const": "cpu_int32_reference"
+              }
+            },
+            "required": [
+              "backend"
+            ]
+          },
+          "then": {
+            "properties": {
+              "execution_model": {
+                "const": "cpu_int32"
+              },
+              "carrier": {
+                "const": "int32"
+              },
+              "math_mode": {
+                "const": "not_applicable"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "backend": {
+                "const": "cpu_fp32_reference"
+              }
+            },
+            "required": [
+              "backend"
+            ]
+          },
+          "then": {
+            "properties": {
+              "execution_model": {
+                "const": "cpu_fp32"
+              },
+              "carrier": {
+                "const": "float32_quantized_values"
+              },
+              "math_mode": {
+                "const": "not_applicable"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "backend": {
+                "const": "cuda_fp32"
+              }
+            },
+            "required": [
+              "backend"
+            ]
+          },
+          "then": {
+            "required": [
+              "fp32_accumulation_class"
+            ],
+            "properties": {
+              "execution_model": {
+                "const": "cpu_fp32"
+              },
+              "carrier": {
+                "const": "float32_quantized_values"
+              },
+              "math_mode": {
+                "enum": [
+                  "pedantic",
+                  "tf32"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "layout_profile": {
+                "const": "time_major"
+              }
+            },
+            "required": [
+              "layout_profile"
+            ]
+          },
+          "then": {
+            "properties": {
+              "batch_first": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "layout_profile": {
+                "const": "batch_major"
+              }
+            },
+            "required": [
+              "layout_profile"
+            ]
+          },
+          "then": {
+            "properties": {
+              "batch_first": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "bias_profile": {
+                "const": "disabled"
+              }
+            },
+            "required": [
+              "bias_profile"
+            ]
+          },
+          "then": {
+            "properties": {
+              "parameter_granularities": {
+                "properties": {
+                  "bias_ih": {
+                    "const": "not_applicable"
+                  },
+                  "bias_hh": {
+                    "const": "not_applicable"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "bias_profile": {
+                "const": "enabled_random"
+              }
+            },
+            "required": [
+              "bias_profile"
+            ]
+          },
+          "then": {
+            "properties": {
+              "parameter_granularities": {
+                "properties": {
+                  "bias_ih": {
+                    "$ref": "#/$defs/enabled_granularity"
+                  },
+                  "bias_hh": {
+                    "$ref": "#/$defs/enabled_granularity"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "shape_profile": {
+                "const": "cpu_basic"
+              }
+            },
+            "required": [
+              "shape_profile"
+            ]
+          },
+          "then": {
+            "properties": {
+              "shape": {
+                "const": [
+                  8,
+                  4,
+                  16,
+                  32
+                ]
+              },
+              "parameter_seed": {
+                "const": 3001
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "shape_profile": {
+                "const": "cuda_gru_basic"
+              }
+            },
+            "required": [
+              "shape_profile"
+            ]
+          },
+          "then": {
+            "properties": {
+              "shape": {
+                "const": [
+                  50,
+                  64,
+                  128,
+                  256
+                ]
+              },
+              "parameter_seed": {
+                "const": 3002
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "shape_profile": {
+                "const": "minimal"
+              }
+            },
+            "required": [
+              "shape_profile"
+            ]
+          },
+          "then": {
+            "properties": {
+              "shape": {
+                "const": [
+                  1,
+                  1,
+                  1,
+                  1
+                ]
+              },
+              "parameter_seed": {
+                "const": 3003
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "shape_profile": {
+                "const": "short_recurrent"
+              }
+            },
+            "required": [
+              "shape_profile"
+            ]
+          },
+          "then": {
+            "properties": {
+              "shape": {
+                "const": [
+                  3,
+                  1,
+                  2,
+                  2
+                ]
+              },
+              "parameter_seed": {
+                "const": 3004
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "shape_profile": {
+                "const": "non_aligned"
+              }
+            },
+            "required": [
+              "shape_profile"
+            ]
+          },
+          "then": {
+            "properties": {
+              "shape": {
+                "const": [
+                  7,
+                  3,
+                  31,
+                  33
+                ]
+              },
+              "parameter_seed": {
+                "const": 3005
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "shape_profile": {
+                "const": "long_sequence"
+              }
+            },
+            "required": [
+              "shape_profile"
+            ]
+          },
+          "then": {
+            "properties": {
+              "shape": {
+                "const": [
+                  256,
+                  1,
+                  64,
+                  128
+                ]
+              },
+              "parameter_seed": {
+                "const": 3006
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "shape_profile": {
+                "const": "large_batch"
+              }
+            },
+            "required": [
+              "shape_profile"
+            ]
+          },
+          "then": {
+            "properties": {
+              "shape": {
+                "const": [
+                  16,
+                  128,
+                  64,
+                  128
+                ]
+              },
+              "parameter_seed": {
+                "const": 3007
+              }
+            }
+          }
+        }
+      ]
+    },
+    "enabled_granularity": {
+      "enum": [
+        "per_tensor",
+        "per_gate",
+        "per_channel"
+      ]
+    },
+    "optional_granularity": {
+      "enum": [
+        "per_tensor",
+        "per_gate",
+        "per_channel",
+        "not_applicable"
+      ]
+    },
+    "non_parameter_name": {
+      "enum": [
+        "input",
+        "output",
+        "cell_state",
+        "weight_ih_linear",
+        "weight_hh_linear",
+        "input_gate_input",
+        "forget_gate_input",
+        "cell_gate_input",
+        "output_gate_input",
+        "input_gate_output",
+        "forget_gate_output",
+        "cell_gate_output",
+        "output_gate_output",
+        "cell_tanh_output"
+      ]
+    },
+    "resolved_quant_config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "scale_mode",
+        "operators"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "integer",
+          "const": 1
+        },
+        "scale_mode": {
+          "enum": [
+            "affine",
+            "pot2"
+          ]
+        },
+        "operators": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "input",
+            "output",
+            "cell_state",
+            "weight_ih",
+            "weight_hh",
+            "bias_ih",
+            "bias_hh",
+            "weight_ih_linear",
+            "weight_hh_linear",
+            "input_gate_input",
+            "forget_gate_input",
+            "cell_gate_input",
+            "output_gate_input",
+            "input_gate_output",
+            "forget_gate_output",
+            "cell_gate_output",
+            "output_gate_output",
+            "cell_tanh_output"
+          ],
+          "properties": {
+            "input": {
+              "$ref": "#/$defs/non_parameter"
+            },
+            "output": {
+              "$ref": "#/$defs/non_parameter"
+            },
+            "cell_state": {
+              "$ref": "#/$defs/non_parameter"
+            },
+            "weight_ih": {
+              "$ref": "#/$defs/parameter"
+            },
+            "weight_hh": {
+              "$ref": "#/$defs/parameter"
+            },
+            "bias_ih": {
+              "$ref": "#/$defs/parameter"
+            },
+            "bias_hh": {
+              "$ref": "#/$defs/parameter"
+            },
+            "weight_ih_linear": {
+              "$ref": "#/$defs/non_parameter"
+            },
+            "weight_hh_linear": {
+              "$ref": "#/$defs/non_parameter"
+            },
+            "input_gate_input": {
+              "$ref": "#/$defs/non_parameter"
+            },
+            "forget_gate_input": {
+              "$ref": "#/$defs/non_parameter"
+            },
+            "cell_gate_input": {
+              "$ref": "#/$defs/non_parameter"
+            },
+            "output_gate_input": {
+              "$ref": "#/$defs/non_parameter"
+            },
+            "input_gate_output": {
+              "$ref": "#/$defs/non_parameter"
+            },
+            "forget_gate_output": {
+              "$ref": "#/$defs/non_parameter"
+            },
+            "cell_gate_output": {
+              "$ref": "#/$defs/non_parameter"
+            },
+            "output_gate_output": {
+              "$ref": "#/$defs/non_parameter"
+            },
+            "cell_tanh_output": {
+              "$ref": "#/$defs/non_parameter"
+            }
+          }
+        }
+      }
+    },
+    "operator_required": {
+      "type": "object",
+      "required": [
+        "bitwidth",
+        "is_unsigned",
+        "is_symmetric",
+        "granularity"
+      ]
+    },
+    "non_parameter": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/operator_required"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "bitwidth": {
+              "type": "integer",
+              "enum": [
+                8,
+                16
+              ]
+            },
+            "is_unsigned": {
+              "type": "boolean"
+            },
+            "is_symmetric": {
+              "type": "boolean"
+            },
+            "granularity": {
+              "const": "per_tensor"
+            }
+          }
+        }
+      ]
+    },
+    "parameter": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/operator_required"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "bitwidth": {
+              "type": "integer",
+              "enum": [
+                8,
+                16
+              ]
+            },
+            "is_unsigned": {
+              "const": false
+            },
+            "is_symmetric": {
+              "const": true
+            },
+            "granularity": {
+              "enum": [
+                "per_tensor",
+                "per_gate",
+                "per_channel"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}
