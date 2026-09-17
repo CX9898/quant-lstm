@@ -1,6 +1,6 @@
 # LSTM 量化执行规格
 
-> 状态：阶段 0 设计规则已审核；Q31 安全性、LSTM 实测精度和 CUDA 性能仍需实现后提供证据
+> 状态：阶段 3 已完成 Q31 三层验证并冻结 CPU Cell 整数编码；真实数据精度和 CUDA 量化性能仍待后续阶段提供证据
 > 参考基线：`/home/chengxing.zou/projects/quant-gru`，commit `9c25d14`
 > 公式推导：`docs/lstm-quantization-formula-derivation.md`
 > 分阶段计划：`docs/implementation-plan.md`
@@ -256,7 +256,7 @@ q_c_new = Clamp(
     RoundToNearestEven(p_forget*alpha + p_input*beta) + Z_c_new)
 ```
 
-两路乘积没有独立量化边界。CPU int32 reference 暂定将 `alpha/beta` 编码为固定 Q31 multiplier，使用 `int64_t` multiplier 和 `__int128` 合并累加，最后只 RoundShift 一次。该 Q31 执行编码必须通过静态证明、缩小域穷举和全范围随机/对抗测试后，才能由“暂定”升级为最终规格。
+两路乘积没有独立量化边界。CPU int32 reference 将 `alpha/beta` 编码为固定 Q31 multiplier，使用 `int64_t` multiplier 和 `__int128` 合并累加，最后只 RoundShift 一次。阶段 3 的静态 fail-fast、缩小域穷举和 8/16-bit Affine/POT2 随机/对抗验证均已通过，因此该编码现已冻结为最终 CPU reference 规格。
 
 ### 8.4 Hidden 融合
 

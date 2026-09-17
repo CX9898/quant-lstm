@@ -1,8 +1,8 @@
 # LSTM 量化融合公式推导
 
-> 状态：阶段 0 数学设计已审核；Cell 整数编码暂定固定 Q31，等待实现期证据后最终确认
+> 状态：阶段 3 已通过三层实现期证据，Cell 固定 Q31 整数编码现已最终冻结
 > 参考实现：`/mnt/data2/chengxing.zou/projects/quant-gru`，commit `9c25d14`
-> 待完成证据：Q31 安全/精度报告、LSTM 实测后的严格门禁复核和 CUDA FP 载体精度/性能报告；当前没有待审核的数学设计项
+> 待完成证据：真实数据 LSTM 精度门禁复核和 CUDA FP 载体精度/性能报告；当前没有待审核的数学设计项
 
 ## 1. 文档目的与边界
 
@@ -631,9 +631,9 @@ q_c_new = Clamp(
 
 GRU 风格的操作数预对齐方案和两路分别 rescale 方案仅保留为离线精度对照，不作为生产执行公式。
 
-### 7.5 暂定的 CPU 整数编码
+### 7.5 最终冻结的 CPU 整数编码
 
-阶段 0 暂定使用固定 Q31 公共分母和 `__int128` 累加：
+CPU int32 reference 使用固定 Q31 公共分母和 `__int128` 累加：
 
 ```text
 N = 31
@@ -655,7 +655,7 @@ d_c_new = RoundShift(wide_acc, 31)
 - `__int128` 只用于 CPU reference 的 Cell 融合累加，不进入公共 JSON，也不约束未来可选 CUDA int32 后端。
 - `RoundShift` 是唯一最终量化舍入，并调用第 2.5 节的 `roundToNearestEven(wide_acc, 31)`。
 - 当比例绝对值小于 `0.5*2^-31` 而编码为 0 时，报告 contribution 消失次数及其相对目标 Cell LSB 的误差。
-- 只有在以下三层验证全部通过后，本方案才从“暂定”升级为最终冻结。
+- 阶段 3 已完成以下三层验证，本方案现已最终冻结。
 
 三层验证方法已经冻结：
 
@@ -856,7 +856,7 @@ FP32 只能连续精确表示绝对值小于 `2^24` 的整数。即使输入和�
 
 ```text
 量化值存储：int32_t
-GEMM/普通乘积：int64_t；Cell Q31 融合累加暂定使用 __int128
+GEMM/普通乘积：int64_t；Cell Q31 融合累加使用 __int128
 Rescale：POT2 shift 或 integer multiplier+shift
 激活：反量化 -> 原始 sigmoid/tanh -> 按输出网格重新量化
 ```
@@ -924,15 +924,15 @@ Golden 中所有张量都使用显式 `dtype`、`shape` 和 row-major 一维 `da
 
 Golden 只使用一个入库的版本化 JSON schema。根对象以 `kind=primitive|cell|recurrent` 作为判别字段，通过 `$defs` 与 `oneOf` 约束各类 payload，并统一拒绝未知字段。生成器必须直接加载该 schema，在任何 C++ 代码生成前拒绝无效版本、缺失字段以及目录与 `kind` 不一致的用例；不能在生成器中复制另一套字段白名单。
 
-## 14. 待完成的验证
+## 14. 验证状态
 
-固定 Q31 的验证方法已经确认，尚需在阶段 3 实现后产出实际证据：
+固定 Q31 已在阶段 3 完成以下实现期证据：
 
-1. 完成静态边界证明并验证不安全配置 fail fast。
-2. 完成缩小整数域穷举，Q31 整数公式 mismatch 为 0。
-3. 完成 8/16 bit、极端 scale、Affine/POT2 和长序列随机/对抗测试，提供运行报告路径及关键指标供审核；报告文件本身不入库。
+1. 静态边界证明和不安全配置 fail fast 已通过。
+2. 缩小整数域穷举相对独立整数公式 mismatch 为 0。
+3. 固定 seed 的 8/16 bit、极端 scale、Affine/POT2、抵消、同号、饱和及长递推随机/对抗测试已通过；报告由测试写入构建目录且不入库。
 
-Q31 升级为最终执行规格前必须满足：
+最终冻结继续受以下回归门禁保护：
 
 - 不恢复乘法临时值的独立 bitwidth/scale/zero point。
 - 基础测试先通过 GRU 风格的 MAE、MSE、余弦相似度门禁。
