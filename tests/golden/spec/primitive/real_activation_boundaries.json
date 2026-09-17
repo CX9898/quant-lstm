@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "case_id": "real_activation_boundaries_cpu_int32",
+  "kind": "primitive",
   "execution_model": "cpu_int32",
   "primitive": "real_activation",
   "attributes": {},
@@ -12,13 +13,13 @@
     },
     "quantized": {"dtype": "int32", "shape": [6], "data": [0, 127, -127, 0, 127, -127]},
     "input_scale": {
-      "dtype": "float32_scale_string",
+      "dtype": "float32",
       "shape": [6],
       "data": ["0.125", "0.125", "0.125", "0.125", "0.125", "0.125"]
     },
     "input_zero_point": {"dtype": "int32", "shape": [6], "data": [0, 0, 0, 0, 0, 0]},
     "output_scale": {
-      "dtype": "float32_scale_string",
+      "dtype": "float32",
       "shape": [6],
       "data": [
         "0.00390625",

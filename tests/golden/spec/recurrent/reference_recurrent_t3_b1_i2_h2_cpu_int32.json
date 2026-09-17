@@ -1,0 +1,798 @@
+{
+  "attributes": {},
+  "case_id": "reference_recurrent_t3_b1_i2_h2_cpu_int32",
+  "execution_model": "cpu_int32",
+  "expected": {
+    "checkpoints": {
+      "c_n": {
+        "data": [
+          4,
+          -22
+        ],
+        "dtype": "int32",
+        "shape": [
+          1,
+          2
+        ]
+      },
+      "cell": {
+        "data": [
+          -2,
+          -27,
+          -1,
+          -19,
+          4,
+          -22
+        ],
+        "dtype": "int32",
+        "shape": [
+          3,
+          1,
+          2
+        ]
+      },
+      "cell_gate_input": {
+        "data": [
+          -11,
+          -6,
+          0,
+          -6,
+          4,
+          -12
+        ],
+        "dtype": "int32",
+        "shape": [
+          3,
+          1,
+          2
+        ]
+      },
+      "cell_gate_output": {
+        "data": [
+          -42,
+          -24,
+          0,
+          -24,
+          16,
+          -46
+        ],
+        "dtype": "int32",
+        "shape": [
+          3,
+          1,
+          2
+        ]
+      },
+      "cell_tanh": {
+        "data": [
+          -4,
+          -51,
+          -2,
+          -37,
+          8,
+          -42
+        ],
+        "dtype": "int32",
+        "shape": [
+          3,
+          1,
+          2
+        ]
+      },
+      "forget_gate_input": {
+        "data": [
+          0,
+          14,
+          2,
+          1,
+          12,
+          6
+        ],
+        "dtype": "int32",
+        "shape": [
+          3,
+          1,
+          2
+        ]
+      },
+      "forget_gate_output": {
+        "data": [
+          128,
+          156,
+          132,
+          130,
+          152,
+          140
+        ],
+        "dtype": "int32",
+        "shape": [
+          3,
+          1,
+          2
+        ]
+      },
+      "h_n": {
+        "data": [
+          5,
+          -21
+        ],
+        "dtype": "int32",
+        "shape": [
+          1,
+          2
+        ]
+      },
+      "input_gate_input": {
+        "data": [
+          -1,
+          11,
+          9,
+          -8,
+          4,
+          2
+        ],
+        "dtype": "int32",
+        "shape": [
+          3,
+          1,
+          2
+        ]
+      },
+      "input_gate_output": {
+        "data": [
+          126,
+          150,
+          146,
+          112,
+          136,
+          132
+        ],
+        "dtype": "int32",
+        "shape": [
+          3,
+          1,
+          2
+        ]
+      },
+      "output": {
+        "data": [
+          -2,
+          -24,
+          -1,
+          -23,
+          5,
+          -21
+        ],
+        "dtype": "int32",
+        "shape": [
+          3,
+          1,
+          2
+        ]
+      },
+      "output_gate_input": {
+        "data": [
+          3,
+          -4,
+          10,
+          15,
+          11,
+          1
+        ],
+        "dtype": "int32",
+        "shape": [
+          3,
+          1,
+          2
+        ]
+      },
+      "output_gate_output": {
+        "data": [
+          134,
+          120,
+          148,
+          157,
+          150,
+          130
+        ],
+        "dtype": "int32",
+        "shape": [
+          3,
+          1,
+          2
+        ]
+      },
+      "weight_hh_linear": {
+        "data": [
+          2,
+          4,
+          -8,
+          3,
+          4,
+          -11,
+          8,
+          0,
+          1,
+          3,
+          -6,
+          1,
+          3,
+          -9,
+          6,
+          -1,
+          1,
+          3,
+          -6,
+          1,
+          3,
+          -9,
+          6,
+          -1
+        ],
+        "dtype": "int32",
+        "shape": [
+          3,
+          1,
+          4,
+          2
+        ]
+      },
+      "weight_ih_linear": {
+        "data": [
+          -3,
+          7,
+          8,
+          11,
+          -15,
+          5,
+          -5,
+          -4,
+          8,
+          -11,
+          8,
+          0,
+          -3,
+          3,
+          4,
+          16,
+          3,
+          -1,
+          18,
+          5,
+          1,
+          -3,
+          5,
+          2
+        ],
+        "dtype": "int32",
+        "shape": [
+          3,
+          1,
+          4,
+          2
+        ]
+      }
+    },
+    "diagnostics": {
+      "cell_pre_round_sum": {
+        "data": [
+          "-5016387584",
+          "-56975425536",
+          "-2214592512",
+          "-40718303232",
+          "7851737088",
+          "-47781511168"
+        ],
+        "dtype": "string",
+        "shape": [
+          3,
+          1,
+          2
+        ]
+      },
+      "cell_products": {
+        "data": [
+          2048,
+          -5292,
+          -4992,
+          -3600,
+          -264,
+          0,
+          -3510,
+          -2688,
+          -152,
+          2176,
+          -2660,
+          -6072
+        ],
+        "dtype": "int64",
+        "shape": [
+          3,
+          1,
+          2,
+          2
+        ]
+      },
+      "hidden_raw_product": {
+        "data": [
+          -536,
+          -6120,
+          -296,
+          -5809,
+          1200,
+          -5460
+        ],
+        "dtype": "int64",
+        "shape": [
+          3,
+          1,
+          2
+        ]
+      },
+      "scaled_cell_contributions": {
+        "data": [
+          "17179869184",
+          "-22196256768",
+          "-41875931136",
+          "-15099494400",
+          "-2214592512",
+          "0",
+          "-29444014080",
+          "-11274289152",
+          "-1275068416",
+          "9126805504",
+          "-22313697280",
+          "-25467813888"
+        ],
+        "dtype": "string",
+        "shape": [
+          3,
+          1,
+          2,
+          2
+        ]
+      }
+    }
+  },
+  "inputs": {
+    "bias_enabled": {
+      "data": [
+        true
+      ],
+      "dtype": "bool",
+      "shape": []
+    },
+    "bias_hh": {
+      "data": [
+        0,
+        32,
+        -32,
+        0,
+        32,
+        -64,
+        32,
+        0
+      ],
+      "dtype": "int32",
+      "shape": [
+        8
+      ]
+    },
+    "bias_ih": {
+      "data": [
+        32,
+        -32,
+        64,
+        32,
+        -64,
+        32,
+        0,
+        64
+      ],
+      "dtype": "int32",
+      "shape": [
+        8
+      ]
+    },
+    "initial_cell": {
+      "data": [
+        16,
+        -32
+      ],
+      "dtype": "int32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "initial_hidden": {
+      "data": [
+        16,
+        -32
+      ],
+      "dtype": "int32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "input": {
+      "data": [
+        -96,
+        32,
+        64,
+        -16,
+        32,
+        96
+      ],
+      "dtype": "int32",
+      "shape": [
+        3,
+        1,
+        2
+      ]
+    },
+    "operator_bitwidth": {
+      "data": [
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8
+      ],
+      "dtype": "uint8",
+      "shape": [
+        18
+      ]
+    },
+    "operator_granularity": {
+      "data": [
+        "per_tensor",
+        "per_tensor",
+        "per_tensor",
+        "per_channel",
+        "per_channel",
+        "per_channel",
+        "per_channel",
+        "per_tensor",
+        "per_tensor",
+        "per_tensor",
+        "per_tensor",
+        "per_tensor",
+        "per_tensor",
+        "per_tensor",
+        "per_tensor",
+        "per_tensor",
+        "per_tensor",
+        "per_tensor"
+      ],
+      "dtype": "string",
+      "shape": [
+        18
+      ]
+    },
+    "operator_is_symmetric": {
+      "data": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "dtype": "bool",
+      "shape": [
+        18
+      ]
+    },
+    "operator_is_unsigned": {
+      "data": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        true,
+        false,
+        true,
+        false
+      ],
+      "dtype": "bool",
+      "shape": [
+        18
+      ]
+    },
+    "operator_names": {
+      "data": [
+        "input",
+        "output",
+        "cell_state",
+        "weight_ih",
+        "weight_hh",
+        "bias_ih",
+        "bias_hh",
+        "weight_ih_linear",
+        "weight_hh_linear",
+        "input_gate_input",
+        "forget_gate_input",
+        "cell_gate_input",
+        "output_gate_input",
+        "input_gate_output",
+        "forget_gate_output",
+        "cell_gate_output",
+        "output_gate_output",
+        "cell_tanh_output"
+      ],
+      "dtype": "string",
+      "shape": [
+        18
+      ]
+    },
+    "quant_param_group_counts": {
+      "data": [
+        1,
+        1,
+        1,
+        8,
+        8,
+        8,
+        8,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "dtype": "int32",
+      "shape": [
+        18
+      ]
+    },
+    "quant_param_scales": {
+      "data": [
+        "0.0078125",
+        "0.0078125",
+        "0.015625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.00390625",
+        "0.03125",
+        "0.03125",
+        "0.03125",
+        "0.03125",
+        "0.03125",
+        "0.03125",
+        "0.00390625",
+        "0.00390625",
+        "0.0078125",
+        "0.00390625",
+        "0.0078125"
+      ],
+      "dtype": "float32",
+      "shape": [
+        46
+      ]
+    },
+    "quant_param_value_offsets": {
+      "data": [
+        0,
+        1,
+        2,
+        3,
+        11,
+        19,
+        27,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46
+      ],
+      "dtype": "int32",
+      "shape": [
+        19
+      ]
+    },
+    "quant_param_zero_points": {
+      "data": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "dtype": "int32",
+      "shape": [
+        46
+      ]
+    },
+    "scale_mode": {
+      "data": [
+        "pot2"
+      ],
+      "dtype": "string",
+      "shape": []
+    },
+    "shape": {
+      "data": [
+        3,
+        1,
+        2,
+        2
+      ],
+      "dtype": "int64",
+      "shape": [
+        4
+      ]
+    },
+    "weight_hh": {
+      "data": [
+        32,
+        -64,
+        64,
+        32,
+        -32,
+        96,
+        64,
+        -64,
+        96,
+        32,
+        -64,
+        64,
+        32,
+        -96,
+        64,
+        32
+      ],
+      "dtype": "int32",
+      "shape": [
+        8,
+        2
+      ]
+    },
+    "weight_ih": {
+      "data": [
+        64,
+        -32,
+        -96,
+        64,
+        32,
+        96,
+        -64,
+        32,
+        96,
+        64,
+        -32,
+        -64,
+        64,
+        32,
+        96,
+        -96
+      ],
+      "dtype": "int32",
+      "shape": [
+        8,
+        2
+      ]
+    }
+  },
+  "kind": "recurrent",
+  "schema_version": 1
+}

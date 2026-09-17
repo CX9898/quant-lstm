@@ -1,5 +1,5 @@
 #include "lstm/quant_config_loader.h"
-#include "primitive_golden_fixtures.h"
+#include "golden_fixtures.h"
 #include "quantization/fixed_point_ops.h"
 #include "quantization/float_carrier_ops.h"
 #include "quantization/real_activation.h"
@@ -46,14 +46,10 @@ void validateTensorMap(const Json& tensor_map) {
         require(shapeElementCount(tensor.at("shape")) == tensor.at("data").size(),
                 "Golden tensor shape/data mismatch: " + name);
         const std::string dtype = tensor.at("dtype").get<std::string>();
-        if (dtype == "float32" || dtype == "float32_scale_string") {
+        if (dtype == "float32") {
             for (const Json& value : tensor.at("data")) {
                 const std::string text = value.get<std::string>();
-                if (dtype == "float32") {
-                    static_cast<void>(quant_lstm::parseCanonicalFloat32Value(text));
-                } else {
-                    static_cast<void>(quant_lstm::parseCanonicalFloat32(text));
-                }
+                static_cast<void>(quant_lstm::parseCanonicalFloat32Value(text));
             }
         }
     }
@@ -219,10 +215,18 @@ void checkActivation(const Json& document) {
 
 int main() {
     try {
-        for (const auto& fixture : quant_lstm::test::kPrimitiveGoldenDocuments) {
+        for (const auto& fixture : quant_lstm::test::kGoldenDocuments) {
+            if (fixture.kind != "primitive") {
+                continue;
+            }
             const Json document = Json::parse(fixture.json);
             require(document.at("case_id").get<std::string>() == fixture.case_id,
                     "generated fixture case_id mismatch");
+            require(document.at("kind").get<std::string>() == fixture.kind,
+                    "primitive Golden kind mismatch");
+            require(document.at("execution_model").get<std::string>() ==
+                        fixture.execution_model,
+                    "generated fixture execution_model mismatch");
             validateTensorMap(document.at("inputs"));
             validateTensorMap(document.at("expected").at("checkpoints"));
             validateTensorMap(document.at("expected").at("diagnostics"));

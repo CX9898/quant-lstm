@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "case_id": "quantize_boundaries",
+  "kind": "primitive",
   "execution_model": "common",
   "primitive": "quant_dequant",
   "attributes": {"operation": "quantize"},
@@ -11,7 +12,7 @@
       "data": ["-16", "-0.1875", "-0.0625", "0.1875", "62.75"]
     },
     "scale": {
-      "dtype": "float32_scale_string",
+      "dtype": "float32",
       "shape": [5],
       "data": ["0.125", "0.125", "0.125", "0.125", "0.25"]
     },

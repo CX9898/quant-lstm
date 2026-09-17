@@ -1,13 +1,14 @@
 {
   "schema_version": 1,
   "case_id": "dequantize_boundaries",
+  "kind": "primitive",
   "execution_model": "common",
   "primitive": "quant_dequant",
   "attributes": {"operation": "dequantize"},
   "inputs": {
     "value": {"dtype": "int32", "shape": [2], "data": [-127, 0]},
     "scale": {
-      "dtype": "float32_scale_string",
+      "dtype": "float32",
       "shape": [2],
       "data": ["0.125", "0.25"]
     },

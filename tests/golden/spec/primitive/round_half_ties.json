@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "case_id": "round_half_ties",
+  "kind": "primitive",
   "execution_model": "common",
   "primitive": "round_to_nearest_even",
   "attributes": {},

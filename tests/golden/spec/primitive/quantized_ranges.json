@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "case_id": "quantized_ranges",
+  "kind": "primitive",
   "execution_model": "common",
   "primitive": "quantized_range",
   "attributes": {},

@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "case_id": "m_shift_known_vectors",
+  "kind": "primitive",
   "execution_model": "common",
   "primitive": "m_shift",
   "attributes": {},

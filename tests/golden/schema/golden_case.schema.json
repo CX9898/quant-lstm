@@ -1,0 +1,709 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-lstm.local/schema/golden_case.schema.json",
+  "title": "Quant-LSTM Golden case v1",
+  "oneOf": [
+    {"$ref": "#/$defs/primitive_case"},
+    {"$ref": "#/$defs/cell_case"},
+    {"$ref": "#/$defs/recurrent_case"}
+  ],
+  "$defs": {
+    "case_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]+$"
+    },
+    "execution_model": {
+      "enum": ["common", "cpu_int32", "cpu_fp32"]
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checkpoints", "diagnostics"],
+      "properties": {
+        "checkpoints": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"$ref": "#/$defs/tensor"}
+        },
+        "diagnostics": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/tensor"}
+        }
+      }
+    },
+    "reference_case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "case_id",
+        "kind",
+        "execution_model",
+        "attributes",
+        "inputs",
+        "expected"
+      ],
+      "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "case_id": {"$ref": "#/$defs/case_id"},
+        "kind": {"enum": ["cell", "recurrent"]},
+        "execution_model": {
+          "enum": ["cpu_int32", "cpu_fp32"]
+        },
+        "attributes": {
+          "type": "object",
+          "additionalProperties": false,
+          "maxProperties": 0
+        },
+        "inputs": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"$ref": "#/$defs/tensor"}
+        },
+        "expected": {"$ref": "#/$defs/expected"}
+      }
+    },
+    "cell_case": {
+      "allOf": [
+        {"$ref": "#/$defs/reference_case"},
+        {
+          "properties": {
+            "kind": {"const": "cell"}
+          }
+        }
+      ]
+    },
+    "recurrent_case": {
+      "allOf": [
+        {"$ref": "#/$defs/reference_case"},
+        {
+          "properties": {
+            "kind": {"const": "recurrent"}
+          }
+        }
+      ]
+    },
+    "primitive_case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "case_id",
+        "kind",
+        "execution_model",
+        "primitive",
+        "attributes",
+        "inputs",
+        "expected"
+      ],
+      "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "case_id": {"$ref": "#/$defs/case_id"},
+        "kind": {"const": "primitive"},
+        "execution_model": {"$ref": "#/$defs/execution_model"},
+        "primitive": {
+          "enum": [
+            "round_to_nearest_even",
+            "quantized_range",
+            "m_shift",
+            "pot2_cover_range",
+            "quant_dequant",
+            "real_activation"
+          ]
+        },
+        "attributes": {"type": "object"},
+        "inputs": {"type": "object", "minProperties": 1},
+        "expected": {"$ref": "#/$defs/expected"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"primitive": {"const": "real_activation"}},
+            "required": ["primitive"]
+          },
+          "then": {
+            "properties": {
+              "execution_model": {"enum": ["cpu_int32", "cpu_fp32"]}
+            }
+          },
+          "else": {
+            "properties": {
+              "execution_model": {"const": "common"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"primitive": {"const": "quant_dequant"}},
+            "required": ["primitive"]
+          },
+          "then": {
+            "properties": {
+              "attributes": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["operation"],
+                "properties": {
+                  "operation": {"enum": ["quantize", "dequantize"]}
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "attributes": {
+                "type": "object",
+                "additionalProperties": false,
+                "maxProperties": 0
+              }
+            }
+          }
+        },
+        {"$ref": "#/$defs/round_primitive"},
+        {"$ref": "#/$defs/range_primitive"},
+        {"$ref": "#/$defs/m_shift_primitive"},
+        {"$ref": "#/$defs/pot2_primitive"},
+        {"$ref": "#/$defs/quant_dequant_primitive"},
+        {"$ref": "#/$defs/activation_primitive"}
+      ]
+    },
+    "round_primitive": {
+      "if": {
+        "properties": {"primitive": {"const": "round_to_nearest_even"}},
+        "required": ["primitive"]
+      },
+      "then": {
+        "properties": {
+          "inputs": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["values"],
+            "properties": {
+              "values": {"$ref": "#/$defs/float64_tensor"}
+            }
+          },
+          "expected": {
+            "allOf": [
+              {"$ref": "#/$defs/expected"},
+              {
+                "properties": {
+                  "checkpoints": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["rounded"],
+                    "properties": {
+                      "rounded": {"$ref": "#/$defs/int64_tensor"}
+                    }
+                  },
+                  "diagnostics": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "maxProperties": 0
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "range_primitive": {
+      "if": {
+        "properties": {"primitive": {"const": "quantized_range"}},
+        "required": ["primitive"]
+      },
+      "then": {
+        "properties": {
+          "inputs": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["bitwidth", "is_unsigned", "is_symmetric"],
+            "properties": {
+              "bitwidth": {"$ref": "#/$defs/uint8_tensor"},
+              "is_unsigned": {"$ref": "#/$defs/bool_tensor"},
+              "is_symmetric": {"$ref": "#/$defs/bool_tensor"}
+            }
+          },
+          "expected": {
+            "allOf": [
+              {"$ref": "#/$defs/expected"},
+              {
+                "properties": {
+                  "checkpoints": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["minimum", "maximum"],
+                    "properties": {
+                      "minimum": {"$ref": "#/$defs/int32_tensor"},
+                      "maximum": {"$ref": "#/$defs/int32_tensor"}
+                    }
+                  },
+                  "diagnostics": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "maxProperties": 0
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "m_shift_primitive": {
+      "if": {
+        "properties": {"primitive": {"const": "m_shift"}},
+        "required": ["primitive"]
+      },
+      "then": {
+        "properties": {
+          "inputs": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ratio", "value"],
+            "properties": {
+              "ratio": {"$ref": "#/$defs/float64_tensor"},
+              "value": {"$ref": "#/$defs/int64_tensor"}
+            }
+          },
+          "expected": {
+            "allOf": [
+              {"$ref": "#/$defs/expected"},
+              {
+                "properties": {
+                  "checkpoints": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["multiplier", "shift", "int_apply", "fp_apply"],
+                    "properties": {
+                      "multiplier": {"$ref": "#/$defs/uint16_tensor"},
+                      "shift": {"$ref": "#/$defs/int8_tensor"},
+                      "int_apply": {"$ref": "#/$defs/int64_tensor"},
+                      "fp_apply": {"$ref": "#/$defs/int64_tensor"}
+                    }
+                  },
+                  "diagnostics": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "maxProperties": 0
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "pot2_primitive": {
+      "if": {
+        "properties": {"primitive": {"const": "pot2_cover_range"}},
+        "required": ["primitive"]
+      },
+      "then": {
+        "properties": {
+          "inputs": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "range_minimum",
+              "range_maximum",
+              "bitwidth",
+              "is_unsigned",
+              "is_symmetric"
+            ],
+            "properties": {
+              "range_minimum": {"$ref": "#/$defs/float32_tensor"},
+              "range_maximum": {"$ref": "#/$defs/float32_tensor"},
+              "bitwidth": {"$ref": "#/$defs/uint8_tensor"},
+              "is_unsigned": {"$ref": "#/$defs/bool_tensor"},
+              "is_symmetric": {"$ref": "#/$defs/bool_tensor"}
+            }
+          },
+          "expected": {
+            "allOf": [
+              {"$ref": "#/$defs/expected"},
+              {
+                "properties": {
+                  "checkpoints": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["scale", "zero_point"],
+                    "properties": {
+                      "scale": {"$ref": "#/$defs/float32_tensor"},
+                      "zero_point": {"$ref": "#/$defs/int32_tensor"}
+                    }
+                  },
+                  "diagnostics": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "exponent",
+                      "range_is_near_power_of_two",
+                      "fallback_used"
+                    ],
+                    "properties": {
+                      "exponent": {"$ref": "#/$defs/int8_tensor"},
+                      "range_is_near_power_of_two": {"$ref": "#/$defs/bool_tensor"},
+                      "fallback_used": {"$ref": "#/$defs/bool_tensor"}
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "quant_dequant_primitive": {
+      "if": {
+        "properties": {"primitive": {"const": "quant_dequant"}},
+        "required": ["primitive"]
+      },
+      "then": {
+        "properties": {
+          "inputs": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "scale",
+              "zero_point",
+              "bitwidth",
+              "is_unsigned",
+              "is_symmetric"
+            ],
+            "properties": {
+              "value": {"$ref": "#/$defs/tensor"},
+              "scale": {"$ref": "#/$defs/float32_tensor"},
+              "zero_point": {"$ref": "#/$defs/int32_tensor"},
+              "bitwidth": {"$ref": "#/$defs/uint8_tensor"},
+              "is_unsigned": {"$ref": "#/$defs/bool_tensor"},
+              "is_symmetric": {"$ref": "#/$defs/bool_tensor"}
+            }
+          },
+          "expected": {
+            "allOf": [
+              {"$ref": "#/$defs/expected"},
+              {
+                "properties": {
+                  "checkpoints": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "minProperties": 1,
+                    "maxProperties": 1,
+                    "properties": {
+                      "quantized": {"$ref": "#/$defs/int32_tensor"},
+                      "real": {"$ref": "#/$defs/float32_tensor"}
+                    }
+                  },
+                  "diagnostics": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "maxProperties": 0
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "attributes": {
+                  "properties": {"operation": {"const": "quantize"}},
+                  "required": ["operation"]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "inputs": {
+                  "properties": {
+                    "value": {"$ref": "#/$defs/float32_tensor"}
+                  }
+                },
+                "expected": {
+                  "properties": {
+                    "checkpoints": {"required": ["quantized"]}
+                  }
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "inputs": {
+                  "properties": {
+                    "value": {"$ref": "#/$defs/int32_tensor"}
+                  }
+                },
+                "expected": {
+                  "properties": {
+                    "checkpoints": {"required": ["real"]}
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "activation_primitive": {
+      "if": {
+        "properties": {"primitive": {"const": "real_activation"}},
+        "required": ["primitive"]
+      },
+      "then": {
+        "properties": {
+          "inputs": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "quantized",
+              "input_scale",
+              "input_zero_point",
+              "output_scale",
+              "output_zero_point"
+            ],
+            "properties": {
+              "kind": {
+                "allOf": [
+                  {"$ref": "#/$defs/string_tensor"},
+                  {
+                    "properties": {
+                      "data": {
+                        "items": {"enum": ["sigmoid", "tanh"]}
+                      }
+                    }
+                  }
+                ]
+              },
+              "quantized": {"$ref": "#/$defs/int32_tensor"},
+              "input_scale": {"$ref": "#/$defs/float32_tensor"},
+              "input_zero_point": {"$ref": "#/$defs/int32_tensor"},
+              "output_scale": {"$ref": "#/$defs/float32_tensor"},
+              "output_zero_point": {"$ref": "#/$defs/int32_tensor"}
+            }
+          },
+          "expected": {
+            "allOf": [
+              {"$ref": "#/$defs/expected"},
+              {
+                "properties": {
+                  "checkpoints": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["quantized"],
+                    "properties": {
+                      "quantized": {"$ref": "#/$defs/int32_tensor"}
+                    }
+                  },
+                  "diagnostics": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "maxProperties": 0
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "tensor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dtype", "shape", "data"],
+      "properties": {
+        "dtype": {
+          "enum": [
+            "bool",
+            "float32",
+            "float64",
+            "int8",
+            "int32",
+            "int64",
+            "string",
+            "uint8",
+            "uint16"
+          ]
+        },
+        "shape": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 1}
+        },
+        "data": {"type": "array"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"dtype": {"const": "bool"}},
+            "required": ["dtype"]
+          },
+          "then": {
+            "properties": {"data": {"items": {"type": "boolean"}}}
+          }
+        },
+        {
+          "if": {
+            "properties": {"dtype": {"const": "float32"}},
+            "required": ["dtype"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "items": {"type": "string", "minLength": 1}
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"dtype": {"const": "float64"}},
+            "required": ["dtype"]
+          },
+          "then": {
+            "properties": {"data": {"items": {"type": "number"}}}
+          }
+        },
+        {
+          "if": {
+            "properties": {"dtype": {"const": "string"}},
+            "required": ["dtype"]
+          },
+          "then": {
+            "properties": {"data": {"items": {"type": "string"}}}
+          }
+        },
+        {
+          "if": {
+            "properties": {"dtype": {"const": "int8"}},
+            "required": ["dtype"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "items": {"type": "integer", "minimum": -128, "maximum": 127}
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"dtype": {"const": "int32"}},
+            "required": ["dtype"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "items": {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"dtype": {"const": "int64"}},
+            "required": ["dtype"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "items": {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"dtype": {"const": "uint8"}},
+            "required": ["dtype"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "items": {"type": "integer", "minimum": 0, "maximum": 255}
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"dtype": {"const": "uint16"}},
+            "required": ["dtype"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "items": {"type": "integer", "minimum": 0, "maximum": 65535}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "bool_tensor": {
+      "allOf": [
+        {"$ref": "#/$defs/tensor"},
+        {"properties": {"dtype": {"const": "bool"}}}
+      ]
+    },
+    "float32_tensor": {
+      "allOf": [
+        {"$ref": "#/$defs/tensor"},
+        {"properties": {"dtype": {"const": "float32"}}}
+      ]
+    },
+    "float64_tensor": {
+      "allOf": [
+        {"$ref": "#/$defs/tensor"},
+        {"properties": {"dtype": {"const": "float64"}}}
+      ]
+    },
+    "int8_tensor": {
+      "allOf": [
+        {"$ref": "#/$defs/tensor"},
+        {"properties": {"dtype": {"const": "int8"}}}
+      ]
+    },
+    "int32_tensor": {
+      "allOf": [
+        {"$ref": "#/$defs/tensor"},
+        {"properties": {"dtype": {"const": "int32"}}}
+      ]
+    },
+    "int64_tensor": {
+      "allOf": [
+        {"$ref": "#/$defs/tensor"},
+        {"properties": {"dtype": {"const": "int64"}}}
+      ]
+    },
+    "string_tensor": {
+      "allOf": [
+        {"$ref": "#/$defs/tensor"},
+        {"properties": {"dtype": {"const": "string"}}}
+      ]
+    },
+    "uint8_tensor": {
+      "allOf": [
+        {"$ref": "#/$defs/tensor"},
+        {"properties": {"dtype": {"const": "uint8"}}}
+      ]
+    },
+    "uint16_tensor": {
+      "allOf": [
+        {"$ref": "#/$defs/tensor"},
+        {"properties": {"dtype": {"const": "uint16"}}}
+      ]
+    }
+  }
+}

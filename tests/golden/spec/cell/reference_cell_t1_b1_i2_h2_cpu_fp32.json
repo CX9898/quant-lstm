@@ -1,0 +1,694 @@
+{
+  "attributes": {},
+  "case_id": "reference_cell_t1_b1_i2_h2_cpu_fp32",
+  "execution_model": "cpu_fp32",
+  "expected": {
+    "checkpoints": {
+      "c_n": {
+        "data": [
+          -2,
+          -26
+        ],
+        "dtype": "int32",
+        "shape": [
+          1,
+          2
+        ]
+      },
+      "cell": {
+        "data": [
+          -2,
+          -26
+        ],
+        "dtype": "int32",
+        "shape": [
+          1,
+          1,
+          2
+        ]
+      },
+      "cell_gate_input": {
+        "data": [
+          -11,
+          -6
+        ],
+        "dtype": "int32",
+        "shape": [
+          1,
+          1,
+          2
+        ]
+      },
+      "cell_gate_output": {
+        "data": [
+          -42,
+          -24
+        ],
+        "dtype": "int32",
+        "shape": [
+          1,
+          1,
+          2
+        ]
+      },
+      "cell_tanh": {
+        "data": [
+          -4,
+          -49
+        ],
+        "dtype": "int32",
+        "shape": [
+          1,
+          1,
+          2
+        ]
+      },
+      "forget_gate_input": {
+        "data": [
+          1,
+          14
+        ],
+        "dtype": "int32",
+        "shape": [
+          1,
+          1,
+          2
+        ]
+      },
+      "forget_gate_output": {
+        "data": [
+          130,
+          155
+        ],
+        "dtype": "int32",
+        "shape": [
+          1,
+          1,
+          2
+        ]
+      },
+      "h_n": {
+        "data": [
+          -2,
+          -23
+        ],
+        "dtype": "int32",
+        "shape": [
+          1,
+          2
+        ]
+      },
+      "input_gate_input": {
+        "data": [
+          0,
+          11
+        ],
+        "dtype": "int32",
+        "shape": [
+          1,
+          1,
+          2
+        ]
+      },
+      "input_gate_output": {
+        "data": [
+          127,
+          149
+        ],
+        "dtype": "int32",
+        "shape": [
+          1,
+          1,
+          2
+        ]
+      },
+      "output": {
+        "data": [
+          -2,
+          -23
+        ],
+        "dtype": "int32",
+        "shape": [
+          1,
+          1,
+          2
+        ]
+      },
+      "output_gate_input": {
+        "data": [
+          2,
+          -4
+        ],
+        "dtype": "int32",
+        "shape": [
+          1,
+          1,
+          2
+        ]
+      },
+      "output_gate_output": {
+        "data": [
+          132,
+          119
+        ],
+        "dtype": "int32",
+        "shape": [
+          1,
+          1,
+          2
+        ]
+      },
+      "weight_hh_linear": {
+        "data": [
+          3,
+          4,
+          -7,
+          3,
+          4,
+          -11,
+          7,
+          0
+        ],
+        "dtype": "int32",
+        "shape": [
+          1,
+          1,
+          4,
+          2
+        ]
+      },
+      "weight_ih_linear": {
+        "data": [
+          -3,
+          7,
+          8,
+          11,
+          -15,
+          5,
+          -5,
+          -4
+        ],
+        "dtype": "int32",
+        "shape": [
+          1,
+          1,
+          4,
+          2
+        ]
+      }
+    },
+    "diagnostics": {
+      "cell_pre_round_sum": {
+        "data": [
+          "-2.30196",
+          "-26.462746"
+        ],
+        "dtype": "float32",
+        "shape": [
+          1,
+          1,
+          2
+        ]
+      },
+      "cell_products": {
+        "data": [
+          2080,
+          -5334,
+          -4960,
+          -3576
+        ],
+        "dtype": "int64",
+        "shape": [
+          1,
+          1,
+          2,
+          2
+        ]
+      },
+      "hidden_raw_product": {
+        "data": [
+          -528,
+          -5831
+        ],
+        "dtype": "int64",
+        "shape": [
+          1,
+          1,
+          2
+        ]
+      },
+      "scaled_cell_contributions": {
+        "data": [
+          "8.156863",
+          "-10.458823",
+          "-19.450981",
+          "-7.0117645"
+        ],
+        "dtype": "float32",
+        "shape": [
+          1,
+          1,
+          2,
+          2
+        ]
+      }
+    }
+  },
+  "inputs": {
+    "bias_enabled": {
+      "data": [
+        true
+      ],
+      "dtype": "bool",
+      "shape": []
+    },
+    "bias_hh": {
+      "data": [
+        0,
+        32,
+        -32,
+        0,
+        32,
+        -64,
+        32,
+        0
+      ],
+      "dtype": "int32",
+      "shape": [
+        8
+      ]
+    },
+    "bias_ih": {
+      "data": [
+        32,
+        -32,
+        64,
+        32,
+        -64,
+        32,
+        0,
+        64
+      ],
+      "dtype": "int32",
+      "shape": [
+        8
+      ]
+    },
+    "initial_cell": {
+      "data": [
+        16,
+        -32
+      ],
+      "dtype": "int32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "initial_hidden": {
+      "data": [
+        16,
+        -32
+      ],
+      "dtype": "int32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "input": {
+      "data": [
+        -95,
+        32
+      ],
+      "dtype": "int32",
+      "shape": [
+        1,
+        1,
+        2
+      ]
+    },
+    "operator_bitwidth": {
+      "data": [
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8
+      ],
+      "dtype": "uint8",
+      "shape": [
+        18
+      ]
+    },
+    "operator_granularity": {
+      "data": [
+        "per_tensor",
+        "per_tensor",
+        "per_tensor",
+        "per_channel",
+        "per_channel",
+        "per_channel",
+        "per_channel",
+        "per_tensor",
+        "per_tensor",
+        "per_tensor",
+        "per_tensor",
+        "per_tensor",
+        "per_tensor",
+        "per_tensor",
+        "per_tensor",
+        "per_tensor",
+        "per_tensor",
+        "per_tensor"
+      ],
+      "dtype": "string",
+      "shape": [
+        18
+      ]
+    },
+    "operator_is_symmetric": {
+      "data": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "dtype": "bool",
+      "shape": [
+        18
+      ]
+    },
+    "operator_is_unsigned": {
+      "data": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        true,
+        false,
+        true,
+        false
+      ],
+      "dtype": "bool",
+      "shape": [
+        18
+      ]
+    },
+    "operator_names": {
+      "data": [
+        "input",
+        "output",
+        "cell_state",
+        "weight_ih",
+        "weight_hh",
+        "bias_ih",
+        "bias_hh",
+        "weight_ih_linear",
+        "weight_hh_linear",
+        "input_gate_input",
+        "forget_gate_input",
+        "cell_gate_input",
+        "output_gate_input",
+        "input_gate_output",
+        "forget_gate_output",
+        "cell_gate_output",
+        "output_gate_output",
+        "cell_tanh_output"
+      ],
+      "dtype": "string",
+      "shape": [
+        18
+      ]
+    },
+    "quant_param_group_counts": {
+      "data": [
+        1,
+        1,
+        1,
+        8,
+        8,
+        8,
+        8,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "dtype": "int32",
+      "shape": [
+        18
+      ]
+    },
+    "quant_param_scales": {
+      "data": [
+        "0.007874016",
+        "0.007874016",
+        "0.015748031",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.003937008",
+        "0.031496063",
+        "0.031496063",
+        "0.031496063",
+        "0.031496063",
+        "0.031496063",
+        "0.031496063",
+        "0.003921569",
+        "0.003921569",
+        "0.007874016",
+        "0.003921569",
+        "0.007874016"
+      ],
+      "dtype": "float32",
+      "shape": [
+        46
+      ]
+    },
+    "quant_param_value_offsets": {
+      "data": [
+        0,
+        1,
+        2,
+        3,
+        11,
+        19,
+        27,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46
+      ],
+      "dtype": "int32",
+      "shape": [
+        19
+      ]
+    },
+    "quant_param_zero_points": {
+      "data": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "dtype": "int32",
+      "shape": [
+        46
+      ]
+    },
+    "scale_mode": {
+      "data": [
+        "affine"
+      ],
+      "dtype": "string",
+      "shape": []
+    },
+    "shape": {
+      "data": [
+        1,
+        1,
+        2,
+        2
+      ],
+      "dtype": "int64",
+      "shape": [
+        4
+      ]
+    },
+    "weight_hh": {
+      "data": [
+        32,
+        -64,
+        64,
+        32,
+        -32,
+        95,
+        64,
+        -64,
+        95,
+        32,
+        -64,
+        64,
+        32,
+        -95,
+        64,
+        32
+      ],
+      "dtype": "int32",
+      "shape": [
+        8,
+        2
+      ]
+    },
+    "weight_ih": {
+      "data": [
+        64,
+        -32,
+        -95,
+        64,
+        32,
+        95,
+        -64,
+        32,
+        95,
+        64,
+        -32,
+        -64,
+        64,
+        32,
+        95,
+        -95
+      ],
+      "dtype": "int32",
+      "shape": [
+        8,
+        2
+      ]
+    }
+  },
+  "kind": "cell",
+  "schema_version": 1
+}
