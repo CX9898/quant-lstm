@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 3.24)
 
 project(quant-lstm VERSION 0.1.0 LANGUAGES CXX)
 
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
 option(QUANT_LSTM_ENABLE_CUDA "构建 CUDA 浮点前向" ON)
 option(QUANT_LSTM_BUILD_TESTS "构建测试" ON)
 option(QUANT_LSTM_BUILD_EXAMPLES "构建示例" ON)
@@ -41,6 +44,8 @@ target_link_libraries(quant_lstm PUBLIC quant_lstm_headers)
 target_link_libraries(quant_lstm PRIVATE nlohmann_json::nlohmann_json)
 set_target_properties(quant_lstm PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_options(quant_lstm PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra>)
+add_library(quant_lstm::quant_lstm ALIAS quant_lstm)
+add_library(quant_lstm::headers ALIAS quant_lstm_headers)
 
 if(QUANT_LSTM_ENABLE_CUDA)
     include(CheckLanguage)
@@ -185,6 +190,16 @@ if(QUANT_LSTM_BUILD_TESTS)
     set_tests_properties(
         quant_params_bundle_schema
         PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(
+        NAME pytorch_interface_schemas
+        COMMAND
+            ${Python3_EXECUTABLE}
+            -m unittest tests/python/test_pytorch_interface_schemas.py
+    )
+    set_tests_properties(
+        pytorch_interface_schemas
+        PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
     add_test(
         NAME precision_contract
         COMMAND ${Python3_EXECUTABLE} -m unittest tests/python/test_precision_contract.py
@@ -373,4 +388,67 @@ endif()
 if(QUANT_LSTM_BUILD_EXAMPLES)
     add_executable(lstm_float_example example/lstm_float_example.cc)
     target_link_libraries(lstm_float_example PRIVATE quant_lstm)
+    add_executable(lstm_int32_example example/lstm_int32_example.cc)
+    target_link_libraries(lstm_int32_example PRIVATE quant_lstm)
 endif()
+
+
+install(
+    TARGETS quant_lstm quant_lstm_headers
+    EXPORT quant_lstmTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+if(QUANT_LSTM_BUILD_EXAMPLES)
+    install(
+        TARGETS lstm_float_example lstm_int32_example
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+endif()
+install(
+    DIRECTORY include/
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    FILES_MATCHING PATTERN "*.h" PATTERN "*.cuh"
+)
+install(
+    FILES
+        config/defaults/lstm_quant_default_v1.json
+        config/schema/lstm_quant_override.schema.json
+        config/schema/lstm_quant_resolved.schema.json
+        config/schema/lstm_quant_params_bundle.schema.json
+        config/schema/lstm_pytorch_quant_params.schema.json
+        config/schema/lstm_pytorch_bidirectional_quant_params.schema.json
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/quant-lstm/config
+)
+install(
+    FILES
+        README.md
+        docs/configuration.md
+        docs/dual-carrier-execution.md
+        docs/quantized-execution-spec.md
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/quant-lstm
+)
+
+
+configure_package_config_file(
+    cmake/quant-lstm-config.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/quant-lstm-config.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/quant-lstm
+)
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/quant-lstm-config-version.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+install(
+    EXPORT quant_lstmTargets
+    FILE quant-lstm-targets.cmake
+    NAMESPACE quant_lstm::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/quant-lstm
+)
+install(
+    FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/quant-lstm-config.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/quant-lstm-config-version.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/quant-lstm
+)

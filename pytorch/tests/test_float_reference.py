@@ -230,8 +230,6 @@ class FloatReferenceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             QuantLSTM(2, 3, num_layers=2)
         with self.assertRaises(ValueError):
-            QuantLSTM(2, 3, bidirectional=True)
-        with self.assertRaises(ValueError):
             QuantLSTM(2, 3, dtype=torch.float64)
 
         module = QuantLSTM(2, 3)

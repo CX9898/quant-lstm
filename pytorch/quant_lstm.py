@@ -1,4 +1,4 @@
-"""单层单向 LSTM 的浮点与 CUDA FP32 q-carrier PyTorch 接口。"""
+"""单层 LSTM 的浮点与 CUDA FP32 q-carrier PyTorch 接口。"""
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ def _resolved_override(resolved: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-class QuantLSTM(nn.Module):
+class _UnidirectionalQuantLSTM(nn.Module):
     """与单层单向 nn.LSTM 对齐的双模式模块。
 
     use_quantization=False 使用浮点路径。校准并设置
@@ -569,5 +569,520 @@ class QuantLSTM(nn.Module):
         return (
             f"{self.input_size}, {self.hidden_size}, bias={self.bias}, "
             f"batch_first={self.batch_first}, "
+            f"use_quantization={self.use_quantization}"
+        )
+
+
+class QuantLSTM(_UnidirectionalQuantLSTM):
+    """与单层 nn.LSTM 对齐的单向或双向量化模块。"""
+
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int,
+        num_layers: int = 1,
+        bias: bool = True,
+        batch_first: bool = False,
+        dropout: float = 0.0,
+        bidirectional: bool = False,
+        *,
+        device=None,
+        dtype=None,
+        use_quantization: bool = False,
+        quant_config: dict[str, Any] | str | Path | None = None,
+        calibration_method: str = "minmax",
+        cublas_math_mode: str = "pedantic",
+        require_exact_accumulation: bool = False,
+    ) -> None:
+        super().__init__(
+            input_size,
+            hidden_size,
+            num_layers=num_layers,
+            bias=bias,
+            batch_first=batch_first,
+            dropout=dropout,
+            bidirectional=False,
+            device=device,
+            dtype=dtype,
+            use_quantization=use_quantization,
+            quant_config=quant_config,
+            calibration_method=calibration_method,
+            cublas_math_mode=cublas_math_mode,
+            require_exact_accumulation=require_exact_accumulation,
+        )
+        self.bidirectional = bool(bidirectional)
+        if self.bidirectional:
+            self.weight_ih_l0_reverse = nn.Parameter(
+                torch.empty_like(self.weight_ih_l0)
+            )
+            self.weight_hh_l0_reverse = nn.Parameter(
+                torch.empty_like(self.weight_hh_l0)
+            )
+            if self.bias:
+                self.bias_ih_l0_reverse = nn.Parameter(
+                    torch.empty_like(self.bias_ih_l0)
+                )
+                self.bias_hh_l0_reverse = nn.Parameter(
+                    torch.empty_like(self.bias_hh_l0)
+                )
+            else:
+                self.register_parameter("bias_ih_l0_reverse", None)
+                self.register_parameter("bias_hh_l0_reverse", None)
+            bound = 1.0 / math.sqrt(self.hidden_size)
+            with torch.no_grad():
+                for name in (
+                    "weight_ih_l0_reverse",
+                    "weight_hh_l0_reverse",
+                    "bias_ih_l0_reverse",
+                    "bias_hh_l0_reverse",
+                ):
+                    parameter = getattr(self, name, None)
+                    if parameter is not None:
+                        parameter.uniform_(-bound, bound)
+
+        self._reverse_calibration_session = None
+        self._reverse_quant_params_bundle_json: Optional[str] = None
+        self._reverse_safety_report: Optional[dict[str, Any]] = None
+
+    @property
+    def num_directions(self) -> int:
+        return 2 if self.bidirectional else 1
+
+    def _invalidate_quant_params(self) -> None:
+        super()._invalidate_quant_params()
+        if hasattr(self, "_reverse_calibration_session"):
+            self._reverse_calibration_session = None
+            self._reverse_quant_params_bundle_json = None
+            self._reverse_safety_report = None
+
+    def _time_dimension(self) -> int:
+        return 1 if self.batch_first else 0
+
+    def _reverse_sequence(self, value: Tensor) -> Tensor:
+        return torch.flip(value, dims=(self._time_dimension(),))
+
+    def _split_bidirectional_state(
+        self,
+        input: Tensor,
+        hx: Optional[tuple[Tensor, Tensor]],
+    ) -> tuple[
+        tuple[Optional[Tensor], Optional[Tensor]],
+        tuple[Optional[Tensor], Optional[Tensor]],
+    ]:
+        if hx is None:
+            return (None, None), (None, None)
+        if len(hx) != 2:
+            raise ValueError("hx 必须是 (h_0, c_0)")
+        hidden, cell = hx
+        if hidden is None or cell is None:
+            raise ValueError("h_0 和 c_0 必须同时提供")
+        batch = input.size(0 if self.batch_first else 1)
+        expected = (2, batch, self.hidden_size)
+        if tuple(hidden.shape) != expected or tuple(cell.shape) != expected:
+            raise RuntimeError("双向 h_0/c_0 shape 必须为 [2,B,H]")
+        return (
+            hidden[0:1].contiguous(),
+            cell[0:1].contiguous(),
+        ), (
+            hidden[1:2].contiguous(),
+            cell[1:2].contiguous(),
+        )
+
+    def _ensure_reverse_calibration_session(self):
+        if self._reverse_calibration_session is None:
+            self._reverse_calibration_session = _quant_lstm.CalibrationSession(
+                self._resolved_config_json,
+                self.input_size,
+                self.hidden_size,
+                self.bias,
+                self.calibration_method,
+            )
+        return self._reverse_calibration_session
+
+    def _collect_calibration(
+        self, input: Tensor, hx: Optional[tuple[Tensor, Tensor]]
+    ) -> None:
+        if not self.bidirectional:
+            return super()._collect_calibration(input, hx)
+        forward_state, reverse_state = self._split_bidirectional_state(input, hx)
+        super()._collect_calibration(input, forward_state)
+        reverse_session = self._ensure_reverse_calibration_session()
+        reverse_session.collect(
+            self._cpu_tensor(self._reverse_sequence(input)),
+            self._cpu_tensor(self.weight_ih_l0_reverse),
+            self._cpu_tensor(self.weight_hh_l0_reverse),
+            self._cpu_tensor(self.bias_ih_l0_reverse),
+            self._cpu_tensor(self.bias_hh_l0_reverse),
+            self._cpu_tensor(reverse_state[0]),
+            self._cpu_tensor(reverse_state[1]),
+            self.batch_first,
+        )
+
+    def finalize_calibration(self) -> dict[str, Any]:
+        if not self.bidirectional:
+            return super().finalize_calibration()
+        if self._reverse_calibration_session is None:
+            raise RuntimeError(
+                "双向模块尚未收集 reverse 方向校准数据"
+            )
+        forward_report = super().finalize_calibration()
+        reverse_result = self._reverse_calibration_session.finalize(
+            self.require_exact_accumulation
+        )
+        if reverse_result["resolved_config_json"] != self._resolved_config_json:
+            raise RuntimeError("双向 resolved config 不一致")
+        forward_bundle = _strict_json_loads(
+            self._quant_params_bundle_json
+        )
+        reverse_bundle = _strict_json_loads(
+            reverse_result["bundle_json"]
+        )
+        if (
+            forward_bundle["operators"]["input"]
+            != reverse_bundle["operators"]["input"]
+        ):
+            raise RuntimeError("双向校准必须共享完全相同的 input 量化网格")
+        if reverse_result["batch_count"] != forward_report["batch_count"]:
+            raise RuntimeError("双向校准 batch 数不一致")
+        self._reverse_quant_params_bundle_json = reverse_result["bundle_json"]
+        self._reverse_safety_report = reverse_result["safety"]
+        forward_safety = self._last_safety_report
+        self._last_safety_report = {
+            "forward": forward_safety,
+            "reverse": self._reverse_safety_report,
+        }
+        if self._reverse_safety_report["has_precision_risk"]:
+            warnings.warn(
+                "reverse 方向包含 FP32 precision_risk",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        return {
+            "batch_count": forward_report["batch_count"],
+            "method": forward_report["method"],
+            "safety": self._last_safety_report,
+        }
+
+    def is_calibrated(self) -> bool:
+        if not self.bidirectional:
+            return super().is_calibrated()
+        return (
+            self._quant_params_bundle_json is not None
+            and self._reverse_quant_params_bundle_json is not None
+        )
+
+    def calibration_state(self) -> str | dict[str, str]:
+        if not self.bidirectional:
+            return super().calibration_state()
+        return {
+            "forward": super().calibration_state(),
+            "reverse": (
+                "empty"
+                if self._reverse_calibration_session is None
+                else self._reverse_calibration_session.state
+            ),
+        }
+
+    def _run_float_direction(
+        self,
+        input: Tensor,
+        state: tuple[Optional[Tensor], Optional[Tensor]],
+        reverse: bool,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        direction_input = self._reverse_sequence(input) if reverse else input
+        suffix = "_reverse" if reverse else ""
+        output, hidden, cell = _quant_lstm.lstm_forward(
+            direction_input,
+            getattr(self, f"weight_ih_l0{suffix}"),
+            getattr(self, f"weight_hh_l0{suffix}"),
+            getattr(self, f"bias_ih_l0{suffix}"),
+            getattr(self, f"bias_hh_l0{suffix}"),
+            state[0],
+            state[1],
+            self.batch_first,
+        )
+        if reverse:
+            output = self._reverse_sequence(output)
+        return output, hidden, cell
+
+    def _float_forward(
+        self, input: Tensor, hx: Optional[tuple[Tensor, Tensor]]
+    ) -> tuple[Tensor, tuple[Tensor, Tensor]]:
+        if not self.bidirectional:
+            return super()._float_forward(input, hx)
+        forward_state, reverse_state = self._split_bidirectional_state(input, hx)
+        forward = self._run_float_direction(input, forward_state, False)
+        reverse = self._run_float_direction(input, reverse_state, True)
+        return torch.cat((forward[0], reverse[0]), dim=-1), (
+            torch.cat((forward[1], reverse[1]), dim=0),
+            torch.cat((forward[2], reverse[2]), dim=0),
+        )
+
+    def _run_quantized_direction(
+        self,
+        input: Tensor,
+        state: tuple[Optional[Tensor], Optional[Tensor]],
+        reverse: bool,
+    ):
+        direction_input = self._reverse_sequence(input) if reverse else input
+        suffix = "_reverse" if reverse else ""
+        bundle_json = (
+            self._reverse_quant_params_bundle_json
+            if reverse
+            else self._quant_params_bundle_json
+        )
+        result = _quant_lstm.lstm_forward_quantized(
+            direction_input,
+            getattr(self, f"weight_ih_l0{suffix}"),
+            getattr(self, f"weight_hh_l0{suffix}"),
+            getattr(self, f"bias_ih_l0{suffix}"),
+            getattr(self, f"bias_hh_l0{suffix}"),
+            state[0],
+            state[1],
+            self.batch_first,
+            bundle_json,
+            self.cublas_math_mode,
+            self.require_exact_accumulation,
+            self.training,
+        )
+        output = self._reverse_sequence(result[0]) if reverse else result[0]
+        return output, result[1], result[2], result[3], result[4]
+
+    def _direction_qat_state(
+        self,
+        input: Tensor,
+        state: tuple[Optional[Tensor], Optional[Tensor]],
+        checkpoints: dict[str, Any],
+        reverse: bool,
+    ) -> dict[str, Any]:
+        bundle_json = (
+            self._reverse_quant_params_bundle_json
+            if reverse
+            else self._quant_params_bundle_json
+        )
+        bundle = _strict_json_loads(bundle_json)
+        batch = input.size(0 if self.batch_first else 1)
+        state_shape = (1, batch, self.hidden_size)
+        hidden = (
+            torch.zeros(state_shape, device=input.device)
+            if state[0] is None
+            else state[0]
+        )
+        cell = (
+            torch.zeros(state_shape, device=input.device)
+            if state[1] is None
+            else state[1]
+        )
+        suffix = "_reverse" if reverse else ""
+        tensors = {
+            "input": (input, "input", False),
+            "weight_ih": (
+                getattr(self, f"weight_ih_l0{suffix}"),
+                "weight_ih",
+                True,
+            ),
+            "weight_hh": (
+                getattr(self, f"weight_hh_l0{suffix}"),
+                "weight_hh",
+                True,
+            ),
+            "h_0": (hidden, "output", False),
+            "c_0": (cell, "cell_state", False),
+        }
+        if self.bias:
+            tensors["bias_ih"] = (
+                getattr(self, f"bias_ih_l0{suffix}"),
+                "bias_ih",
+                True,
+            )
+            tensors["bias_hh"] = (
+                getattr(self, f"bias_hh_l0{suffix}"),
+                "bias_hh",
+                True,
+            )
+        quantized = {}
+        masks = {}
+        for name, (tensor, operator, per_channel) in tensors.items():
+            quantized[name], masks[name] = self._quantize_saved_tensor(
+                tensor, operator, bundle, per_channel
+            )
+        return {
+            "quantized_master": quantized,
+            "master_clamp_masks": masks,
+            "checkpoints": checkpoints.get("values", {}),
+            "checkpoint_clamp_masks": checkpoints.get("clamp_masks", {}),
+        }
+
+    def _quantized_forward(
+        self, input: Tensor, hx: Optional[tuple[Tensor, Tensor]]
+    ) -> tuple[Tensor, tuple[Tensor, Tensor]]:
+        if not self.bidirectional:
+            return super()._quantized_forward(input, hx)
+        if not self.is_calibrated():
+            raise RuntimeError(
+                "双向量化推理需要两个方向都已完成校准或参数导入"
+            )
+        if not input.is_cuda:
+            raise RuntimeError("量化 FP 载体主路径只支持 CUDA input")
+        forward_state, reverse_state = self._split_bidirectional_state(input, hx)
+        forward = self._run_quantized_direction(
+            input, forward_state, False
+        )
+        reverse_input = self._reverse_sequence(input)
+        reverse = self._run_quantized_direction(
+            input, reverse_state, True
+        )
+        self._last_safety_report = {
+            "forward": forward[4],
+            "reverse": reverse[4],
+        }
+        if self.training:
+            self._qat_saved_state = {
+                "forward": self._direction_qat_state(
+                    input, forward_state, forward[3], False
+                ),
+                "reverse": self._direction_qat_state(
+                    reverse_input, reverse_state, reverse[3], True
+                ),
+            }
+        return torch.cat((forward[0], reverse[0]), dim=-1), (
+            torch.cat((forward[1], reverse[1]), dim=0),
+            torch.cat((forward[2], reverse[2]), dim=0),
+        )
+
+    def export_quant_params(
+        self, destination: str | Path | None = None
+    ) -> dict[str, Any]:
+        if not self.bidirectional:
+            return super().export_quant_params(destination)
+        if not self.is_calibrated():
+            raise RuntimeError("双向模块尚未完成两个方向的校准")
+        resolved = self.get_quant_config()
+        document = {
+            "schema_version": 2,
+            "execution_metadata": {
+                "carrier": "cuda_fp32_qcarrier",
+                "activation_mode": "real_sigmoid_tanh",
+                "cublas_math_mode": self.cublas_math_mode,
+                "standard_scale_mode": resolved["scale_mode"],
+                "bidirectional": True,
+            },
+            "quant_params": _strict_json_loads(
+                self._quant_params_bundle_json
+            ),
+            "quant_params_reverse": _strict_json_loads(
+                self._reverse_quant_params_bundle_json
+            ),
+        }
+        if destination is not None:
+            Path(destination).write_text(
+                json.dumps(document, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+        return document
+
+    def load_quant_params(
+        self, source: dict[str, Any] | str | Path
+    ) -> dict[str, Any]:
+        if not self.bidirectional:
+            return super().load_quant_params(source)
+        document = (
+            source
+            if isinstance(source, dict)
+            else _strict_json_loads(_json_source(source))
+        )
+        if set(document) != {
+            "schema_version",
+            "execution_metadata",
+            "quant_params",
+            "quant_params_reverse",
+        }:
+            raise ValueError("双向参数文档字段不完整或包含未知字段")
+        if document["schema_version"] != 2:
+            raise ValueError("双向参数文档必须使用 schema_version=2")
+        metadata = document["execution_metadata"]
+        if not isinstance(metadata, dict) or set(metadata) != {
+            "carrier",
+            "activation_mode",
+            "cublas_math_mode",
+            "standard_scale_mode",
+            "bidirectional",
+        }:
+            raise ValueError("双向 execution_metadata 字段不完整或非法")
+        if metadata["carrier"] != "cuda_fp32_qcarrier":
+            raise ValueError("只支持 cuda_fp32_qcarrier")
+        if metadata["activation_mode"] != "real_sigmoid_tanh":
+            raise ValueError("只支持 real_sigmoid_tanh activation mode")
+        if metadata["cublas_math_mode"] not in _MATH_MODES:
+            raise ValueError("cublas_math_mode 非法")
+        if metadata["bidirectional"] is not True:
+            raise ValueError("双向参数文档必须标记 bidirectional=true")
+
+        audited = []
+        for field in ("quant_params", "quant_params_reverse"):
+            result = _quant_lstm.audit_quant_params_bundle(
+                json.dumps(
+                    document[field],
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ),
+                self.require_exact_accumulation,
+            )
+            if (
+                result["input_size"] != self.input_size
+                or result["hidden_size"] != self.hidden_size
+                or result["bias_enabled"] != self.bias
+            ):
+                raise ValueError(f"{field} shape 或 bias 与模块不匹配")
+            audited.append(result)
+        if (
+            audited[0]["resolved_config_json"]
+            != audited[1]["resolved_config_json"]
+        ):
+            raise ValueError("双向参数包的 resolved config 不一致")
+        forward_bundle = _strict_json_loads(audited[0]["bundle_json"])
+        reverse_bundle = _strict_json_loads(audited[1]["bundle_json"])
+        if (
+            forward_bundle["operators"]["input"]
+            != reverse_bundle["operators"]["input"]
+        ):
+            raise ValueError("双向参数包没有共享 input 量化网格")
+        resolved = _strict_json_loads(
+            audited[0]["resolved_config_json"]
+        )
+        if metadata["standard_scale_mode"] != resolved["scale_mode"]:
+            raise ValueError("standard_scale_mode 与参数包不一致")
+
+        self._quant_params_bundle_json = audited[0]["bundle_json"]
+        self._reverse_quant_params_bundle_json = audited[1]["bundle_json"]
+        self._resolved_config_json = audited[0]["resolved_config_json"]
+        self._override_config = _resolved_override(resolved)
+        self._calibration_session = None
+        self._reverse_calibration_session = None
+        self._reverse_safety_report = audited[1]["safety"]
+        self._last_safety_report = {
+            "forward": audited[0]["safety"],
+            "reverse": audited[1]["safety"],
+        }
+        self._qat_saved_state = None
+        self.cublas_math_mode = metadata["cublas_math_mode"]
+        if any(
+            report["has_precision_risk"]
+            for report in self._last_safety_report.values()
+        ):
+            warnings.warn(
+                "导入的双向配置包含 FP32 precision_risk",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        return self._last_safety_report
+
+    import_quant_params = load_quant_params
+
+    def extra_repr(self) -> str:
+        return (
+            f"{self.input_size}, {self.hidden_size}, bias={self.bias}, "
+            f"batch_first={self.batch_first}, "
+            f"bidirectional={self.bidirectional}, "
             f"use_quantization={self.use_quantization}"
         )

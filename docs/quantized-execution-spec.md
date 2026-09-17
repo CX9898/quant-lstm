@@ -1,6 +1,6 @@
 # LSTM 量化执行规格
 
-> 状态：阶段 6 已完成 QuantLSTM CUDA FP 载体接口、canonical 配置/参数流与 QAT 前向状态保存；真实数据精度仍待后续阶段接入
+> 状态：阶段 7 已完成双向 QuantLSTM、方向独立参数与 CPU-only 安装包；真实数据精度仍待后续阶段接入
 > 参考基线：`/home/chengxing.zou/projects/quant-gru`，commit `9c25d14`
 > 公式推导：`docs/lstm-quantization-formula-derivation.md`
 > 分阶段计划：`docs/implementation-plan.md`
@@ -333,6 +333,7 @@ Golden 使用显式 `dtype/shape/data`、row-major 一维 data。Standard scale 
 5. 已完成：正式 FP32 checkpoint 的 18 点 MinMax/直方图收集、Empty/Dirty/Locked 生命周期、逐组 fallback 报告，以及完整 `4H` 参数包 canonical round-trip。
 6. 已完成：SQNR/Percentile 独立候选范围搜索复用统一 MinMax、minimum-scale、POT2 CoverRange 和执行参数派生链；参数包导入后 CUDA FP 主路径结果逐值一致。
 7. 已完成：PyTorch 接口只通过 C++ resolver 消费 canonical resolved config；校准、完整 `4H` 参数包导入导出、CUDA 直接调用、两种布局和真实 Clamp mask 已通过阶段 6 验收。
-8. 待后续阶段完成：代表性真实数据和模型级指标；接入前只能声明 `synthetic_numeric` 数值验证通过。
+8. 已完成：双向 forward/reverse 分别校准并强制共享 input 网格，输出与 `h_n/c_n` 顺序对齐 PyTorch；CPU-only 构建、测试、安装、外部消费和无 CUDA 链接门禁通过。
+9. 待后续阶段完成：代表性真实数据和模型级指标；接入前只能声明 `synthetic_numeric` 数值验证通过。
 
 上述证据文件按次生成且不提交仓库；审核通过的 schema、配置、阈值和规则变更必须入库并单独审查。
