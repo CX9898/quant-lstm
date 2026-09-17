@@ -84,6 +84,7 @@ struct LstmQuantizedFpCudaTimingEvents {
     cudaEvent_t start = nullptr;
     cudaEvent_t input_quantized = nullptr;
     cudaEvent_t recurrent_quantized = nullptr;
+    cudaEvent_t quantization_complete = nullptr;
     cudaEvent_t core_complete = nullptr;
     cudaEvent_t complete = nullptr;
 };

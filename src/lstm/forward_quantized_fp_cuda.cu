@@ -439,9 +439,10 @@ void validateTimingEvents(
     if (timing_events == nullptr) {
         return;
     }
-    const std::array<cudaEvent_t, 5> events{
+    const std::array<cudaEvent_t, 6> events{
         timing_events->start, timing_events->input_quantized,
         timing_events->recurrent_quantized,
+        timing_events->quantization_complete,
         timing_events->core_complete, timing_events->complete};
     for (std::size_t index = 0; index < events.size(); ++index) {
         validateEvent(events[index], "timing CUDA event");
@@ -1155,11 +1156,6 @@ void lstmForwardQuantizedFpCuda(
                                   context.streams[1]),
                   "record input quantization complete");
     }
-    cuda_detail::runGemm(context.handles[1], sequence_batch, channels_int,
-                         input_size, quantized_input, quantized_weight_ih,
-                         input_linear);
-    checkCuda(cudaEventRecord(context.events[0], context.streams[1]),
-              "record all-time input GEMM event");
 
     const std::size_t weight_hh_elements =
         checkedMul(channels, hidden, "4H*H");
@@ -1204,7 +1200,24 @@ void lstmForwardQuantizedFpCuda(
         checkCuda(cudaEventRecord(timing_events->recurrent_quantized,
                                   context.streams[0]),
                   "record recurrent quantization complete");
+        checkCuda(cudaStreamWaitEvent(context.streams[0],
+                                      timing_events->input_quantized, 0),
+                  "recurrent stream wait input quantization");
+        checkCuda(cudaEventRecord(
+                      timing_events->quantization_complete,
+                      context.streams[0]),
+                  "record combined quantization complete");
+        checkCuda(cudaStreamWaitEvent(
+                      context.streams[1],
+                      timing_events->quantization_complete, 0),
+                  "input stream wait combined quantization");
     }
+
+    cuda_detail::runGemm(context.handles[1], sequence_batch, channels_int,
+                         input_size, quantized_input, quantized_weight_ih,
+                         input_linear);
+    checkCuda(cudaEventRecord(context.events[0], context.streams[1]),
+              "record all-time input GEMM event");
 
     for (int time = 0; time < sequence_length; ++time) {
         cuda_detail::runGemm(context.handles[0], batch_size, channels_int,
