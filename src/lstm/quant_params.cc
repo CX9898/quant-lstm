@@ -3,6 +3,8 @@
 #include "lstm/gate_layout.h"
 #include "quantization/scale_encoding.h"
 
+#include <algorithm>
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 
@@ -26,9 +28,57 @@ std::size_t checkedChannelCount(std::int64_t hidden_size) {
     return static_cast<std::size_t>(hidden_size) * kGateCount;
 }
 
-std::size_t expectedGroupCount(QuantOperator id, QuantGranularity granularity,
-                               std::size_t channel_count) {
+quantization::CalibrationResult calibrateGroup(
+    const CalibrationRange& range, const quantization::QuantizationType& type,
+    quantization::ScaleMode scale_mode) {
+    quantization::CalibrationResult result =
+        quantization::calibrateMinMax(range.minimum, range.maximum, type);
+    if (scale_mode == quantization::ScaleMode::Pot2) {
+        result.param = quantization::convertScaleToPot2CoverRange(result, type).param;
+    }
+    return result;
+}
+
+}  // namespace
+
+bool CalibrationRange::empty() const noexcept {
+    return !std::isfinite(minimum) || !std::isfinite(maximum) || minimum > maximum;
+}
+
+void CalibrationRange::observe(float value) {
+    if (!std::isfinite(value)) {
+        throw std::invalid_argument("校准值必须为有限 FP32");
+    }
+    minimum = std::min(minimum, value);
+    maximum = std::max(maximum, value);
+    ++sample_count;
+}
+
+void CalibrationRange::observe(const float* values, std::size_t count) {
+    if (values == nullptr && count != 0) {
+        throw std::invalid_argument("校准张量指针不能为空");
+    }
+    for (std::size_t index = 0; index < count; ++index) {
+        observe(values[index]);
+    }
+}
+
+void CalibrationRange::merge(const CalibrationRange& other) {
+    if (other.empty()) {
+        return;
+    }
+    minimum = std::min(minimum, other.minimum);
+    maximum = std::max(maximum, other.maximum);
+    sample_count += other.sample_count;
+}
+
+std::size_t quantizationGroupCount(QuantOperator id, QuantGranularity granularity,
+                                   std::int64_t hidden_size) {
+    const std::size_t channel_count = checkedChannelCount(hidden_size);
     if (!isParameterOperator(id)) {
+        if (granularity != QuantGranularity::PerTensor) {
+            throw std::invalid_argument("非参数量化点 granularity 必须为 per_tensor");
+        }
         return 1;
     }
     switch (granularity) {
@@ -42,18 +92,66 @@ std::size_t expectedGroupCount(QuantOperator id, QuantGranularity granularity,
     throw std::invalid_argument("QuantGranularity 枚举值非法");
 }
 
-quantization::CalibrationResult calibrateGroup(
-    const CalibrationRange& range, const quantization::QuantizationType& type,
-    quantization::ScaleMode scale_mode) {
-    quantization::CalibrationResult result =
-        quantization::calibrateMinMax(range.minimum, range.maximum, type);
-    if (scale_mode == quantization::ScaleMode::Pot2) {
-        result.param = quantization::convertScaleToPot2CoverRange(result, type).param;
+std::size_t quantizationGroupIndex(QuantOperator id, QuantGranularity granularity,
+                                   std::size_t channel, std::int64_t hidden_size) {
+    const std::size_t channel_count = checkedChannelCount(hidden_size);
+    if (channel >= channel_count) {
+        throw std::out_of_range("参数 channel 超出 4H");
     }
-    return result;
+    if (!isParameterOperator(id)) {
+        throw std::invalid_argument("非参数量化点没有 channel group");
+    }
+    switch (granularity) {
+        case QuantGranularity::PerTensor:
+            return 0;
+        case QuantGranularity::PerGate:
+            return channel / static_cast<std::size_t>(hidden_size);
+        case QuantGranularity::PerChannel:
+            return channel;
+    }
+    throw std::invalid_argument("QuantGranularity 枚举值非法");
 }
 
-}  // namespace
+void LstmQuantizationRanges::reset(const LstmOperatorQuantConfig& config,
+                                   std::int64_t hidden_size, bool bias_enabled) {
+    config.validate();
+    for (std::size_t index = 0; index < operators.size(); ++index) {
+        const auto id = static_cast<QuantOperator>(index);
+        auto& groups = operators[index];
+        if (!bias_enabled && isBiasOperator(id)) {
+            groups.clear();
+            continue;
+        }
+        groups.assign(
+            quantizationGroupCount(id, config.operators[index].granularity, hidden_size), {});
+    }
+}
+
+void LstmQuantizationRanges::validateComplete(
+    const LstmOperatorQuantConfig& config, std::int64_t hidden_size,
+    bool bias_enabled) const {
+    config.validate();
+    for (std::size_t index = 0; index < operators.size(); ++index) {
+        const auto id = static_cast<QuantOperator>(index);
+        const auto& groups = operators[index];
+        if (!bias_enabled && isBiasOperator(id)) {
+            if (!groups.empty()) {
+                throw std::invalid_argument("bias=False 时 bias 校准范围必须缺失");
+            }
+            continue;
+        }
+        const std::size_t expected = quantizationGroupCount(
+            id, config.operators[index].granularity, hidden_size);
+        if (groups.size() != expected) {
+            throw std::invalid_argument("校准 range 数量与 granularity 不匹配");
+        }
+        for (const CalibrationRange& group : groups) {
+            if (group.empty()) {
+                throw std::invalid_argument("校准 range 缺少有限观测值");
+            }
+        }
+    }
+}
 
 const std::vector<CalibrationRange>& LstmQuantizationRanges::at(QuantOperator id) const {
     return operators.at(operatorIndex(id));
@@ -81,7 +179,7 @@ void LstmQuantParams::validate(const LstmOperatorQuantConfig& config) const {
         }
         const std::size_t expected_values = isParameterOperator(id) ? channel_count : 1;
         const std::size_t expected_groups =
-            expectedGroupCount(id, finalized.source_granularity, channel_count);
+            quantizationGroupCount(id, finalized.source_granularity, hidden_size);
         if (finalized.values.size() != expected_values ||
             finalized.group_diagnostics.size() != expected_groups ||
             finalized.source_granularity != config.at(id).granularity) {
@@ -127,6 +225,7 @@ LstmQuantParams finalizeQuantParams(const LstmOperatorQuantConfig& config,
     LstmQuantParams result;
     result.hidden_size = hidden_size;
     result.bias_enabled = bias_enabled;
+    ranges.validateComplete(config, hidden_size, bias_enabled);
 
     for (std::size_t index = 0; index < kQuantOperatorCount; ++index) {
         const auto id = static_cast<QuantOperator>(index);
@@ -143,7 +242,7 @@ LstmQuantParams finalizeQuantParams(const LstmOperatorQuantConfig& config,
         }
 
         const std::size_t group_count =
-            expectedGroupCount(id, operator_config.granularity, channel_count);
+            quantizationGroupCount(id, operator_config.granularity, hidden_size);
         if (source_ranges.size() != group_count) {
             throw std::invalid_argument("校准 range 数量与 granularity 不匹配");
         }

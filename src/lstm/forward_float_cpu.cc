@@ -58,7 +58,7 @@ void validateLstmFloatArguments(const LstmShape& shape, const LstmFloatWeights& 
 void lstmForwardFloatCpu(const LstmShape& shape, const LstmFloatWeights& weights,
                          const float* input, const float* initial_hidden,
                          const float* initial_cell, float* output, float* final_hidden,
-                         float* final_cell) {
+                         float* final_cell, LstmFloatReferenceTrace* trace) {
     validateLstmFloatArguments(shape, weights, input, initial_hidden, initial_cell, output,
                                final_hidden, final_cell);
 
@@ -66,7 +66,21 @@ void lstmForwardFloatCpu(const LstmShape& shape, const LstmFloatWeights& weights
     const auto input_size = static_cast<std::size_t>(shape.input_size);
     const auto hidden_size = static_cast<std::size_t>(shape.hidden_size);
     const auto state_elements = batch_size * hidden_size;
+    const auto gate_elements =
+        static_cast<std::size_t>(shape.sequence_length) * batch_size * kGateCount * hidden_size;
+    const auto recurrent_elements =
+        static_cast<std::size_t>(shape.sequence_length) * state_elements;
     const bool has_bias = weights.bias_ih != nullptr;
+
+    if (trace != nullptr) {
+        trace->weight_input_hidden_linear.assign(gate_elements, 0.0F);
+        trace->weight_hidden_hidden_linear.assign(gate_elements, 0.0F);
+        trace->gate_inputs.assign(gate_elements, 0.0F);
+        trace->gate_outputs.assign(gate_elements, 0.0F);
+        trace->cell_states.assign(recurrent_elements, 0.0F);
+        trace->cell_tanh_outputs.assign(recurrent_elements, 0.0F);
+        trace->hidden_outputs.assign(recurrent_elements, 0.0F);
+    }
 
     if (initial_hidden == nullptr) {
         std::fill_n(final_hidden, state_elements, 0.0F);
@@ -83,18 +97,30 @@ void lstmForwardFloatCpu(const LstmShape& shape, const LstmFloatWeights& weights
                 input + (static_cast<std::size_t>(time) * batch_size + batch) * input_size;
             float* hidden_row = final_hidden + batch * hidden_size;
             float* cell_row = final_cell + batch * hidden_size;
+            const std::size_t gate_trace_offset =
+                (static_cast<std::size_t>(time) * batch_size + batch) *
+                kGateCount * hidden_size;
+            const std::size_t state_trace_offset =
+                (static_cast<std::size_t>(time) * batch_size + batch) * hidden_size;
 
             for (std::size_t channel = 0; channel < kGateCount * hidden_size; ++channel) {
-                float value = has_bias ? weights.bias_ih[channel] + weights.bias_hh[channel] : 0.0F;
+                float input_linear = has_bias ? weights.bias_ih[channel] : 0.0F;
+                float hidden_linear = has_bias ? weights.bias_hh[channel] : 0.0F;
                 const float* weight_ih_row = weights.weight_ih + channel * input_size;
                 const float* weight_hh_row = weights.weight_hh + channel * hidden_size;
                 for (std::size_t index = 0; index < input_size; ++index) {
-                    value += weight_ih_row[index] * input_row[index];
+                    input_linear += weight_ih_row[index] * input_row[index];
                 }
                 for (std::size_t index = 0; index < hidden_size; ++index) {
-                    value += weight_hh_row[index] * hidden_row[index];
+                    hidden_linear += weight_hh_row[index] * hidden_row[index];
                 }
-                gates[channel] = value;
+                gates[channel] = input_linear + hidden_linear;
+                if (trace != nullptr) {
+                    const std::size_t index = gate_trace_offset + channel;
+                    trace->weight_input_hidden_linear[index] = input_linear;
+                    trace->weight_hidden_hidden_linear[index] = hidden_linear;
+                    trace->gate_inputs[index] = gates[channel];
+                }
             }
 
             for (std::size_t hidden = 0; hidden < hidden_size; ++hidden) {
@@ -108,11 +134,23 @@ void lstmForwardFloatCpu(const LstmShape& shape, const LstmFloatWeights& weights
                     sigmoid(gates[gateOffset(GateKind::Output, hidden_size) + hidden]);
 
                 const float next_cell = forget_gate * cell_row[hidden] + input_gate * cell_gate;
-                const float next_hidden = output_gate * std::tanh(next_cell);
+                const float cell_tanh = std::tanh(next_cell);
+                const float next_hidden = output_gate * cell_tanh;
                 cell_row[hidden] = next_cell;
                 hidden_row[hidden] = next_hidden;
                 output[(static_cast<std::size_t>(time) * batch_size + batch) * hidden_size +
                        hidden] = next_hidden;
+                if (trace != nullptr) {
+                    const std::array<float, kGateCount> gate_values{
+                        input_gate, forget_gate, cell_gate, output_gate};
+                    for (std::size_t gate = 0; gate < kGateCount; ++gate) {
+                        trace->gate_outputs[gate_trace_offset + gate * hidden_size + hidden] =
+                            gate_values[gate];
+                    }
+                    trace->cell_states[state_trace_offset + hidden] = next_cell;
+                    trace->cell_tanh_outputs[state_trace_offset + hidden] = cell_tanh;
+                    trace->hidden_outputs[state_trace_offset + hidden] = next_hidden;
+                }
             }
         }
     }

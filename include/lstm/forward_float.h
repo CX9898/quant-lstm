@@ -1,6 +1,8 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <vector>
 
 // 本模块定义单层、单向 FP32 LSTM 的载体无关公共数据契约。
 // 输入和输出均为 row-major time-major；权重使用 PyTorch 的 [4H,I]/[4H,H] 布局。
@@ -20,6 +22,18 @@ struct LstmFloatWeights {
     const float* bias_hh;
 };
 
+// 正式 FP32 reference 的逐时间步 checkpoint。门张量布局为 [T,B,4,H]，
+// 状态张量布局为 [T,B,H]；门顺序固定为 (i,f,g,o)。
+struct LstmFloatReferenceTrace {
+    std::vector<float> weight_input_hidden_linear;
+    std::vector<float> weight_hidden_hidden_linear;
+    std::vector<float> gate_inputs;
+    std::vector<float> gate_outputs;
+    std::vector<float> cell_states;
+    std::vector<float> cell_tanh_outputs;
+    std::vector<float> hidden_outputs;
+};
+
 /// 校验 shape、权重和状态指针；失败时抛出 std::invalid_argument。
 void validateLstmFloatArguments(const LstmShape& shape, const LstmFloatWeights& weights,
                                 const float* input, const float* initial_hidden,
@@ -32,6 +46,6 @@ void validateLstmFloatArguments(const LstmShape& shape, const LstmFloatWeights& 
 void lstmForwardFloatCpu(const LstmShape& shape, const LstmFloatWeights& weights,
                          const float* input, const float* initial_hidden,
                          const float* initial_cell, float* output, float* final_hidden,
-                         float* final_cell);
+                         float* final_cell, LstmFloatReferenceTrace* trace = nullptr);
 
 }  // namespace quant_lstm

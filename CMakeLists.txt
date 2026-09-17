@@ -22,6 +22,7 @@ target_include_directories(
 
 add_library(
     quant_lstm STATIC
+    src/lstm/calibration.cc
     src/lstm/forward_float_cpu.cc
     src/lstm/forward_int32_cpu.cc
     src/lstm/forward_quantized_fp_cpu.cc
@@ -114,6 +115,13 @@ if(QUANT_LSTM_BUILD_TESTS)
     target_compile_definitions(
         test_quant_params PRIVATE QUANT_LSTM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME quant_params COMMAND test_quant_params)
+
+    add_executable(test_calibration_minmax tests/cpp/test_calibration_minmax.cc)
+    target_link_libraries(test_calibration_minmax PRIVATE quant_lstm)
+    target_compile_definitions(
+        test_calibration_minmax
+        PRIVATE QUANT_LSTM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME calibration_minmax COMMAND test_calibration_minmax)
 
     add_executable(
         test_quantized_references tests/cpp/test_quantized_references.cc)

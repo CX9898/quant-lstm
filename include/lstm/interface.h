@@ -1,6 +1,7 @@
 #pragma once
 
 // 对外聚合头文件；公共 C++ 调用方只需包含本文件。
+#include "lstm/calibration.h"
 #include "lstm/forward_float.h"
 #include "lstm/forward_cpu.h"
 #include "lstm/lstm_execution_params.h"
