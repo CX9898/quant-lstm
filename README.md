@@ -61,6 +61,18 @@ C++ 配置 resolver 使用系统提供的 `nlohmann_json 3.11.2`；schema、CUDA
 
 ## 精度与接口测试
 
+完整 CUDA/C++、PyTorch extension、FP32、量化、双向、QAT backward 与 ONNX
+端到端回归：
+
+```bash
+tools/run_end_to_end_test.sh
+
+# 额外运行 benchmark、compute-sanitizer、Nsight 与 Stage 9 性能阈值
+tools/run_end_to_end_test.sh --with-cuda-validation --device 0
+```
+
+单独运行各 Python 测试：
+
 ```bash
 cd pytorch
 QUANT_LSTM_TEST_SUITE=basic PYTHONPATH=. python3 tests/test_float_reference.py
