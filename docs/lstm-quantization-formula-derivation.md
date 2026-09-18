@@ -914,6 +914,24 @@ QAT 对 Round 使用恒等 STE。对任意真实量化边界 `y=Clamp(Round(x))`
 应用到 Hidden、`tanh(Cell)`、Cell、gate output、gate input、两路 Linear 和
 master input/parameter/state；融合乘法临时值没有量化边界，因此不产生 mask。
 
+CUDA QAT backward 固定执行以下 mask 顺序，其中 mask 值 `1` 表示发生 Clamp，
+保留因子均为 `1-mask`：
+
+1. `hidden_outputs` 作用于合并 output、最终 h 和后续时间步所得的 `dh`。
+2. `cell_tanh_outputs` 只作用于 `dh*o` 到 Cell 的分支；`cell_states` 作用于合并
+   最终 c、后续时间步和 Hidden 分支后的 `dc`。
+3. `gate_outputs` 在激活导数之前截断 `di/df/dg/do`，`gate_inputs` 在激活导数
+   之后截断 `da`。
+4. `weight_ih_linear` 与 `weight_hh_linear` 必须把 `da` 分为独立 `dp/dq`；前者
+   生成 input/W/bias_ih 梯度，后者生成 recurrent h/R/bias_hh 梯度，不能提前
+   合并为同一个 buffer。
+5. 完成 GEMM/reduction 后，再分别应用 input、W/R、bias_ih/bias_hh、h0/c0 的
+   master mask。h0/c0 mask 不能错误复用最后一个时间步的 state mask。
+
+q-carrier master 和四个最少 trace 的反量化在 C++ binding 内完成；Python
+autograd 只传递 saved tensors、mask 和上游梯度。上述顺序由 mask-aware CUDA
+pointwise、cuBLAS GEMM、bias reduction 和最终 master-mask kernel 实现。
+
 ## 13. 配置约束
 
 JSON 只允许配置第 4 节列出的真实量化点。以下 GRU 风格字段不得出现在 LSTM schema 中：
@@ -985,14 +1003,18 @@ Golden 只使用一个入库的版本化 JSON schema。根对象以 `kind=primit
 3. 两次稳定 CUDA benchmark、memcheck/racecheck 和 Nsight SGEMM 计数通过；版本化阈值按环境和 profile 隔离。
 4. 缓存、ONNX 重排和性能门禁均未引入新的量化点、乘法配置或执行公式分支。
 
-阶段 9 后续的全浮点 CUDA backward 补充证据：
+阶段 9 后续的全浮点与 QAT CUDA backward 补充证据：
 
 1. CUDA forward 保存 gate/cell 最少 trace；native backward 的逐时间步点算子、
    循环梯度、input/weight 梯度和 bias reduction 均位于 CUDA/cuBLAS。
 2. 单向/双向、bias 开关、两种布局、显式和省略 h0/c0 的全部梯度对齐
    `torch.nn.LSTM`，且路径测试禁止 CUDA 浮点训练回退到 Python backward。
-3. 直接 CUDA 公式测试、全量 C++/Python 回归、memcheck、racecheck 和 Nsight
-   kernel trace 通过；未修改本节 backward 公式或 QAT clamp-mask 语义。
+3. QAT 的 mask-aware CUDA 结果与迁移前 Python STE oracle 逐梯度一致；路径测试
+   禁止 CUDA QAT 回退到 Python 时间步循环。直接 CUDA mask 公式测试同时覆盖
+   checkpoint 与 master 边界。
+4. 全量 C++/Python 回归、memcheck、racecheck 和 Nsight kernel trace 通过。
+   `T=4` 的 QAT trace 包含 4 次 backward pointwise、1 次 bias reduction、7 次
+   master clamp mask kernel 及对应 cuBLAS GEMM；未修改本节公式和 STE 语义。
 
 最终冻结继续受以下回归门禁保护：
 

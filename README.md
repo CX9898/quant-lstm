@@ -2,8 +2,8 @@
 
 基于 CUDA FP32 载体的量化 LSTM 实现。当前已完成阶段 9：支持单层单向/双向
 `QuantLSTM`、双方向独立校准参数、共享 input 网格、完整 `4H` standard scale/zp
-参数导入导出，以及复用浮点 backward 的 FP32 q-carrier QAT。训练态只为真实
-Round/Clamp 边界保存 mask，并支持 h0/c0、bias=False 和双向梯度。标准 ONNX
+参数导入导出，以及 native CUDA FP32 q-carrier QAT backward。训练态只为真实
+Round/Clamp 边界保存 STE mask，并支持 h0/c0、bias=False 和双向梯度。标准 ONNX
 `LSTM` 导出、显式 generation-key 量化静态参数缓存，以及 RTX 6000D
 设备/profile/version 性能门禁均已验收。CPU int32 与标量 FP32 q-carrier
 reference 可通过无 CUDA 的安装包独立消费，统一 Golden、NumericSafety 和
@@ -16,8 +16,10 @@ synthetic numeric 精度门禁保持生效。量化执行语义以
 CUDA/cuBLAS 执行并保存最少的 gate/cell checkpoint，反向的逐时间步链式计算、
 循环状态梯度、input/weight GEMM 和 bias reduction 均由 CUDA kernel/cuBLAS
 完成；Python autograd 只负责张量保存和调用调度。CPU 浮点训练保留 PyTorch
-tensor reference fallback。量化 QAT backward 仍执行阶段 8 冻结的 clamp-mask
-浮点代理，不与无量化的 native CUDA backward 混用。
+tensor reference fallback。量化 QAT backward 由专用 binding 反量化保存的
+q-carrier master/checkpoint，再调用同一 CUDA backward 核心的 mask-aware 模式。
+checkpoint STE 在逐时间步 kernel 内按计算图逆序执行，master mask 在最终梯度上
+执行；Python 实现只保留为测试 oracle。
 
 ## 构建
 
