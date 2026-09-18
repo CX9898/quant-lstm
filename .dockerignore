@@ -1,0 +1,14 @@
+.git/
+build/
+build-*/
+cmake-build-*/
+pytorch/build/
+pytorch/tests/build/
+__pycache__/
+*.py[cod]
+*.so
+tests/golden/generated/
+tests/results/
+tests/reports/
+tests/precision/results/
+tests/benchmarks/results/

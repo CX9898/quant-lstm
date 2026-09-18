@@ -40,6 +40,13 @@ cd tests
 python3 setup_test_extension.py build_ext --inplace
 ```
 
+Docker CUDA/PyTorch 构建环境：
+
+```bash
+docker build -f docker/Dockerfile -t quant-lstm:cuda .
+docker run --rm -it --gpus all -v "$PWD:/workspace" quant-lstm:cuda
+```
+
 CPU-only 构建、安装和外部消费验收：
 
 ```bash
