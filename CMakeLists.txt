@@ -5,7 +5,7 @@ project(quant-lstm VERSION 0.1.0 LANGUAGES CXX)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
-option(QUANT_LSTM_ENABLE_CUDA "构建 CUDA 浮点前向" ON)
+option(QUANT_LSTM_ENABLE_CUDA "构建 CUDA 浮点和量化后端" ON)
 option(QUANT_LSTM_BUILD_TESTS "构建测试" ON)
 option(QUANT_LSTM_BUILD_EXAMPLES "构建示例" ON)
 
@@ -61,6 +61,7 @@ if(QUANT_LSTM_ENABLE_CUDA)
     target_sources(
         quant_lstm
         PRIVATE
+            src/lstm/backward_float_cuda.cu
             src/lstm/forward_float_cuda.cu
             src/lstm/forward_quantized_fp_cuda.cu
     )

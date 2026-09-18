@@ -16,7 +16,8 @@ namespace {
 __global__ void updateLstmState(std::int64_t batch_size, std::int64_t hidden_size,
                                 const float* input_linear, const float* recurrent_linear,
                                 const float* bias_ih, const float* bias_hh, float* hidden,
-                                float* cell, float* output) {
+                                float* cell, float* output, float* gate_outputs,
+                                float* cell_states, float* cell_tanh_outputs) {
     const std::int64_t count = batch_size * hidden_size;
     const std::int64_t stride = static_cast<std::int64_t>(gridDim.x) * blockDim.x;
     for (std::int64_t element =
@@ -46,11 +47,19 @@ __global__ void updateLstmState(std::int64_t batch_size, std::int64_t hidden_siz
         const float cell_gate = cuda_detail::realTanh(gate_values[2]);
         const float output_gate = cuda_detail::realSigmoid(gate_values[3]);
         const float next_cell = forget_gate * cell[element] + input_gate * cell_gate;
-        const float next_hidden =
-            output_gate * cuda_detail::realTanh(next_cell);
+        const float cell_tanh = cuda_detail::realTanh(next_cell);
+        const float next_hidden = output_gate * cell_tanh;
         cell[element] = next_cell;
         hidden[element] = next_hidden;
         output[element] = next_hidden;
+        if (gate_outputs != nullptr) {
+            gate_outputs[base] = input_gate;
+            gate_outputs[base + hidden_size] = forget_gate;
+            gate_outputs[base + 2 * hidden_size] = cell_gate;
+            gate_outputs[base + 3 * hidden_size] = output_gate;
+            cell_states[element] = next_cell;
+            cell_tanh_outputs[element] = cell_tanh;
+        }
     }
 }
 
@@ -79,11 +88,16 @@ void lstmForwardFloatCuda(const LstmShape& shape, const LstmFloatWeights& weight
                           const float* input, const float* initial_hidden,
                           const float* initial_cell, float* output, float* final_hidden,
                           float* final_cell, cublasHandle_t handle, cudaStream_t stream,
-                          float* workspace) {
+                          float* workspace, LstmFloatCudaTrace* trace) {
     validateLstmFloatArguments(shape, weights, input, initial_hidden, initial_cell, output,
                                final_hidden, final_cell);
     if (handle == nullptr) {
         throw std::invalid_argument("cuBLAS handle 不能为空");
+    }
+    if (trace != nullptr &&
+        (trace->gate_outputs == nullptr || trace->cell_states == nullptr ||
+         trace->cell_tanh_outputs == nullptr)) {
+        throw std::invalid_argument("CUDA float trace 指针必须全部提供");
     }
 
     const int sequence_length =
@@ -153,13 +167,29 @@ void lstmForwardFloatCuda(const LstmShape& shape, const LstmFloatWeights& weight
     const auto blocks = static_cast<unsigned int>(
         std::min(max_blocks, (state_elements + threads - 1) / threads));
     for (int time = 0; time < sequence_length; ++time) {
+        float* gate_outputs =
+            trace == nullptr
+                ? nullptr
+                : trace->gate_outputs +
+                      static_cast<std::int64_t>(time) * batch_size * gate_size;
+        float* cell_states =
+            trace == nullptr
+                ? nullptr
+                : trace->cell_states +
+                      static_cast<std::int64_t>(time) * state_elements;
+        float* cell_tanh_outputs =
+            trace == nullptr
+                ? nullptr
+                : trace->cell_tanh_outputs +
+                      static_cast<std::int64_t>(time) * state_elements;
         cuda_detail::runGemm(handle, batch_size, gate_size, hidden_size,
                              final_hidden, weights.weight_hh, recurrent_linear);
         updateLstmState<<<blocks, threads, 0, stream>>>(
             shape.batch_size, shape.hidden_size,
             input_linear + static_cast<std::int64_t>(time) * batch_size * gate_size,
             recurrent_linear, weights.bias_ih, weights.bias_hh, final_hidden, final_cell,
-            output + static_cast<std::int64_t>(time) * state_elements);
+            output + static_cast<std::int64_t>(time) * state_elements,
+            gate_outputs, cell_states, cell_tanh_outputs);
         cuda_detail::checkCuda(cudaGetLastError(), "updateLstmState kernel");
     }
     settings.restore();
