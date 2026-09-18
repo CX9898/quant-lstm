@@ -57,7 +57,14 @@ __global__ void lstmBackwardPointwise(
     std::int64_t batch_size, std::int64_t hidden_size,
     const float* gate_outputs, const float* cell_tanh_outputs,
     const float* previous_cell, const float* grad_output,
-    float* grad_hidden, float* grad_cell, float* grad_gate_inputs) {
+    float* grad_hidden, float* grad_cell, float* grad_input_linear,
+    float* grad_recurrent_linear, const std::uint8_t* weight_ih_linear_mask,
+    const std::uint8_t* weight_hh_linear_mask,
+    const std::uint8_t* gate_input_mask,
+    const std::uint8_t* gate_output_mask,
+    const std::uint8_t* cell_state_mask,
+    const std::uint8_t* cell_tanh_output_mask,
+    const std::uint8_t* hidden_output_mask) {
     const std::int64_t count = batch_size * hidden_size;
     const std::int64_t stride =
         static_cast<std::int64_t>(gridDim.x) * blockDim.x;
@@ -73,31 +80,58 @@ __global__ void lstmBackwardPointwise(
         const float output_gate = gate_outputs[gate_base + 3 * hidden_size];
         const float cell_tanh = cell_tanh_outputs[element];
 
-        const float dh = grad_hidden[element] + grad_output[element];
+        const auto keep = [](const std::uint8_t* mask,
+                             std::int64_t index) -> float {
+            return mask == nullptr || mask[index] == 0 ? 1.0F : 0.0F;
+        };
+        const float dh =
+            (grad_hidden[element] + grad_output[element]) *
+            keep(hidden_output_mask, element);
         const float grad_output_gate = dh * cell_tanh;
+        const float grad_cell_tanh =
+            dh * output_gate * keep(cell_tanh_output_mask, element);
         const float dc =
             grad_cell[element] +
-            dh * output_gate * (1.0F - cell_tanh * cell_tanh);
+            grad_cell_tanh * (1.0F - cell_tanh * cell_tanh);
+        const float masked_dc = dc * keep(cell_state_mask, element);
         const float grad_forget_gate =
-            dc * (previous_cell == nullptr ? 0.0F : previous_cell[element]);
-        const float grad_input_gate = dc * cell_gate;
-        const float grad_cell_gate = dc * input_gate;
-
-        grad_gate_inputs[gate_base] =
-            grad_input_gate * input_gate * (1.0F - input_gate);
-        grad_gate_inputs[gate_base + hidden_size] =
-            grad_forget_gate * forget_gate * (1.0F - forget_gate);
-        grad_gate_inputs[gate_base + 2 * hidden_size] =
-            grad_cell_gate * (1.0F - cell_gate * cell_gate);
-        grad_gate_inputs[gate_base + 3 * hidden_size] =
-            grad_output_gate * output_gate * (1.0F - output_gate);
-        grad_cell[element] = dc * forget_gate;
+            masked_dc *
+            (previous_cell == nullptr ? 0.0F : previous_cell[element]);
+        const float grad_input_gate = masked_dc * cell_gate;
+        const float grad_cell_gate = masked_dc * input_gate;
+        const float gate_output_gradients[4]{
+            grad_input_gate * keep(gate_output_mask, gate_base),
+            grad_forget_gate *
+                keep(gate_output_mask, gate_base + hidden_size),
+            grad_cell_gate *
+                keep(gate_output_mask, gate_base + 2 * hidden_size),
+            grad_output_gate *
+                keep(gate_output_mask, gate_base + 3 * hidden_size)};
+        const float gate_input_gradients[4]{
+            gate_output_gradients[0] * input_gate * (1.0F - input_gate),
+            gate_output_gradients[1] * forget_gate * (1.0F - forget_gate),
+            gate_output_gradients[2] * (1.0F - cell_gate * cell_gate),
+            gate_output_gradients[3] * output_gate * (1.0F - output_gate)};
+#pragma unroll
+        for (int gate = 0; gate < 4; ++gate) {
+            const std::int64_t gate_index =
+                gate_base + static_cast<std::int64_t>(gate) * hidden_size;
+            const float gradient =
+                gate_input_gradients[gate] *
+                keep(gate_input_mask, gate_index);
+            grad_input_linear[gate_index] =
+                gradient * keep(weight_ih_linear_mask, gate_index);
+            grad_recurrent_linear[gate_index] =
+                gradient * keep(weight_hh_linear_mask, gate_index);
+        }
+        grad_cell[element] = masked_dc * forget_gate;
     }
 }
 
 __global__ void reduceBiasGradients(std::int64_t rows,
                                     std::int64_t columns,
-                                    const float* grad_gate_inputs,
+                                    const float* grad_input_linear,
+                                    const float* grad_recurrent_linear,
                                     float* grad_bias_ih,
                                     float* grad_bias_hh) {
     const std::int64_t stride =
@@ -105,13 +139,43 @@ __global__ void reduceBiasGradients(std::int64_t rows,
     for (std::int64_t column =
              static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
          column < columns; column += stride) {
-        float sum = 0.0F;
+        float input_sum = 0.0F;
+        float recurrent_sum = 0.0F;
         for (std::int64_t row = 0; row < rows; ++row) {
-            sum += grad_gate_inputs[row * columns + column];
+            input_sum += grad_input_linear[row * columns + column];
+            recurrent_sum +=
+                grad_recurrent_linear[row * columns + column];
         }
-        grad_bias_ih[column] = sum;
-        grad_bias_hh[column] = sum;
+        grad_bias_ih[column] = input_sum;
+        grad_bias_hh[column] = recurrent_sum;
     }
+}
+
+__global__ void applyClampedMask(float* values, const std::uint8_t* mask,
+                                 std::int64_t count) {
+    const std::int64_t stride =
+        static_cast<std::int64_t>(gridDim.x) * blockDim.x;
+    for (std::int64_t index =
+             static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+         index < count; index += stride) {
+        if (mask[index] != 0) {
+            values[index] = 0.0F;
+        }
+    }
+}
+
+void launchClampedMask(float* values, const std::uint8_t* mask,
+                       std::int64_t count, cudaStream_t stream,
+                       const char* name) {
+    if (mask == nullptr) {
+        return;
+    }
+    constexpr int threads = 256;
+    constexpr std::int64_t max_blocks = 65535;
+    const auto blocks = static_cast<unsigned int>(
+        std::min(max_blocks, (count + threads - 1) / threads));
+    applyClampedMask<<<blocks, threads, 0, stream>>>(values, mask, count);
+    cuda_detail::checkCuda(cudaGetLastError(), name);
 }
 
 // row-major C[M,N] = A[M,K] * B[K,N].
@@ -143,7 +207,8 @@ void runWeightGradientGemm(cublasHandle_t handle, int rows,
 
 }  // namespace
 
-std::int64_t cudaBackwardWorkspaceElementCount(const LstmShape& shape) {
+std::int64_t cudaBackwardWorkspaceElementCount(
+    const LstmShape& shape, bool split_linear_gradients) {
     const std::int64_t gate_gradients =
         checkedProduct({shape.sequence_length, shape.batch_size, 4,
                         shape.hidden_size},
@@ -152,11 +217,16 @@ std::int64_t cudaBackwardWorkspaceElementCount(const LstmShape& shape) {
         checkedProduct({shape.sequence_length, shape.batch_size,
                         shape.hidden_size},
                        "CUDA backward hidden workspace");
-    if (gate_gradients > std::numeric_limits<std::int64_t>::max() -
-                             previous_hidden) {
+    const std::int64_t linear_gradients =
+        split_linear_gradients
+            ? checkedProduct({2, gate_gradients},
+                             "CUDA backward split gate workspace")
+            : gate_gradients;
+    if (linear_gradients > std::numeric_limits<std::int64_t>::max() -
+                               previous_hidden) {
         throw std::invalid_argument("CUDA backward workspace 元素数量溢出");
     }
-    return gate_gradients + previous_hidden;
+    return linear_gradients + previous_hidden;
 }
 
 void lstmBackwardFloatCuda(
@@ -165,7 +235,8 @@ void lstmBackwardFloatCuda(
     const float* initial_cell, const LstmFloatCudaBackwardTrace& trace,
     const float* grad_output, const float* grad_final_hidden,
     const float* grad_final_cell, const LstmFloatCudaGradients& gradients,
-    cublasHandle_t handle, cudaStream_t stream, float* workspace) {
+    cublasHandle_t handle, cudaStream_t stream, float* workspace,
+    const LstmFloatCudaBackwardMasks* masks) {
     validateBackwardArguments(shape, weights, input, initial_hidden,
                               initial_cell, trace, grad_output,
                               grad_final_hidden, grad_final_cell, gradients,
@@ -190,13 +261,19 @@ void lstmBackwardFloatCuda(
         static_cast<std::int64_t>(sequence_batch) * gates;
 
     cuda_detail::OwnedWorkspace owned_workspace(
-        workspace == nullptr ? cudaBackwardWorkspaceElementCount(shape) : 0,
+        workspace == nullptr
+            ? cudaBackwardWorkspaceElementCount(shape, masks != nullptr)
+            : 0,
         stream);
     if (workspace == nullptr) {
         workspace = owned_workspace.get();
     }
-    float* grad_gate_inputs = workspace;
-    float* previous_hidden = workspace + gate_elements;
+    float* grad_input_linear = workspace;
+    float* grad_recurrent_linear =
+        masks == nullptr ? grad_input_linear
+                         : grad_input_linear + gate_elements;
+    float* previous_hidden =
+        grad_recurrent_linear + gate_elements;
 
     if (initial_hidden == nullptr) {
         cuda_detail::checkCuda(
@@ -254,20 +331,42 @@ void lstmBackwardFloatCuda(
             trace.gate_outputs + gate_offset,
             trace.cell_tanh_outputs + state_offset, previous_cell,
             grad_output + state_offset, gradients.initial_hidden,
-            gradients.initial_cell, grad_gate_inputs + gate_offset);
+            gradients.initial_cell, grad_input_linear + gate_offset,
+            grad_recurrent_linear + gate_offset,
+            masks == nullptr || masks->weight_ih_linear == nullptr
+                ? nullptr
+                : masks->weight_ih_linear + gate_offset,
+            masks == nullptr || masks->weight_hh_linear == nullptr
+                ? nullptr
+                : masks->weight_hh_linear + gate_offset,
+            masks == nullptr || masks->gate_inputs == nullptr
+                ? nullptr
+                : masks->gate_inputs + gate_offset,
+            masks == nullptr || masks->gate_outputs == nullptr
+                ? nullptr
+                : masks->gate_outputs + gate_offset,
+            masks == nullptr || masks->cell_states == nullptr
+                ? nullptr
+                : masks->cell_states + state_offset,
+            masks == nullptr || masks->cell_tanh_outputs == nullptr
+                ? nullptr
+                : masks->cell_tanh_outputs + state_offset,
+            masks == nullptr || masks->hidden_outputs == nullptr
+                ? nullptr
+                : masks->hidden_outputs + state_offset);
         cuda_detail::checkCuda(cudaGetLastError(),
                                "lstmBackwardPointwise kernel");
         runRightGemm(handle, batch, hidden, gates,
-                     grad_gate_inputs + gate_offset, weights.weight_hh,
+                     grad_recurrent_linear + gate_offset, weights.weight_hh,
                      gradients.initial_hidden);
     }
 
     runRightGemm(handle, sequence_batch, input_size, gates,
-                 grad_gate_inputs, weights.weight_ih, gradients.input);
+                 grad_input_linear, weights.weight_ih, gradients.input);
     runWeightGradientGemm(handle, sequence_batch, input_size, gates,
-                          grad_gate_inputs, input, gradients.weight_ih);
+                          grad_input_linear, input, gradients.weight_ih);
     runWeightGradientGemm(handle, sequence_batch, hidden, gates,
-                          grad_gate_inputs, previous_hidden,
+                          grad_recurrent_linear, previous_hidden,
                           gradients.weight_hh);
 
     const auto bias_blocks = static_cast<unsigned int>(
@@ -275,10 +374,33 @@ void lstmBackwardFloatCuda(
                                (static_cast<std::int64_t>(gates) + threads - 1) /
                                    threads));
     reduceBiasGradients<<<bias_blocks, threads, 0, stream>>>(
-        sequence_batch, gates, grad_gate_inputs, gradients.bias_ih,
-        gradients.bias_hh);
+        sequence_batch, gates, grad_input_linear, grad_recurrent_linear,
+        gradients.bias_ih, gradients.bias_hh);
     cuda_detail::checkCuda(cudaGetLastError(),
                            "reduceBiasGradients kernel");
+
+    if (masks != nullptr) {
+        launchClampedMask(gradients.input, masks->input,
+                          static_cast<std::int64_t>(sequence_batch) *
+                              input_size,
+                          stream, "apply input clamp mask");
+        launchClampedMask(gradients.weight_ih, masks->weight_ih,
+                          static_cast<std::int64_t>(gates) * input_size,
+                          stream, "apply weight_ih clamp mask");
+        launchClampedMask(gradients.weight_hh, masks->weight_hh,
+                          static_cast<std::int64_t>(gates) * hidden, stream,
+                          "apply weight_hh clamp mask");
+        launchClampedMask(gradients.bias_ih, masks->bias_ih, gates, stream,
+                          "apply bias_ih clamp mask");
+        launchClampedMask(gradients.bias_hh, masks->bias_hh, gates, stream,
+                          "apply bias_hh clamp mask");
+        launchClampedMask(gradients.initial_hidden, masks->initial_hidden,
+                          state_elements, stream,
+                          "apply initial hidden clamp mask");
+        launchClampedMask(gradients.initial_cell, masks->initial_cell,
+                          state_elements, stream,
+                          "apply initial cell clamp mask");
+    }
 
     settings.restore();
     owned_workspace.release();

@@ -32,7 +32,8 @@ BackwardResult backwardReference(
     const float* initial_hidden, const float* initial_cell,
     const quant_lstm::LstmFloatReferenceTrace& trace,
     const float* grad_output, const float* grad_final_hidden,
-    const float* grad_final_cell) {
+    const float* grad_final_cell,
+    const quant_lstm::LstmFloatCudaBackwardMasks* masks = nullptr) {
     const std::size_t steps = static_cast<std::size_t>(shape.sequence_length);
     const std::size_t batch = static_cast<std::size_t>(shape.batch_size);
     const std::size_t input_size = static_cast<std::size_t>(shape.input_size);
@@ -52,8 +53,12 @@ BackwardResult backwardReference(
                 result.initial_hidden.data());
     std::copy_n(grad_final_cell, state_elements,
                 result.initial_cell.data());
-    std::vector<float> gate_gradients(batch * gates, 0.0F);
+    std::vector<float> input_linear_gradients(batch * gates, 0.0F);
+    std::vector<float> recurrent_linear_gradients(batch * gates, 0.0F);
     std::vector<float> previous_hidden_gradient(state_elements, 0.0F);
+    const auto keep = [](const std::uint8_t* mask, std::size_t index) {
+        return mask == nullptr || mask[index] == 0 ? 1.0F : 0.0F;
+    };
 
     for (std::size_t reverse_time = 0; reverse_time < steps; ++reverse_time) {
         const std::size_t time = steps - reverse_time - 1;
@@ -82,20 +87,60 @@ BackwardResult backwardReference(
                         : trace.cell_states[state_offset - state_elements +
                                             state_index];
                 const float dh =
-                    result.initial_hidden[state_index] +
-                    grad_output[state_offset + state_index];
+                    (result.initial_hidden[state_index] +
+                     grad_output[state_offset + state_index]) *
+                    keep(masks == nullptr ? nullptr : masks->hidden_outputs,
+                         state_offset + state_index);
                 const float grad_output_gate = dh * cell_tanh;
-                const float dc =
+                const float grad_cell_tanh =
+                    dh * output_gate *
+                    keep(masks == nullptr
+                             ? nullptr
+                             : masks->cell_tanh_outputs,
+                         state_offset + state_index);
+                const float dc_unmasked =
                     result.initial_cell[state_index] +
-                    dh * output_gate * (1.0F - cell_tanh * cell_tanh);
-                gate_gradients[gate_base] =
-                    dc * cell_gate * input_gate * (1.0F - input_gate);
-                gate_gradients[gate_base + hidden] =
-                    dc * previous_cell * forget_gate * (1.0F - forget_gate);
-                gate_gradients[gate_base + 2 * hidden] =
-                    dc * input_gate * (1.0F - cell_gate * cell_gate);
-                gate_gradients[gate_base + 3 * hidden] =
-                    grad_output_gate * output_gate * (1.0F - output_gate);
+                    grad_cell_tanh * (1.0F - cell_tanh * cell_tanh);
+                const float dc =
+                    dc_unmasked *
+                    keep(masks == nullptr ? nullptr : masks->cell_states,
+                         state_offset + state_index);
+                const float gate_output_gradients[4]{
+                    dc * cell_gate,
+                    dc * previous_cell,
+                    dc * input_gate,
+                    grad_output_gate,
+                };
+                const float derivatives[4]{
+                    input_gate * (1.0F - input_gate),
+                    forget_gate * (1.0F - forget_gate),
+                    1.0F - cell_gate * cell_gate,
+                    output_gate * (1.0F - output_gate),
+                };
+                for (std::size_t gate = 0; gate < 4; ++gate) {
+                    const std::size_t index =
+                        gate_base + gate * hidden;
+                    const std::size_t global_index = gate_offset + index;
+                    const float gradient =
+                        gate_output_gradients[gate] *
+                        keep(masks == nullptr ? nullptr : masks->gate_outputs,
+                             global_index) *
+                        derivatives[gate] *
+                        keep(masks == nullptr ? nullptr : masks->gate_inputs,
+                             global_index);
+                    input_linear_gradients[index] =
+                        gradient *
+                        keep(masks == nullptr
+                                 ? nullptr
+                                 : masks->weight_ih_linear,
+                             global_index);
+                    recurrent_linear_gradients[index] =
+                        gradient *
+                        keep(masks == nullptr
+                                 ? nullptr
+                                 : masks->weight_hh_linear,
+                             global_index);
+                }
                 result.initial_cell[state_index] = dc * forget_gate;
             }
         }
@@ -112,26 +157,48 @@ BackwardResult backwardReference(
                     : trace.hidden_outputs.data() +
                           (time * batch + batch_index - batch) * hidden;
             for (std::size_t gate = 0; gate < gates; ++gate) {
-                const float gradient =
-                    gate_gradients[batch_index * gates + gate];
-                result.bias_ih[gate] += gradient;
-                result.bias_hh[gate] += gradient;
+                const float input_gradient =
+                    input_linear_gradients[batch_index * gates + gate];
+                const float recurrent_gradient =
+                    recurrent_linear_gradients[batch_index * gates + gate];
+                result.bias_ih[gate] += input_gradient;
+                result.bias_hh[gate] += recurrent_gradient;
                 for (std::size_t index = 0; index < input_size; ++index) {
                     result.input[(time * batch + batch_index) * input_size +
                                  index] +=
-                        gradient * weights.weight_ih[gate * input_size + index];
+                        input_gradient *
+                        weights.weight_ih[gate * input_size + index];
                     result.weight_ih[gate * input_size + index] +=
-                        gradient * input_row[index];
+                        input_gradient * input_row[index];
                 }
                 for (std::size_t index = 0; index < hidden; ++index) {
                     previous_hidden_gradient[batch_index * hidden + index] +=
-                        gradient * weights.weight_hh[gate * hidden + index];
+                        recurrent_gradient *
+                        weights.weight_hh[gate * hidden + index];
                     result.weight_hh[gate * hidden + index] +=
-                        gradient * previous_hidden[index];
+                        recurrent_gradient * previous_hidden[index];
                 }
             }
         }
         result.initial_hidden.swap(previous_hidden_gradient);
+    }
+    if (masks != nullptr) {
+        const auto apply = [&](std::vector<float>& values,
+                               const std::uint8_t* mask) {
+            if (mask == nullptr) {
+                return;
+            }
+            for (std::size_t index = 0; index < values.size(); ++index) {
+                values[index] *= keep(mask, index);
+            }
+        };
+        apply(result.input, masks->input);
+        apply(result.weight_ih, masks->weight_ih);
+        apply(result.weight_hh, masks->weight_hh);
+        apply(result.bias_ih, masks->bias_ih);
+        apply(result.bias_hh, masks->bias_hh);
+        apply(result.initial_hidden, masks->initial_hidden);
+        apply(result.initial_cell, masks->initial_cell);
     }
     return result;
 }
@@ -236,6 +303,54 @@ int main() {
             shape, cpu_weights, input.data(), initial_hidden.data(),
             initial_cell.data(), expected_trace, grad_output.data(),
             grad_final_hidden.data(), grad_final_cell.data());
+        std::vector<std::uint8_t> input_mask(input_count, 0);
+        std::vector<std::uint8_t> weight_ih_mask(weight_ih_count, 0);
+        std::vector<std::uint8_t> weight_hh_mask(weight_hh_count, 0);
+        std::vector<std::uint8_t> bias_ih_mask(bias_count, 0);
+        std::vector<std::uint8_t> bias_hh_mask(bias_count, 0);
+        std::vector<std::uint8_t> initial_hidden_mask(state_count, 0);
+        std::vector<std::uint8_t> initial_cell_mask(state_count, 0);
+        std::vector<std::uint8_t> weight_ih_linear_mask(gate_count, 0);
+        std::vector<std::uint8_t> weight_hh_linear_mask(gate_count, 0);
+        std::vector<std::uint8_t> gate_input_mask(gate_count, 0);
+        std::vector<std::uint8_t> gate_output_mask(gate_count, 0);
+        std::vector<std::uint8_t> cell_state_mask(output_count, 0);
+        std::vector<std::uint8_t> cell_tanh_output_mask(output_count, 0);
+        std::vector<std::uint8_t> hidden_output_mask(output_count, 0);
+        input_mask[3] = 1;
+        weight_ih_mask[5] = 1;
+        weight_hh_mask[7] = 1;
+        bias_ih_mask[9] = 1;
+        bias_hh_mask[11] = 1;
+        initial_hidden_mask[2] = 1;
+        initial_cell_mask[4] = 1;
+        weight_ih_linear_mask[13] = 1;
+        weight_hh_linear_mask[17] = 1;
+        gate_input_mask[19] = 1;
+        gate_output_mask[23] = 1;
+        cell_state_mask[6] = 1;
+        cell_tanh_output_mask[8] = 1;
+        hidden_output_mask[10] = 1;
+        const quant_lstm::LstmFloatCudaBackwardMasks host_masks{
+            input_mask.data(),
+            weight_ih_mask.data(),
+            weight_hh_mask.data(),
+            bias_ih_mask.data(),
+            bias_hh_mask.data(),
+            initial_hidden_mask.data(),
+            initial_cell_mask.data(),
+            weight_ih_linear_mask.data(),
+            weight_hh_linear_mask.data(),
+            gate_input_mask.data(),
+            gate_output_mask.data(),
+            cell_state_mask.data(),
+            cell_tanh_output_mask.data(),
+            hidden_output_mask.data(),
+        };
+        const BackwardResult expected_masked_gradients = backwardReference(
+            shape, cpu_weights, input.data(), initial_hidden.data(),
+            initial_cell.data(), expected_trace, grad_output.data(),
+            grad_final_hidden.data(), grad_final_cell.data(), &host_masks);
 
         DeviceBuffer<float> device_input(input_count);
         DeviceBuffer<float> device_initial_hidden(state_count);
@@ -260,6 +375,27 @@ int main() {
         DeviceBuffer<float> device_grad_bias_hh(bias_count);
         DeviceBuffer<float> device_grad_initial_hidden(state_count);
         DeviceBuffer<float> device_grad_initial_cell(state_count);
+        DeviceBuffer<float> device_masked_grad_input(input_count);
+        DeviceBuffer<float> device_masked_grad_weight_ih(weight_ih_count);
+        DeviceBuffer<float> device_masked_grad_weight_hh(weight_hh_count);
+        DeviceBuffer<float> device_masked_grad_bias_ih(bias_count);
+        DeviceBuffer<float> device_masked_grad_bias_hh(bias_count);
+        DeviceBuffer<float> device_masked_grad_initial_hidden(state_count);
+        DeviceBuffer<float> device_masked_grad_initial_cell(state_count);
+        DeviceBuffer<std::uint8_t> device_input_mask(input_count);
+        DeviceBuffer<std::uint8_t> device_weight_ih_mask(weight_ih_count);
+        DeviceBuffer<std::uint8_t> device_weight_hh_mask(weight_hh_count);
+        DeviceBuffer<std::uint8_t> device_bias_ih_mask(bias_count);
+        DeviceBuffer<std::uint8_t> device_bias_hh_mask(bias_count);
+        DeviceBuffer<std::uint8_t> device_initial_hidden_mask(state_count);
+        DeviceBuffer<std::uint8_t> device_initial_cell_mask(state_count);
+        DeviceBuffer<std::uint8_t> device_weight_ih_linear_mask(gate_count);
+        DeviceBuffer<std::uint8_t> device_weight_hh_linear_mask(gate_count);
+        DeviceBuffer<std::uint8_t> device_gate_input_mask(gate_count);
+        DeviceBuffer<std::uint8_t> device_gate_output_mask(gate_count);
+        DeviceBuffer<std::uint8_t> device_cell_state_mask(output_count);
+        DeviceBuffer<std::uint8_t> device_cell_tanh_output_mask(output_count);
+        DeviceBuffer<std::uint8_t> device_hidden_output_mask(output_count);
         device_input.copyFrom(input);
         device_initial_hidden.copyFrom(initial_hidden);
         device_initial_cell.copyFrom(initial_cell);
@@ -270,6 +406,20 @@ int main() {
         device_grad_output.copyFrom(grad_output);
         device_grad_final_hidden.copyFrom(grad_final_hidden);
         device_grad_final_cell.copyFrom(grad_final_cell);
+        device_input_mask.copyFrom(input_mask);
+        device_weight_ih_mask.copyFrom(weight_ih_mask);
+        device_weight_hh_mask.copyFrom(weight_hh_mask);
+        device_bias_ih_mask.copyFrom(bias_ih_mask);
+        device_bias_hh_mask.copyFrom(bias_hh_mask);
+        device_initial_hidden_mask.copyFrom(initial_hidden_mask);
+        device_initial_cell_mask.copyFrom(initial_cell_mask);
+        device_weight_ih_linear_mask.copyFrom(weight_ih_linear_mask);
+        device_weight_hh_linear_mask.copyFrom(weight_hh_linear_mask);
+        device_gate_input_mask.copyFrom(gate_input_mask);
+        device_gate_output_mask.copyFrom(gate_output_mask);
+        device_cell_state_mask.copyFrom(cell_state_mask);
+        device_cell_tanh_output_mask.copyFrom(cell_tanh_output_mask);
+        device_hidden_output_mask.copyFrom(hidden_output_mask);
 
         cublasHandle_t handle = nullptr;
         if (cublasCreate(&handle) != CUBLAS_STATUS_SUCCESS) {
@@ -300,6 +450,36 @@ int main() {
             backward_trace, device_grad_output.get(),
             device_grad_final_hidden.get(), device_grad_final_cell.get(),
             cuda_gradients, handle, nullptr);
+        const quant_lstm::LstmFloatCudaGradients cuda_masked_gradients{
+            device_masked_grad_input.get(),
+            device_masked_grad_weight_ih.get(),
+            device_masked_grad_weight_hh.get(),
+            device_masked_grad_bias_ih.get(),
+            device_masked_grad_bias_hh.get(),
+            device_masked_grad_initial_hidden.get(),
+            device_masked_grad_initial_cell.get()};
+        const quant_lstm::LstmFloatCudaBackwardMasks cuda_masks{
+            device_input_mask.get(),
+            device_weight_ih_mask.get(),
+            device_weight_hh_mask.get(),
+            device_bias_ih_mask.get(),
+            device_bias_hh_mask.get(),
+            device_initial_hidden_mask.get(),
+            device_initial_cell_mask.get(),
+            device_weight_ih_linear_mask.get(),
+            device_weight_hh_linear_mask.get(),
+            device_gate_input_mask.get(),
+            device_gate_output_mask.get(),
+            device_cell_state_mask.get(),
+            device_cell_tanh_output_mask.get(),
+            device_hidden_output_mask.get(),
+        };
+        quant_lstm::lstmBackwardFloatCuda(
+            shape, cuda_weights, device_input.get(),
+            device_initial_hidden.get(), device_initial_cell.get(),
+            backward_trace, device_grad_output.get(),
+            device_grad_final_hidden.get(), device_grad_final_cell.get(),
+            cuda_masked_gradients, handle, nullptr, nullptr, &cuda_masks);
         checkCuda(cudaDeviceSynchronize(), "cudaDeviceSynchronize");
         cublasDestroy(handle);
 
@@ -345,6 +525,23 @@ int main() {
             !check(device_grad_initial_cell.copyToHost(),
                    expected_gradients.initial_cell, 2.0e-5F)) {
             std::cerr << "CUDA backward 与 CPU 公式 reference 不一致\n";
+            return EXIT_FAILURE;
+        }
+        if (!check(device_masked_grad_input.copyToHost(),
+                   expected_masked_gradients.input, 2.0e-5F) ||
+            !check(device_masked_grad_weight_ih.copyToHost(),
+                   expected_masked_gradients.weight_ih, 2.0e-5F) ||
+            !check(device_masked_grad_weight_hh.copyToHost(),
+                   expected_masked_gradients.weight_hh, 2.0e-5F) ||
+            !check(device_masked_grad_bias_ih.copyToHost(),
+                   expected_masked_gradients.bias_ih, 2.0e-5F) ||
+            !check(device_masked_grad_bias_hh.copyToHost(),
+                   expected_masked_gradients.bias_hh, 2.0e-5F) ||
+            !check(device_masked_grad_initial_hidden.copyToHost(),
+                   expected_masked_gradients.initial_hidden, 2.0e-5F) ||
+            !check(device_masked_grad_initial_cell.copyToHost(),
+                   expected_masked_gradients.initial_cell, 2.0e-5F)) {
+            std::cerr << "CUDA QAT STE backward 与 CPU mask reference 不一致\n";
             return EXIT_FAILURE;
         }
     } catch (const std::exception& error) {
