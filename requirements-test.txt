@@ -1,0 +1,3 @@
+# Keep CI independent of the Python packages shipped by the runner image.
+jsonschema==4.26.0
+referencing==0.37.0

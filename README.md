@@ -46,8 +46,9 @@ CPU-only 构建、安装和外部消费验收：
 tools/run_cpu_only_package_check.sh
 ```
 
-C++ 配置 resolver 使用系统提供的 `nlohmann_json 3.11.2`；schema 与 Golden
-生成测试需要 Python `jsonschema`。构建测试目标时会从
+C++ 配置 resolver 使用系统提供的 `nlohmann_json 3.11.2`；schema、CUDA benchmark
+契约与 Golden 生成测试的 Python 依赖通过
+`python -m pip install --requirement requirements-test.txt` 安装。构建测试目标时会从
 `tests/golden/spec/` 机械生成统一的临时 C++ fixture，生成文件位于 build
 目录且不入库。
 
