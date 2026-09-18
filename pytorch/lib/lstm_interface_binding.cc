@@ -1,6 +1,7 @@
 #include <ATen/cuda/CUDAContextLight.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAStream.h>
+#include <pybind11/stl.h>
 #include <torch/extension.h>
 
 #include <array>
@@ -12,6 +13,7 @@
 #include <string>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #include "lstm/backward_float_cuda.h"
 #include "lstm/calibration.h"
@@ -53,6 +55,16 @@ void checkSameDevice(const torch::Tensor& reference,
                      const torch::Tensor& tensor, const char* name) {
     TORCH_CHECK(tensor.device() == reference.device(), name,
                 " 与 input 不在同一设备");
+}
+
+const std::uint8_t* maskData(const torch::Tensor& tensor) {
+    if (!tensor.defined() || tensor.numel() == 0) {
+        return nullptr;
+    }
+    if (tensor.scalar_type() == torch::kUInt8) {
+        return tensor.data_ptr<std::uint8_t>();
+    }
+    return reinterpret_cast<const std::uint8_t*>(tensor.data_ptr<bool>());
 }
 
 struct PreparedForward {
@@ -278,7 +290,9 @@ lstmBackwardFloat(
     const torch::Tensor& cell_tanh_outputs,
     const torch::Tensor& hidden_outputs, const torch::Tensor& grad_output,
     const torch::Tensor& grad_final_hidden,
-    const torch::Tensor& grad_final_cell) {
+    const torch::Tensor& grad_final_cell,
+    const std::vector<torch::Tensor>& master_masks,
+    const std::vector<torch::Tensor>& checkpoint_masks) {
     PreparedForward prepared =
         prepareForward(input, weight_ih, weight_hh, bias_ih, bias_hh,
                        initial_hidden, initial_cell, batch_first);
@@ -314,6 +328,84 @@ lstmBackwardFloat(
     auto grad_cell = prepare_tensor(grad_final_cell, "grad_final_cell",
                                     state_gradient_shape);
 
+    TORCH_CHECK(master_masks.empty() == checkpoint_masks.empty(),
+                "master_masks 与 checkpoint_masks 必须同时提供或省略");
+    std::array<torch::Tensor, 7> prepared_master_masks;
+    std::array<torch::Tensor, 7> prepared_checkpoint_masks;
+    std::optional<quant_lstm::LstmFloatCudaBackwardMasks> masks;
+    if (!master_masks.empty()) {
+        TORCH_CHECK(master_masks.size() == 7,
+                    "master_masks 必须包含 7 个张量");
+        TORCH_CHECK(checkpoint_masks.size() == 7,
+                    "checkpoint_masks 必须包含 7 个张量");
+        const auto prepare_mask = [&](const torch::Tensor& tensor,
+                                      const char* name,
+                                      torch::IntArrayRef expected,
+                                      bool allow_empty = false) {
+            TORCH_CHECK(tensor.defined(), name, " 未定义");
+            TORCH_CHECK(tensor.scalar_type() == torch::kBool ||
+                            tensor.scalar_type() == torch::kUInt8,
+                        name, " 必须为 bool 或 uint8 tensor");
+            checkSameDevice(reference, tensor, name);
+            if (allow_empty && tensor.numel() == 0) {
+                return tensor.contiguous();
+            }
+            TORCH_CHECK(tensor.sizes() == expected, name, " shape 不匹配");
+            return tensor.contiguous();
+        };
+        const auto input_mask = prepare_mask(master_masks[0], "input_mask",
+                                             input.sizes());
+        prepared_master_masks[0] =
+            batch_first ? input_mask.transpose(0, 1).contiguous()
+                        : input_mask;
+        prepared_master_masks[1] = prepare_mask(
+            master_masks[1], "weight_ih_mask", prepared.weight_ih.sizes());
+        prepared_master_masks[2] = prepare_mask(
+            master_masks[2], "weight_hh_mask", prepared.weight_hh.sizes());
+        prepared_master_masks[3] = prepare_mask(
+            master_masks[3], "bias_ih_mask",
+            torch::IntArrayRef({4 * prepared.shape.hidden_size}),
+            !prepared.bias_ih.has_value());
+        prepared_master_masks[4] = prepare_mask(
+            master_masks[4], "bias_hh_mask",
+            torch::IntArrayRef({4 * prepared.shape.hidden_size}),
+            !prepared.bias_hh.has_value());
+        const std::array<std::int64_t, 3> initial_state_shape{
+            1, prepared.shape.batch_size, prepared.shape.hidden_size};
+        prepared_master_masks[5] = prepare_mask(
+            master_masks[5], "initial_hidden_mask", initial_state_shape);
+        prepared_master_masks[6] = prepare_mask(
+            master_masks[6], "initial_cell_mask", initial_state_shape);
+
+        constexpr std::array<const char*, 7> checkpoint_names{
+            "weight_ih_linear_mask", "weight_hh_linear_mask",
+            "gate_input_mask", "gate_output_mask", "cell_state_mask",
+            "cell_tanh_output_mask", "hidden_output_mask"};
+        for (std::size_t index = 0; index < checkpoint_masks.size(); ++index) {
+            const torch::IntArrayRef expected =
+                index < 4 ? torch::IntArrayRef(gate_shape)
+                          : torch::IntArrayRef(state_trace_shape);
+            prepared_checkpoint_masks[index] = prepare_mask(
+                checkpoint_masks[index], checkpoint_names[index], expected);
+        }
+        masks.emplace(quant_lstm::LstmFloatCudaBackwardMasks{
+            maskData(prepared_master_masks[0]),
+            maskData(prepared_master_masks[1]),
+            maskData(prepared_master_masks[2]),
+            maskData(prepared_master_masks[3]),
+            maskData(prepared_master_masks[4]),
+            maskData(prepared_master_masks[5]),
+            maskData(prepared_master_masks[6]),
+            maskData(prepared_checkpoint_masks[0]),
+            maskData(prepared_checkpoint_masks[1]),
+            maskData(prepared_checkpoint_masks[2]),
+            maskData(prepared_checkpoint_masks[3]),
+            maskData(prepared_checkpoint_masks[4]),
+            maskData(prepared_checkpoint_masks[5]),
+            maskData(prepared_checkpoint_masks[6]),
+        });
+    }
+
     auto grad_input_time = torch::empty_like(prepared.time_major);
     auto grad_weight_ih = torch::empty_like(prepared.weight_ih);
     auto grad_weight_hh = torch::empty_like(prepared.weight_hh);
@@ -329,7 +421,8 @@ lstmBackwardFloat(
         c10::cuda::getCurrentCUDAStream(reference.get_device()).stream();
     cublasHandle_t handle = at::cuda::getCurrentCUDABlasHandle();
     auto workspace = torch::empty(
-        {quant_lstm::cudaBackwardWorkspaceElementCount(prepared.shape)},
+        {quant_lstm::cudaBackwardWorkspaceElementCount(
+            prepared.shape, masks.has_value())},
         reference.options());
     const quant_lstm::LstmFloatCudaBackwardTrace trace{
         gates.data_ptr<float>(), cells.data_ptr<float>(),
@@ -346,7 +439,7 @@ lstmBackwardFloat(
         optionalData(prepared.initial_cell), trace,
         grad_output_time.data_ptr<float>(), grad_hidden.data_ptr<float>(),
         grad_cell.data_ptr<float>(), gradients, handle, stream,
-        workspace.data_ptr<float>());
+        workspace.data_ptr<float>(), masks ? &*masks : nullptr);
 
     torch::Tensor grad_input = grad_input_time;
     if (batch_first) {
@@ -355,6 +448,125 @@ lstmBackwardFloat(
     return {grad_input,          grad_weight_ih,       grad_weight_hh,
             grad_bias_ih,        grad_bias_hh,         grad_initial_hidden,
             grad_initial_cell};
+}
+
+torch::Tensor dequantizeQCarrier(
+    const torch::Tensor& value,
+    const quant_lstm::FinalizedOperatorQuantParams& params,
+    bool per_channel) {
+    checkFloatTensor(value, "q-carrier tensor");
+    const std::int64_t parameter_count =
+        static_cast<std::int64_t>(params.values.size());
+    TORCH_CHECK(parameter_count > 0, "量化参数不能为空");
+    TORCH_CHECK(!per_channel ||
+                    (value.dim() > 0 && parameter_count == value.size(0)),
+                "per-channel 量化参数数量不匹配");
+    TORCH_CHECK(per_channel || parameter_count == 1,
+                "per-tensor 量化参数必须只有一个元素");
+    auto host_scales = torch::empty(
+        {parameter_count},
+        torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+    auto host_zero_points = torch::empty_like(host_scales);
+    double* scales_data = host_scales.data_ptr<double>();
+    double* zero_points_data = host_zero_points.data_ptr<double>();
+    for (std::int64_t index = 0; index < parameter_count; ++index) {
+        scales_data[index] = params.values[index].scale;
+        zero_points_data[index] = params.values[index].zero_point;
+    }
+    auto scales = host_scales.to(value.options().dtype(torch::kFloat64));
+    auto zero_points =
+        host_zero_points.to(value.options().dtype(torch::kFloat64));
+    if (per_channel) {
+        std::vector<std::int64_t> shape(
+            static_cast<std::size_t>(value.dim()), 1);
+        shape[0] = parameter_count;
+        scales = scales.reshape(shape);
+        zero_points = zero_points.reshape(shape);
+    }
+    return ((value.to(torch::kFloat64) - zero_points) * scales)
+        .to(torch::kFloat32);
+}
+
+torch::Tensor dequantizeGateOutputs(
+    const torch::Tensor& value,
+    const quant_lstm::LstmQuantParams& params) {
+    constexpr std::array<quant_lstm::QuantOperator, 4> operators{
+        quant_lstm::QuantOperator::InputGateOutput,
+        quant_lstm::QuantOperator::ForgetGateOutput,
+        quant_lstm::QuantOperator::CellGateOutput,
+        quant_lstm::QuantOperator::OutputGateOutput};
+    const auto chunks = value.chunk(4, -1);
+    std::vector<torch::Tensor> dequantized;
+    dequantized.reserve(chunks.size());
+    for (std::size_t index = 0; index < chunks.size(); ++index) {
+        dequantized.push_back(
+            dequantizeQCarrier(chunks[index], params.at(operators[index]),
+                               false));
+    }
+    return torch::cat(dequantized, -1);
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
+           torch::Tensor, torch::Tensor, torch::Tensor>
+lstmBackwardQat(
+    const std::vector<torch::Tensor>& master_values, bool batch_first,
+    const std::string& bundle_json,
+    const std::vector<torch::Tensor>& checkpoint_values,
+    const torch::Tensor& grad_output,
+    const torch::Tensor& grad_final_hidden,
+    const torch::Tensor& grad_final_cell,
+    const std::vector<torch::Tensor>& master_masks,
+    const std::vector<torch::Tensor>& checkpoint_masks) {
+    TORCH_CHECK(master_values.size() == 7,
+                "QAT master_values 必须包含 7 个张量");
+    TORCH_CHECK(checkpoint_values.size() == 4,
+                "QAT checkpoint_values 必须包含 4 个最少 trace 张量");
+    const auto bundle =
+        quant_lstm::importQuantParamsBundle(bundle_json, false);
+    const auto& params = bundle.quant_params;
+    auto input = dequantizeQCarrier(
+        master_values[0], params.at(quant_lstm::QuantOperator::Input), false);
+    auto weight_ih = dequantizeQCarrier(
+        master_values[1],
+        params.at(quant_lstm::QuantOperator::WeightInputHidden), true);
+    auto weight_hh = dequantizeQCarrier(
+        master_values[2],
+        params.at(quant_lstm::QuantOperator::WeightHiddenHidden), true);
+    std::optional<torch::Tensor> bias_ih;
+    std::optional<torch::Tensor> bias_hh;
+    if (bundle.quant_params.bias_enabled) {
+        bias_ih = dequantizeQCarrier(
+            master_values[3],
+            params.at(quant_lstm::QuantOperator::BiasInputHidden), true);
+        bias_hh = dequantizeQCarrier(
+            master_values[4],
+            params.at(quant_lstm::QuantOperator::BiasHiddenHidden), true);
+    } else {
+        TORCH_CHECK(master_values[3].numel() == 0 &&
+                        master_values[4].numel() == 0,
+                    "bias disabled 时 QAT bias master 必须为空");
+    }
+    auto initial_hidden = dequantizeQCarrier(
+        master_values[5], params.at(quant_lstm::QuantOperator::Output),
+        false);
+    auto initial_cell = dequantizeQCarrier(
+        master_values[6], params.at(quant_lstm::QuantOperator::CellState),
+        false);
+    auto gate_outputs = dequantizeGateOutputs(checkpoint_values[0], params);
+    auto cell_states = dequantizeQCarrier(
+        checkpoint_values[1],
+        params.at(quant_lstm::QuantOperator::CellState), false);
+    auto cell_tanh_outputs = dequantizeQCarrier(
+        checkpoint_values[2],
+        params.at(quant_lstm::QuantOperator::CellTanhOutput), false);
+    auto hidden_outputs = dequantizeQCarrier(
+        checkpoint_values[3],
+        params.at(quant_lstm::QuantOperator::Output), false);
+    return lstmBackwardFloat(
+        input, weight_ih, weight_hh, bias_ih, bias_hh, initial_hidden,
+        initial_cell, batch_first, gate_outputs, cell_states,
+        cell_tanh_outputs, hidden_outputs, grad_output, grad_final_hidden,
+        grad_final_cell, master_masks, checkpoint_masks);
 }
 
 quant_lstm::CalibrationMethod parseCalibrationMethod(
@@ -818,7 +1030,17 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
         py::arg("batch_first"), py::arg("gate_outputs"),
         py::arg("cell_states"), py::arg("cell_tanh_outputs"),
         py::arg("hidden_outputs"), py::arg("grad_output"),
-        py::arg("grad_final_hidden"), py::arg("grad_final_cell"));
+        py::arg("grad_final_hidden"), py::arg("grad_final_cell"),
+        py::arg("master_masks") = std::vector<torch::Tensor>{},
+        py::arg("checkpoint_masks") = std::vector<torch::Tensor>{});
+    module.def(
+        "lstm_backward_qat", &lstmBackwardQat,
+        "单层单向 CUDA FP32 q-carrier LSTM 原生 QAT 反向",
+        py::arg("master_values"), py::arg("batch_first"),
+        py::arg("bundle_json"), py::arg("checkpoint_values"),
+        py::arg("grad_output"), py::arg("grad_final_hidden"),
+        py::arg("grad_final_cell"), py::arg("master_masks"),
+        py::arg("checkpoint_masks"));
     module.def(
         "lstm_forward_quantized", &lstmForwardQuantized,
         "单层单向 CUDA FP32 q-carrier LSTM 前向",

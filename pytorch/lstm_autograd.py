@@ -548,7 +548,7 @@ class _QuantizedLSTMFunction(torch.autograd.Function):
                 values["hidden_outputs"],
                 *(checkpoint_masks[name] for name in _CHECKPOINT_NAMES),
             )
-            ctx.bundle = bundle
+            ctx.bundle_json = bundle_json
         ctx.batch_first = bool(batch_first)
         ctx.has_bias = bias_ih is not None
         ctx.has_state = initial_hidden is not None
@@ -563,60 +563,27 @@ class _QuantizedLSTMFunction(torch.autograd.Function):
         master_masks = saved[7:14]
         values = saved[14:18]
         checkpoint_masks = dict(zip(_CHECKPOINT_NAMES, saved[18:25]))
-        bundle = ctx.bundle
-        operators = bundle["operators"]
-
-        input = _dequantize_tensor(masters[0], operators["input"])
-        weight_ih = _dequantize_tensor(masters[1], operators["weight_ih"], True)
-        weight_hh = _dequantize_tensor(masters[2], operators["weight_hh"], True)
-        initial_hidden = _dequantize_tensor(masters[5], operators["output"])
-        initial_cell = _dequantize_tensor(masters[6], operators["cell_state"])
-        input_time = _as_time_major(input, ctx.batch_first)
-        trace = {
-            "gate_outputs": _dequantize_gates(
-                values[0], bundle, _GATE_OUTPUT_OPERATORS
-            ),
-            "cell_states": _dequantize_tensor(
-                values[1], operators["cell_state"]
-            ),
-            "cell_tanh_outputs": _dequantize_tensor(
-                values[2], operators["cell_tanh_output"]
-            ),
-            "hidden_outputs": _dequantize_tensor(values[3], operators["output"]),
-        }
         grad_output_time = _gradient_or_zeros(
             None if grad_output is None else _as_time_major(grad_output, ctx.batch_first),
-            trace["hidden_outputs"],
+            values[3],
         )
-        grad_hidden = _gradient_or_zeros(grad_hidden, initial_hidden)[0]
-        grad_cell = _gradient_or_zeros(grad_cell, initial_cell)[0]
+        grad_hidden = _gradient_or_zeros(grad_hidden, masters[5])[0]
+        grad_cell = _gradient_or_zeros(grad_cell, masters[6])[0]
         gradients = list(
-            _lstm_backward(
-                input_time,
-                weight_ih,
-                weight_hh,
-                initial_hidden[0],
-                initial_cell[0],
-                trace,
+            _quant_lstm.lstm_backward_qat(
+                list(masters),
+                ctx.batch_first,
+                ctx.bundle_json,
+                list(values),
                 grad_output_time,
                 grad_hidden,
                 grad_cell,
-                checkpoint_masks,
+                list(master_masks),
+                [checkpoint_masks[name] for name in _CHECKPOINT_NAMES],
             )
         )
-        grad_input = (
-            gradients[0].transpose(0, 1) if ctx.batch_first else gradients[0]
-        )
-        grad_input = grad_input * _keep_gradient(master_masks[0], grad_input)
-        gradients[1] *= _keep_gradient(master_masks[1], gradients[1])
-        gradients[2] *= _keep_gradient(master_masks[2], gradients[2])
-        if ctx.has_bias:
-            gradients[3] *= _keep_gradient(master_masks[3], gradients[3])
-            gradients[4] *= _keep_gradient(master_masks[4], gradients[4])
-        gradients[5] *= _keep_gradient(master_masks[5][0], gradients[5])
-        gradients[6] *= _keep_gradient(master_masks[6][0], gradients[6])
         return (
-            grad_input,
+            gradients[0],
             gradients[1],
             gradients[2],
             gradients[3] if ctx.has_bias else None,

@@ -75,6 +75,86 @@ def prepare_quantized(module, calibration_input, calibration_state):
     module.train()
 
 
+def qat_backward_reference(
+    module, grad_output, grad_hidden, grad_cell
+):
+    state = module.qat_saved_state()
+    bundle = json.loads(module._quant_params_bundle_json)
+    operators = bundle["operators"]
+    masters = state["quantized_master"]
+    master_masks = state["master_clamp_masks"]
+    checkpoint_values = state["checkpoints"]
+    checkpoint_masks = state["checkpoint_clamp_masks"]
+
+    input_value = lstm_autograd._dequantize_tensor(
+        masters["input"], operators["input"]
+    )
+    weight_ih = lstm_autograd._dequantize_tensor(
+        masters["weight_ih"], operators["weight_ih"], True
+    )
+    weight_hh = lstm_autograd._dequantize_tensor(
+        masters["weight_hh"], operators["weight_hh"], True
+    )
+    initial_hidden = lstm_autograd._dequantize_tensor(
+        masters["h_0"], operators["output"]
+    )
+    initial_cell = lstm_autograd._dequantize_tensor(
+        masters["c_0"], operators["cell_state"]
+    )
+    trace = {
+        "gate_outputs": lstm_autograd._dequantize_gates(
+            checkpoint_values["gate_outputs"],
+            bundle,
+            lstm_autograd._GATE_OUTPUT_OPERATORS,
+        ),
+        "cell_states": lstm_autograd._dequantize_tensor(
+            checkpoint_values["cell_states"], operators["cell_state"]
+        ),
+        "cell_tanh_outputs": lstm_autograd._dequantize_tensor(
+            checkpoint_values["cell_tanh_outputs"],
+            operators["cell_tanh_output"],
+        ),
+        "hidden_outputs": lstm_autograd._dequantize_tensor(
+            checkpoint_values["hidden_outputs"], operators["output"]
+        ),
+    }
+    gradients = list(
+        lstm_autograd._lstm_backward(
+            lstm_autograd._as_time_major(input_value, module.batch_first),
+            weight_ih,
+            weight_hh,
+            initial_hidden[0],
+            initial_cell[0],
+            trace,
+            lstm_autograd._as_time_major(grad_output, module.batch_first),
+            grad_hidden[0],
+            grad_cell[0],
+            checkpoint_masks,
+        )
+    )
+    if module.batch_first:
+        gradients[0] = gradients[0].transpose(0, 1)
+    master_mask_order = (
+        "input",
+        "weight_ih",
+        "weight_hh",
+        "bias_ih",
+        "bias_hh",
+        "h_0",
+        "c_0",
+    )
+    for index, name in enumerate(master_mask_order):
+        if name not in master_masks:
+            continue
+        mask = master_masks[name]
+        if name in ("h_0", "c_0"):
+            mask = mask[0]
+        gradients[index] *= lstm_autograd._keep_gradient(
+            mask, gradients[index]
+        )
+    return gradients
+
+
 class BackwardTest(unittest.TestCase):
     records = []
 
@@ -306,6 +386,99 @@ class BackwardTest(unittest.TestCase):
                     self.assertEqual(set(saved), {"forward", "reverse"})
                 else:
                     self.assertIn("checkpoint_clamp_masks", saved)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
+    def test_qat_native_backward_matches_python_ste_oracle(self):
+        device = torch.device("cuda")
+        module = QuantLSTM(3, 4, batch_first=True, device=device)
+        initialize_parameters(module)
+        calibration_input = deterministic_tensor(
+            (2, 4, 3), -0.04, 0.05, device=device
+        )
+        calibration_state = (
+            deterministic_tensor((1, 2, 4), -0.03, 0.03, device=device),
+            deterministic_tensor((1, 2, 4), -0.04, 0.04, device=device),
+        )
+        module.set_all_bitwidth(8)
+        for name in ("weight_ih", "weight_hh", "bias_ih", "bias_hh"):
+            module.adjust_quant_config(name, granularity="per_tensor")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            calibrate(module, calibration_input, calibration_state)
+        module.use_quantization = True
+        module.train()
+
+        input_value = (calibration_input * 24.0).clone().requires_grad_()
+        state = (
+            (calibration_state[0] * 16.0).clone().requires_grad_(),
+            (calibration_state[1] * 16.0).clone().requires_grad_(),
+        )
+        output, (hidden, cell) = module(input_value, state)
+        grad_output = deterministic_tensor(
+            output.shape, -0.08, 0.09, device=device
+        )
+        grad_hidden = deterministic_tensor(
+            hidden.shape, -0.07, 0.06, device=device
+        )
+        grad_cell = deterministic_tensor(
+            cell.shape, -0.05, 0.08, device=device
+        )
+        reference = qat_backward_reference(
+            module, grad_output, grad_hidden, grad_cell
+        )
+        masks = module.qat_saved_state()["checkpoint_clamp_masks"]
+        self.assertGreaterEqual(
+            sum(bool(mask.any()) for mask in masks.values()), 5
+        )
+        torch.autograd.backward(
+            (output, hidden, cell),
+            (grad_output, grad_hidden, grad_cell),
+        )
+        actual = [
+            input_value.grad,
+            module.weight_ih_l0.grad,
+            module.weight_hh_l0.grad,
+            module.bias_ih_l0.grad,
+            module.bias_hh_l0.grad,
+            state[0].grad[0],
+            state[1].grad[0],
+        ]
+        for name, value, expected in zip(
+            (
+                "input",
+                "weight_ih",
+                "weight_hh",
+                "bias_ih",
+                "bias_hh",
+                "h_0",
+                "c_0",
+            ),
+            actual,
+            reference,
+        ):
+            self.assertTrue(
+                torch.allclose(value, expected, atol=5.0e-5, rtol=5.0e-5),
+                f"{name}: max_abs={(value - expected).abs().max().item()}",
+            )
+
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
+    def test_qat_cuda_backward_bypasses_python_reference(self):
+        module = QuantLSTM(3, 4, device="cuda")
+        initialize_parameters(module)
+        calibration_input = deterministic_tensor(
+            (4, 2, 3), -0.20, 0.25, device="cuda"
+        )
+        prepare_quantized(module, calibration_input, None)
+        input_value = calibration_input.clone().requires_grad_()
+        with mock.patch.object(
+            lstm_autograd,
+            "_lstm_backward",
+            side_effect=AssertionError("CUDA QAT used Python fallback"),
+        ):
+            output, _ = module(input_value)
+            output.square().mean().backward()
+        self.assertIsNotNone(input_value.grad)
+        self.assertGreater(input_value.grad.abs().max().item(), 0.0)
 
     @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_qat_single_step_and_loss_decline(self):
