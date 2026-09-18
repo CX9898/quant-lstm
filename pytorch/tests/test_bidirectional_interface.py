@@ -60,73 +60,66 @@ class BidirectionalInterfaceTest(unittest.TestCase):
         self.assertLess(mae, 0.003, f"{name}: MAE={mae}")
         self.assertLess(mse, 1.0e-5, f"{name}: MSE={mse}")
         self.assertGreaterEqual(cosine, 0.9999, f"{name}: cosine={cosine}")
-        tolerance = 1.0e-5 if device.type == "cpu" else 5.0e-4
+        tolerance = 5.0e-4
         self.assertTrue(
             torch.allclose(actual, expected, atol=tolerance, rtol=tolerance),
             f"{name}: max_abs={(actual - expected).abs().max().item()}",
         )
 
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_float_matches_pytorch_order_and_shapes(self):
-        devices = [torch.device("cpu")]
-        if torch.cuda.is_available():
-            devices.append(torch.device("cuda"))
-        for device in devices:
-            for batch_first in (False, True):
-                with self.subTest(device=device, batch_first=batch_first):
-                    custom = QuantLSTM(
-                        3,
-                        4,
-                        bidirectional=True,
-                        batch_first=batch_first,
-                        device=device,
-                    )
-                    native = nn.LSTM(
-                        3,
-                        4,
-                        bidirectional=True,
-                        batch_first=batch_first,
-                        device=device,
-                    )
-                    initialize_bidirectional(custom)
-                    copy_to_native(custom, native)
-                    input_time = deterministic_tensor(
-                        (5, 2, 3), -0.28, 0.33, device=device
-                    )
-                    input_tensor = (
-                        input_time.transpose(0, 1).contiguous()
-                        if batch_first
-                        else input_time
-                    )
-                    state = (
-                        deterministic_tensor(
-                            (2, 2, 4), -0.11, 0.13, device=device
-                        ),
-                        deterministic_tensor(
-                            (2, 2, 4), -0.18, 0.21, device=device
-                        ),
-                    )
-                    custom.eval()
-                    native.eval()
-                    with torch.no_grad():
-                        actual = custom(input_tensor, state)
-                        expected = native(input_tensor, state)
-                    self.assertEqual(
-                        actual[0].shape,
-                        (2, 5, 8) if batch_first else (5, 2, 8),
-                    )
-                    self.assertEqual(actual[1][0].shape, (2, 2, 4))
-                    self.assertEqual(actual[1][1].shape, (2, 2, 4))
-                    for name, actual_value, expected_value in zip(
-                        ("output", "h_n", "c_n"),
-                        (actual[0], *actual[1]),
-                        (expected[0], *expected[1]),
-                    ):
-                        self.assert_float_metrics(
-                            name, actual_value, expected_value, device
-                        )
+        device = torch.device("cuda")
+        for batch_first in (False, True):
+            with self.subTest(batch_first=batch_first):
+                custom = QuantLSTM(
+                    3,
+                    4,
+                    bidirectional=True,
+                    batch_first=batch_first,
+                    device=device,
+                )
+                native = nn.LSTM(
+                    3,
+                    4,
+                    bidirectional=True,
+                    batch_first=batch_first,
+                    device=device,
+                )
+                initialize_bidirectional(custom)
+                copy_to_native(custom, native)
+                input_time = deterministic_tensor(
+                    (5, 2, 3), -0.28, 0.33, device=device
+                )
+                input_tensor = (
+                    input_time.transpose(0, 1).contiguous()
+                    if batch_first
+                    else input_time
+                )
+                state = (
+                    deterministic_tensor((2, 2, 4), -0.11, 0.13, device=device),
+                    deterministic_tensor((2, 2, 4), -0.18, 0.21, device=device),
+                )
+                custom.eval()
+                native.eval()
+                with torch.no_grad():
+                    actual = custom(input_tensor, state)
+                    expected = native(input_tensor, state)
+                self.assertEqual(
+                    actual[0].shape,
+                    (2, 5, 8) if batch_first else (5, 2, 8),
+                )
+                self.assertEqual(actual[1][0].shape, (2, 2, 4))
+                self.assertEqual(actual[1][1].shape, (2, 2, 4))
+                for name, actual_value, expected_value in zip(
+                    ("output", "h_n", "c_n"),
+                    (actual[0], *actual[1]),
+                    (expected[0], *expected[1]),
+                ):
+                    self.assert_float_metrics(name, actual_value, expected_value, device)
 
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_batch_first_layout_is_exactly_equivalent(self):
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = torch.device("cuda")
         time_module = QuantLSTM(3, 4, bidirectional=True, device=device)
         batch_module = QuantLSTM(
             3, 4, bidirectional=True, batch_first=True, device=device
@@ -276,12 +269,13 @@ class BidirectionalInterfaceTest(unittest.TestCase):
         ):
             self.assertTrue(torch.equal(expected, actual))
 
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_bidirectional_contract_errors(self):
-        module = QuantLSTM(3, 4, bidirectional=True)
-        input_tensor = torch.zeros((3, 2, 3))
+        module = QuantLSTM(3, 4, bidirectional=True, device="cuda")
+        input_tensor = torch.zeros((3, 2, 3), device="cuda")
         invalid_state = (
-            torch.zeros((1, 2, 4)),
-            torch.zeros((1, 2, 4)),
+            torch.zeros((1, 2, 4), device="cuda"),
+            torch.zeros((1, 2, 4), device="cuda"),
         )
         with self.assertRaisesRegex(RuntimeError, "\\[2,B,H\\]"):
             module(input_tensor, invalid_state)
@@ -292,8 +286,8 @@ class BidirectionalInterfaceTest(unittest.TestCase):
             module,
             input_tensor,
             (
-                torch.zeros((2, 2, 4)),
-                torch.zeros((2, 2, 4)),
+                torch.zeros((2, 2, 4), device="cuda"),
+                torch.zeros((2, 2, 4), device="cuda"),
             ),
         )
         document = module.export_quant_params()

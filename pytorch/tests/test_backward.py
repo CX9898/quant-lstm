@@ -202,7 +202,7 @@ class BackwardTest(unittest.TestCase):
             self.assertLess(mae, 0.003, f"{name}: MAE={mae}")
             self.assertLess(mse, 1.0e-5, f"{name}: MSE={mse}")
             self.assertGreaterEqual(cosine, 0.9999, f"{name}: cosine={cosine}")
-            tolerance = 1.0e-5 if actual.device.type == "cpu" else 5.0e-4
+            tolerance = 5.0e-4
             self.assertTrue(
                 torch.allclose(
                     actual, expected, atol=tolerance, rtol=tolerance
@@ -210,90 +210,76 @@ class BackwardTest(unittest.TestCase):
                 f"{name}: max_abs={(actual - expected).abs().max().item()}",
             )
 
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_float_backward_matches_pytorch(self):
-        devices = [torch.device("cpu")]
-        if torch.cuda.is_available():
-            devices.append(torch.device("cuda"))
-        for device in devices:
-            for bidirectional in (False, True):
-                for bias in (False, True):
-                    for batch_first in (False, True):
-                        case = (
-                            f"float_{device.type}_bi{int(bidirectional)}_"
-                            f"bias{int(bias)}_bf{int(batch_first)}"
+        device = torch.device("cuda")
+        for bidirectional in (False, True):
+            for bias in (False, True):
+                for batch_first in (False, True):
+                    case = (
+                        f"float_cuda_bi{int(bidirectional)}_"
+                        f"bias{int(bias)}_bf{int(batch_first)}"
+                    )
+                    with self.subTest(case=case):
+                        custom = QuantLSTM(
+                            3,
+                            4,
+                            bias=bias,
+                            batch_first=batch_first,
+                            bidirectional=bidirectional,
+                            device=device,
                         )
-                        with self.subTest(case=case):
-                            custom = QuantLSTM(
-                                3,
-                                4,
-                                bias=bias,
-                                batch_first=batch_first,
-                                bidirectional=bidirectional,
-                                device=device,
-                            )
-                            native = nn.LSTM(
-                                3,
-                                4,
-                                bias=bias,
-                                batch_first=batch_first,
-                                bidirectional=bidirectional,
-                                device=device,
-                            )
-                            initialize_parameters(custom)
-                            copy_to_native(custom, native)
-                            input_time = deterministic_tensor(
-                                (4, 2, 3), -0.31, 0.29, device=device
-                            )
-                            input_value = (
-                                input_time.transpose(0, 1).contiguous()
-                                if batch_first
-                                else input_time
-                            )
-                            directions = 2 if bidirectional else 1
-                            hidden = deterministic_tensor(
-                                (directions, 2, 4),
-                                -0.12,
-                                0.11,
-                                device=device,
-                            )
-                            cell = deterministic_tensor(
-                                (directions, 2, 4),
-                                -0.21,
-                                0.18,
-                                device=device,
-                            )
-                            custom_input = input_value.clone().requires_grad_()
-                            native_input = input_value.clone().requires_grad_()
-                            custom_state = (
-                                hidden.clone().requires_grad_(),
-                                cell.clone().requires_grad_(),
-                            )
-                            native_state = (
-                                hidden.clone().requires_grad_(),
-                                cell.clone().requires_grad_(),
-                            )
-                            objective(
-                                custom(custom_input, custom_state)
-                            ).backward()
-                            objective(
-                                native(native_input, native_state)
-                            ).backward()
-                            actual = gradient_items(
-                                custom, custom_input, custom_state
-                            )
-                            expected = gradient_items(
-                                native, native_input, native_state
-                            )
-                            self.assertEqual(
-                                [item[0] for item in actual],
-                                [item[0] for item in expected],
-                            )
-                            for (name, value), (_, reference) in zip(
-                                actual, expected
-                            ):
-                                self.assert_gradient_metrics(
-                                    case, name, value, reference
-                                )
+                        native = nn.LSTM(
+                            3,
+                            4,
+                            bias=bias,
+                            batch_first=batch_first,
+                            bidirectional=bidirectional,
+                            device=device,
+                        )
+                        initialize_parameters(custom)
+                        copy_to_native(custom, native)
+                        input_time = deterministic_tensor(
+                            (4, 2, 3), -0.31, 0.29, device=device
+                        )
+                        input_value = (
+                            input_time.transpose(0, 1).contiguous()
+                            if batch_first
+                            else input_time
+                        )
+                        directions = 2 if bidirectional else 1
+                        hidden = deterministic_tensor(
+                            (directions, 2, 4),
+                            -0.12,
+                            0.11,
+                            device=device,
+                        )
+                        cell = deterministic_tensor(
+                            (directions, 2, 4),
+                            -0.21,
+                            0.18,
+                            device=device,
+                        )
+                        custom_input = input_value.clone().requires_grad_()
+                        native_input = input_value.clone().requires_grad_()
+                        custom_state = (
+                            hidden.clone().requires_grad_(),
+                            cell.clone().requires_grad_(),
+                        )
+                        native_state = (
+                            hidden.clone().requires_grad_(),
+                            cell.clone().requires_grad_(),
+                        )
+                        objective(custom(custom_input, custom_state)).backward()
+                        objective(native(native_input, native_state)).backward()
+                        actual = gradient_items(custom, custom_input, custom_state)
+                        expected = gradient_items(native, native_input, native_state)
+                        self.assertEqual(
+                            [item[0] for item in actual],
+                            [item[0] for item in expected],
+                        )
+                        for (name, value), (_, reference) in zip(actual, expected):
+                            self.assert_gradient_metrics(case, name, value, reference)
 
     @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_float_cuda_backward_bypasses_python_reference(self):

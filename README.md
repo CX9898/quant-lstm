@@ -5,8 +5,9 @@
 参数导入导出，以及 native CUDA FP32 q-carrier QAT backward。训练态只为真实
 Round/Clamp 边界保存 STE mask，并支持 h0/c0、bias=False 和双向梯度。标准 ONNX
 `LSTM` 导出、显式 generation-key 量化静态参数缓存，以及 RTX 6000D
-设备/profile/version 性能门禁均已验收。CPU int32 与标量 FP32 q-carrier
-reference 可通过无 CUDA 的安装包独立消费，统一 Golden、NumericSafety 和
+设备/profile/version 性能门禁均已验收。PyTorch `QuantLSTM` 执行接口只支持
+CUDA；CPU int32 与标量 FP32 q-carrier reference 只用于 Golden、校准、数值验证
+和无 CUDA 安装包，不作为 Python 运行时 fallback。统一 Golden、NumericSafety 和
 synthetic numeric 精度门禁保持生效。量化执行语义以
 `docs/quantized-execution-spec.md` 为准；配置和双载体流程分别见
 `docs/configuration.md` 与 `docs/dual-carrier-execution.md`；标准 ONNX LSTM 导出见
@@ -15,8 +16,8 @@ synthetic numeric 精度门禁保持生效。量化执行语义以
 `use_quantization=False` 是完全 FP32 训练模式。在 CUDA 上，训练前向由原生
 CUDA/cuBLAS 执行并保存最少的 gate/cell checkpoint，反向的逐时间步链式计算、
 循环状态梯度、input/weight GEMM 和 bias reduction 均由 CUDA kernel/cuBLAS
-完成。CPU 浮点训练由 C++ 标量 forward/backward 执行。量化训练前向由同一次
-CUDA 执行直接保存实际使用的 q-carrier master、checkpoint 和 Clamp mask；QAT
+完成。CPU 标量 forward/backward 仅保留为 C++ reference model。量化训练前向由
+同一次 CUDA 执行直接保存实际使用的 q-carrier master、checkpoint 和 Clamp mask；QAT
 backward 由 CUDA kernel 反量化这些张量，再调用同一 CUDA backward 核心的
 mask-aware 模式。checkpoint STE 在逐时间步 kernel 内按计算图逆序执行，master
 mask 在最终梯度上执行。Python autograd 只负责张量保存、布局整理和扩展调用；
@@ -84,9 +85,10 @@ PYTHONPATH=. python3 -m unittest -v tests.test_backward
 PYTHONPATH=. python3 -m unittest -v tests.test_onnx_export
 ```
 
-典型流程是先以 `calibrating=True` 运行一个或多个校准 batch，随后调用
-`finalize_calibration()`，再设置 `use_quantization=True`。量化模式只接受 CUDA
-FP32 tensor，并固定调用 CUDA FP32 q-carrier 主路径；未暴露未实现的 int32 后端。
+典型流程是先以 `calibrating=True` 在 CUDA 上运行一个或多个校准 batch，随后调用
+`finalize_calibration()`，再设置 `use_quantization=True`。完全浮点、量化和 QAT
+模式都只接受 CUDA FP32 tensor；校准 collector 会显式使用 CPU reference，但执行
+接口不会回退到 CPU，也未暴露未实现的 int32 后端。
 双向模块会分别导出 forward/reverse 参数，并拒绝没有共享 input 网格的参数文档。
 
 `get_quant_config()` 返回 C++ resolver 产生的完整 canonical resolved config。

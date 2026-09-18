@@ -38,6 +38,10 @@ Round 使用 STE 恒等梯度，只有 mask 标记为 Clamp 的真实边界会�
 Linear、四门 input/output、Cell、`tanh(Cell)` 和 Hidden 拥有 mask，融合乘法临时值
 没有 mask。Python autograd 只保存张量并调用 C++/CUDA 扩展。
 
+PyTorch `QuantLSTM` 的完全浮点、量化和 QAT 执行边界均为 CUDA-only。CPU FP32
+与 int32 实现是显式 reference model，只供 Golden、校准和数值验证使用，不参与
+Python binding 的设备分发，也不作为 CUDA 不可用时的 fallback。
+
 双向模块调用同一个单向 CUDA 核心两次。reverse 方向只在输入和输出的时间维做翻转；
 两个方向的 output 在最后一维拼接，`h_n/c_n` 按 forward、reverse 顺序堆叠。
 

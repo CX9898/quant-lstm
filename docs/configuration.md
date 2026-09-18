@@ -35,8 +35,10 @@ report = module.finalize_calibration()
 module.use_quantization = True
 ```
 
-校准期间 forward 返回浮点结果，同时在 CPU collector 中累积正式 FP32 checkpoint。
-`finalize_calibration()` 将会话锁定，并生成 standard scale/zp 和执行编码。
+校准 batch、参数和状态必须位于 CUDA；forward 由 CUDA 主路径返回浮点结果，同时
+显式复制校准输入到 CPU collector，并使用 CPU reference 累积正式 FP32 checkpoint。
+这不是运行时 fallback。`finalize_calibration()` 将会话锁定，并生成 standard
+scale/zp 和执行编码。
 `reset_calibration()` 是开始新会话的唯一入口。
 
 双向模块为 forward/reverse 分别保存参数统计。两个方向使用同一 resolved config，
@@ -72,7 +74,7 @@ module.use_quantization = True
 
 ## 4. 错误与告警
 
-以下情况直接报错：未校准量化推理、CPU tensor 进入 CUDA 量化路径、shape/bias
+以下情况直接报错：未校准量化推理、CPU tensor 进入任意 PyTorch 执行路径、shape/bias
 不匹配、方向参数缺失、双向 input 网格不一致、compact 参数向量、非法 canonical
 FP32 scale，以及 `require_exact_accumulation=True` 时出现 FP32 精度风险。
 

@@ -136,29 +136,23 @@ class QuantizedInterfaceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             QuantLSTM(3, 4, cublas_math_mode="fast")
 
-        module = QuantLSTM(3, 4, use_quantization=True)
-        with self.assertRaisesRegex(RuntimeError, "校准"):
-            module(torch.zeros((2, 1, 3)))
+        if torch.cuda.is_available():
+            module = QuantLSTM(3, 4, use_quantization=True, device="cuda")
+            with self.assertRaisesRegex(RuntimeError, "校准"):
+                module(torch.zeros((2, 1, 3), device="cuda"))
         with self.assertRaisesRegex(RuntimeError, "未收集校准数据"):
             module.finalize_calibration()
 
-        cpu_quantized = QuantLSTM(3, 4)
-        initialize_module(cpu_quantized)
-        cpu_input = deterministic_tensor((2, 1, 3))
-        calibrate(cpu_quantized, cpu_input, None)
-        cpu_quantized.use_quantization = True
-        with self.assertRaisesRegex(RuntimeError, "CUDA input"):
-            cpu_quantized(cpu_input)
-
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_all_calibration_methods_and_manifest_contract(self):
-        input_tensor = deterministic_tensor((3, 2, 3))
+        input_tensor = deterministic_tensor((3, 2, 3), device="cuda")
         state = (
-            deterministic_tensor((1, 2, 4), -0.1, 0.12),
-            deterministic_tensor((1, 2, 4), -0.2, 0.18),
+            deterministic_tensor((1, 2, 4), -0.1, 0.12, device="cuda"),
+            deterministic_tensor((1, 2, 4), -0.2, 0.18, device="cuda"),
         )
         for method in ("minmax", "sqnr", "percentile"):
             with self.subTest(method=method):
-                module = QuantLSTM(3, 4, calibration_method=method)
+                module = QuantLSTM(3, 4, calibration_method=method, device="cuda")
                 initialize_module(module)
                 report = calibrate(module, input_tensor, state)
                 self.assertEqual(report["batch_count"], 2)
@@ -199,10 +193,11 @@ class QuantizedInterfaceTest(unittest.TestCase):
                     module.get_quant_config(),
                 )
 
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_bias_disabled_bundle_omits_bias_operators(self):
-        module = QuantLSTM(2, 3, bias=False)
+        module = QuantLSTM(2, 3, bias=False, device="cuda")
         initialize_module(module)
-        input_tensor = deterministic_tensor((2, 1, 2))
+        input_tensor = deterministic_tensor((2, 1, 2), device="cuda")
         calibrate(module, input_tensor, None)
         operators = module.export_quant_params()["quant_params"]["operators"]
         self.assertNotIn("bias_ih", operators)
@@ -380,10 +375,11 @@ class QuantizedInterfaceTest(unittest.TestCase):
                 cosine, 0.999, f"{name}: cosine={cosine}"
             )
 
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_import_rejects_metadata_and_compact_parameter_vectors(self):
-        module = QuantLSTM(2, 3)
+        module = QuantLSTM(2, 3, device="cuda")
         initialize_module(module)
-        calibrate(module, deterministic_tensor((2, 1, 2)), None)
+        calibrate(module, deterministic_tensor((2, 1, 2), device="cuda"), None)
         manifest = module.export_quant_params()
 
         invalid_metadata = json.loads(json.dumps(manifest))

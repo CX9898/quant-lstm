@@ -137,6 +137,16 @@ class OnnxExportTest(unittest.TestCase):
             bidirectional=bidirectional,
         ).eval()
         initialize_parameters(module)
+        reference = nn.LSTM(
+            3,
+            4,
+            bias=bias,
+            batch_first=batch_first,
+            bidirectional=bidirectional,
+        ).eval()
+        with torch.no_grad():
+            for name, parameter in module.named_parameters():
+                getattr(reference, name).copy_(parameter)
         input_time = deterministic_tensor((5, 2, 3), -0.28, 0.31)
         input_value = (
             input_time.transpose(0, 1).contiguous()
@@ -151,7 +161,7 @@ class OnnxExportTest(unittest.TestCase):
             (directions, 2, 4), -0.16, 0.18
         )
         with torch.no_grad():
-            expected = module(input_value, (hidden, cell))
+            expected = reference(input_value, (hidden, cell))
 
         path = Path(directory) / f"{case}.onnx"
         module.export_mode = True

@@ -396,6 +396,11 @@ class _UnidirectionalQuantLSTM(nn.Module):
         input: Tensor,
         hx: Optional[tuple[Tensor, Tensor]] = None,
     ) -> tuple[Tensor, tuple[Tensor, Tensor]]:
+        if not input.is_cuda:
+            raise RuntimeError(
+                "QuantLSTM PyTorch 执行路径只支持 CUDA input；"
+                "CPU 实现仅用于 C++ reference model"
+            )
         if self.calibrating:
             self._collect_calibration(input, hx)
             return self._float_forward(input, hx)

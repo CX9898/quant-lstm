@@ -7,12 +7,12 @@ import unittest
 import torch
 from torch import nn
 
+import _quant_lstm
 import _quant_lstm_test
 from quant_lstm import QuantLSTM
 
 
 PROFILES = {
-    "cpu_basic": ((8, 4, 16, 32), 3001),
     "cuda_gru_basic": ((50, 64, 128, 256), 3002),
     "minimal": ((1, 1, 1, 1), 3003),
     "short_recurrent": ((3, 1, 2, 2), 3004),
@@ -178,88 +178,131 @@ class FloatReferenceTest(unittest.TestCase):
         print(json.dumps(report, sort_keys=True))
         return actual_output, actual_hidden, actual_cell
 
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_basic(self):
-        devices_and_profiles = [(torch.device("cpu"), "cpu_basic")]
-        if torch.cuda.is_available():
-            devices_and_profiles.append((torch.device("cuda"), "cuda_gru_basic"))
-        for device, profile in devices_and_profiles:
+        device = torch.device("cuda")
+        profile = "cuda_gru_basic"
+        for bias in (False, True):
+            layout_results = {}
+            for batch_first in (False, True):
+                with self.subTest(profile=profile, bias=bias, batch_first=batch_first):
+                    omitted = self.run_case(profile, device, bias, batch_first, "omitted")
+                    explicit = self.run_case(
+                        profile, device, bias, batch_first, "explicit_zero"
+                    )
+                    for omitted_tensor, explicit_tensor in zip(omitted, explicit):
+                        self.assertTrue(torch.equal(omitted_tensor, explicit_tensor))
+                    layout_results[batch_first] = omitted
+            self.assert_layout_equivalent(layout_results[False], layout_results[True])
+
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
+    def test_strict(self):
+        device = torch.device("cuda")
+        for profile in ("minimal", "short_recurrent", "non_aligned", "long_sequence"):
             for bias in (False, True):
                 layout_results = {}
                 for batch_first in (False, True):
+                    state_profile = (
+                        "typical_random"
+                        if profile in ("short_recurrent", "long_sequence")
+                        else "omitted"
+                    )
                     with self.subTest(
-                        device=device, profile=profile, bias=bias, batch_first=batch_first
+                        profile=profile,
+                        bias=bias,
+                        batch_first=batch_first,
+                        state=state_profile,
                     ):
-                        omitted = self.run_case(
-                            profile, device, bias, batch_first, "omitted"
+                        layout_results[batch_first] = self.run_case(
+                            profile, device, bias, batch_first, state_profile
                         )
-                        explicit = self.run_case(
-                            profile, device, bias, batch_first, "explicit_zero"
-                        )
-                        for omitted_tensor, explicit_tensor in zip(omitted, explicit):
-                            self.assertTrue(torch.equal(omitted_tensor, explicit_tensor))
-                        layout_results[batch_first] = omitted
                 self.assert_layout_equivalent(layout_results[False], layout_results[True])
 
-    def test_strict(self):
-        devices = [torch.device("cpu")]
-        if torch.cuda.is_available():
-            devices.append(torch.device("cuda"))
-        for device in devices:
-            for profile in ("minimal", "short_recurrent", "non_aligned", "long_sequence"):
-                for bias in (False, True):
-                    layout_results = {}
-                    for batch_first in (False, True):
-                        state_profile = (
-                            "typical_random"
-                            if profile in ("short_recurrent", "long_sequence")
-                            else "omitted"
-                        )
-                        with self.subTest(
-                            device=device,
-                            profile=profile,
-                            bias=bias,
-                            batch_first=batch_first,
-                            state=state_profile,
-                        ):
-                            layout_results[batch_first] = self.run_case(
-                                profile, device, bias, batch_first, state_profile
-                            )
-                    self.assert_layout_equivalent(layout_results[False], layout_results[True])
+    def test_cpu_runtime_is_rejected(self):
+        module = QuantLSTM(2, 3)
+        input_tensor = torch.zeros((4, 1, 2))
+        message = "CPU 实现仅用于 C\\+\\+ reference model"
+        with torch.no_grad(), self.assertRaisesRegex(RuntimeError, message):
+            module(input_tensor)
+        with self.assertRaisesRegex(RuntimeError, message):
+            module(input_tensor.requires_grad_())
+        with self.assertRaisesRegex(RuntimeError, message):
+            _quant_lstm.lstm_forward(
+                input_tensor,
+                module.weight_ih_l0,
+                module.weight_hh_l0,
+                module.bias_ih_l0,
+                module.bias_hh_l0,
+                None,
+                None,
+                False,
+            )
+        with self.assertRaisesRegex(RuntimeError, message):
+            _quant_lstm.lstm_forward_training(
+                input_tensor,
+                module.weight_ih_l0,
+                module.weight_hh_l0,
+                module.bias_ih_l0,
+                module.bias_hh_l0,
+                None,
+                None,
+                False,
+            )
+        gate_trace = torch.zeros((4, 1, 12))
+        state_trace = torch.zeros((4, 1, 3))
+        with self.assertRaisesRegex(RuntimeError, message):
+            _quant_lstm.lstm_backward_float(
+                input_tensor,
+                module.weight_ih_l0,
+                module.weight_hh_l0,
+                module.bias_ih_l0,
+                module.bias_hh_l0,
+                None,
+                None,
+                False,
+                gate_trace,
+                state_trace,
+                state_trace,
+                state_trace,
+                state_trace,
+                torch.zeros((1, 3)),
+                torch.zeros((1, 3)),
+            )
 
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_contract_errors(self):
         with self.assertRaises(ValueError):
             QuantLSTM(2, 3, num_layers=2)
         with self.assertRaises(ValueError):
             QuantLSTM(2, 3, dtype=torch.float64)
 
-        module = QuantLSTM(2, 3)
-        input_tensor = torch.zeros((4, 1, 2))
+        module = QuantLSTM(2, 3, device="cuda")
+        input_tensor = torch.zeros((4, 1, 2), device="cuda")
         with self.assertRaises(RuntimeError):
             module(input_tensor.double())
         with self.assertRaises(RuntimeError):
             module(input_tensor, (torch.zeros((1, 1, 3)), None))
         with self.assertRaises(RuntimeError):
-            invalid_state = torch.zeros((2, 1, 3))
+            invalid_state = torch.zeros((2, 1, 3), device="cuda")
             module(input_tensor, (invalid_state, invalid_state))
 
-        module.weight_hh_l0 = nn.Parameter(torch.empty((11, 3)))
+        module.weight_hh_l0 = nn.Parameter(torch.empty((11, 3), device="cuda"))
         with self.assertRaises(RuntimeError):
             module(input_tensor)
 
-        module = QuantLSTM(2, 3)
-        module.weight_ih_l0 = nn.Parameter(torch.empty((11, 2)))
+        module = QuantLSTM(2, 3, device="cuda")
+        module.weight_ih_l0 = nn.Parameter(torch.empty((11, 2), device="cuda"))
         with self.assertRaises(RuntimeError):
             module(input_tensor)
 
-        module = QuantLSTM(2, 3)
-        module.bias_ih_l0 = nn.Parameter(torch.empty(11))
+        module = QuantLSTM(2, 3, device="cuda")
+        module.bias_ih_l0 = nn.Parameter(torch.empty(11, device="cuda"))
         with self.assertRaises(RuntimeError):
             module(input_tensor)
 
-        if torch.cuda.is_available():
-            cuda_module = QuantLSTM(2, 3, device="cuda")
-            with self.assertRaises(RuntimeError):
-                cuda_module(input_tensor)
+        cuda_module = QuantLSTM(2, 3, device="cuda")
+        with self.assertRaises(RuntimeError):
+            cuda_module(input_tensor.cpu())
 
 
 if __name__ == "__main__":
@@ -268,6 +311,7 @@ if __name__ == "__main__":
         names = {
             "basic": [
                 "FloatReferenceTest.test_basic",
+                "FloatReferenceTest.test_cpu_runtime_is_rejected",
                 "FloatReferenceTest.test_contract_errors",
             ],
             "strict": "FloatReferenceTest.test_strict",

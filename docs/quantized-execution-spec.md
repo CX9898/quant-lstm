@@ -291,6 +291,10 @@ q_h_new = Clamp(
 
 GEMM/普通乘积使用 int64，Cell Q31 合并使用 `__int128`。普通 rescale 执行整数 multiplier+shift/POT2 shift。首版真实激活桥接包含浮点函数，因此只冻结整数算术与融合公式，不代表完整硬件 LUT 语义。
 
+CPU FP32 与 int32 实现只作为显式 C++ reference model。PyTorch `QuantLSTM` 的
+完全浮点、量化和 QAT 执行路径均只接受 CUDA tensor，不得按设备自动回退到 CPU
+reference。
+
 ### 9.4 FP32 q-carrier QAT backward
 
 训练态保存量化后的 input、W/R、可选 bias、h0/c0，以及 7 类真实 checkpoint：
@@ -348,10 +352,11 @@ Golden 使用显式 `dtype/shape/data`、row-major 一维 data。Standard scale 
 6. 已完成：SQNR/Percentile 独立候选范围搜索复用统一 MinMax、minimum-scale、POT2 CoverRange 和执行参数派生链；参数包导入后 CUDA FP 主路径结果逐值一致。
 7. 已完成：PyTorch 接口只通过 C++ resolver 消费 canonical resolved config；校准、完整 `4H` 参数包导入导出、CUDA 直接调用、两种布局和真实 Clamp mask 已通过阶段 6 验收。
 8. 已完成：双向 forward/reverse 分别校准并强制共享 input 网格，输出与 `h_n/c_n` 顺序对齐 PyTorch；CPU-only 构建、测试、安装、外部消费和无 CUDA 链接门禁通过。
-9. 已完成：CPU/CUDA 浮点 backward 位于 C++/CUDA 核心并对齐 PyTorch；训练态
-   CUDA forward 原生输出实际消费的 master q-carrier/checkpoint/Clamp mask，QAT
-   通过 CUDA 反量化与 mask-aware backward 完成 gradient、h0/c0、bias disabled、
-   双向、Clamp STE、单步优化和多步 loss 下降验收。生产 Python 仅负责扩展调度。
+9. 已完成：CUDA 浮点 backward 对齐 PyTorch；训练态 CUDA forward 原生输出实际
+   消费的 master q-carrier/checkpoint/Clamp mask，QAT 通过 CUDA 反量化与
+   mask-aware backward 完成 gradient、h0/c0、bias disabled、双向、Clamp STE、
+   单步优化和多步 loss 下降验收。生产 Python 仅负责扩展调度并拒绝 CPU 执行；
+   CPU FP/int32 实现仅作为 C++ reference model。
 10. 已完成：标准 ONNX `LSTM` 单节点导出；量化静态参数缓存保持 Golden 与精度指标不变，P50/P95 获得稳定收益，memcheck/racecheck、Nsight SGEMM 计数和版本化设备阈值通过。
 11. 待后续阶段完成：代表性真实数据和模型级指标；接入前只能声明 `synthetic_numeric` 数值验证通过。
 
