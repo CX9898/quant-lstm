@@ -904,9 +904,10 @@ da_o = do * o_t * (1 - o_t)
 ```
 
 随后 `da=(da_i,da_f,da_g,da_o)` 分别用于 input/recurrent Linear 的 input、weight
-和 bias 梯度。浮点模式从 master input/parameter 重建这些最少 trace；量化模式把
-前向保存的 q-carrier master 和 gate/cell/hidden checkpoint 按各自 standard
-scale/zp 反量化后代入同一组公式。
+和 bias 梯度。CPU 浮点 reference 从 master input/parameter 重建最少 trace；CUDA
+完全浮点训练由 native forward 保存 gate/cell trace，再由 CUDA pointwise kernel
+和 cuBLAS 直接执行同一组公式。量化模式把前向保存的 q-carrier master 和
+gate/cell/hidden checkpoint 按各自 standard scale/zp 反量化后代入同一组公式。
 
 QAT 对 Round 使用恒等 STE。对任意真实量化边界 `y=Clamp(Round(x))`，只有前向
 记录为 Clamp 的位置使用 `dy/dx=0`，其余位置使用 `dy/dx=1`。Mask 按计算图逆序
@@ -983,6 +984,15 @@ Golden 只使用一个入库的版本化 JSON schema。根对象以 `kind=primit
 2. 静态参数 cache miss、hit 和 generation key 失效路径的所有 Golden checkpoint 逐值一致；优化前后精度指标完全一致。
 3. 两次稳定 CUDA benchmark、memcheck/racecheck 和 Nsight SGEMM 计数通过；版本化阈值按环境和 profile 隔离。
 4. 缓存、ONNX 重排和性能门禁均未引入新的量化点、乘法配置或执行公式分支。
+
+阶段 9 后续的全浮点 CUDA backward 补充证据：
+
+1. CUDA forward 保存 gate/cell 最少 trace；native backward 的逐时间步点算子、
+   循环梯度、input/weight 梯度和 bias reduction 均位于 CUDA/cuBLAS。
+2. 单向/双向、bias 开关、两种布局、显式和省略 h0/c0 的全部梯度对齐
+   `torch.nn.LSTM`，且路径测试禁止 CUDA 浮点训练回退到 Python backward。
+3. 直接 CUDA 公式测试、全量 C++/Python 回归、memcheck、racecheck 和 Nsight
+   kernel trace 通过；未修改本节 backward 公式或 QAT clamp-mask 语义。
 
 最终冻结继续受以下回归门禁保护：
 

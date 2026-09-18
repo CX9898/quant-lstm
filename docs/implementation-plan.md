@@ -1,6 +1,6 @@
 # Quant-LSTM 纯定点量化实现计划
 
-> 状态：阶段 9 已完成；标准 ONNX 导出、CUDA 静态参数缓存与版本化性能门禁已验收
+> 状态：阶段 9 已完成；标准 ONNX、CUDA 静态参数缓存、版本化性能门禁与全浮点 native CUDA backward 已验收
 > 参考基线：`/home/chengxing.zou/projects/quant-gru`，commit `9c25d14`
 > 目标仓库：`/home/chengxing.zou/projects/quant-lstm`
 
@@ -656,6 +656,21 @@ quant-lstm/
 - RTX 6000D 的四个 Pedantic/TF32 profile 相对优化前基线，P50 降低 11.6%–19.6%，P95 降低 11.6%–18.3%；memcheck、racecheck 和 Nsight 136 次 SGEMM 交叉计数通过。
 - `cuda_performance_thresholds_v1.json` 按 GPU/CUDA/cuBLAS/profile 冻结 P50/P95/吞吐门禁，只读检查器拒绝环境错配和优化前基线。
 - cuBLASLt、CUDA Graph 与额外 pointwise fusion 经评估未采用；具体理由、workspace 代价、命令和指标见 `docs/cuda-performance.md`。
+
+阶段 9 后续补充了与 GRU 同层级的完全浮点 CUDA 训练路径，但不改变阶段 10 的
+条件性启动规则：
+
+- `use_quantization=False` 的 CUDA forward 在原有融合状态 kernel 中可选保存
+  `gate_outputs/cell_states/cell_tanh_outputs`，无梯度的推理调用不分配这些
+  checkpoint。
+- native backward 由逐时间步 CUDA pointwise kernel、循环状态 cuBLAS SGEMM、
+  跨时间批量 input/weight SGEMM 和一次 bias reduction kernel 组成；Python
+  autograd 不再执行浮点 CUDA 的逐时间步反向循环。
+- CPU 浮点 backward 保留 PyTorch tensor reference；FP32 q-carrier QAT 保留阶段 8
+  的 checkpoint 反量化和 clamp-mask STE，因此本次补充不改变任何量化公式。
+- 单向/双向、bias 开关、两种布局和显式/省略 h0/c0 的梯度继续对齐
+  `torch.nn.LSTM`。直接 CUDA 公式测试、路径防回退测试、全量回归、memcheck、
+  racecheck 和 Nsight kernel trace 均通过。
 
 ### 阶段 10：条件性 CUDA int32 载体与整数集成
 

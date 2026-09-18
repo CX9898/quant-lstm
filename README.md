@@ -12,6 +12,13 @@ synthetic numeric 精度门禁保持生效。量化执行语义以
 `docs/configuration.md` 与 `docs/dual-carrier-execution.md`；标准 ONNX LSTM 导出见
 `docs/onnx-export.md`，CUDA 性能证据见 `docs/cuda-performance.md`。
 
+`use_quantization=False` 是完全 FP32 训练模式。在 CUDA 上，训练前向由原生
+CUDA/cuBLAS 执行并保存最少的 gate/cell checkpoint，反向的逐时间步链式计算、
+循环状态梯度、input/weight GEMM 和 bias reduction 均由 CUDA kernel/cuBLAS
+完成；Python autograd 只负责张量保存和调用调度。CPU 浮点训练保留 PyTorch
+tensor reference fallback。量化 QAT backward 仍执行阶段 8 冻结的 clamp-mask
+浮点代理，不与无量化的 native CUDA backward 混用。
+
 ## 构建
 
 ```bash
