@@ -1,16 +1,15 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <nlohmann/json_fwd.hpp>
+#include <vector>
+
 #include "common/numeric_metrics.h"
 #include "lstm/forward_float.h"
 #include "lstm/lstm_execution_params.h"
 #include "lstm/quant_config.h"
 #include "lstm/quant_params.h"
-
-#include <nlohmann/json_fwd.hpp>
-
-#include <cstddef>
-#include <cstdint>
-#include <vector>
 
 namespace quant_lstm::test {
 
@@ -81,62 +80,54 @@ struct TensorMetrics {
 
 LstmShape shapeFromSyntheticProfile(const nlohmann::json& profile);
 
-FloatMaster makeFloatMaster(const nlohmann::json& profile,
-                            std::uint64_t data_seed);
+FloatMaster makeFloatMaster(const nlohmann::json& profile, std::uint64_t data_seed);
 
-LstmQuantizationRanges makeSyntheticRanges(
-    const nlohmann::json& profile, const LstmShape& shape,
-    const LstmOperatorQuantConfig& config,
-    const FloatMaster& parameter_master);
+LstmQuantizationRanges makeSyntheticRanges(const nlohmann::json& profile, const LstmShape& shape,
+                                           const LstmOperatorQuantConfig& config,
+                                           const FloatMaster& parameter_master);
 
-QuantizedMaster quantizeMaster(const LstmShape& shape,
-                               const LstmOperatorQuantConfig& config,
-                               const LstmQuantParams& params,
-                               const FloatMaster& master);
+QuantizedMaster quantizeMaster(const LstmShape& shape, const LstmOperatorQuantConfig& config,
+                               const LstmQuantParams& params, const FloatMaster& master);
 
-SyntheticPrecisionFixture makeSyntheticPrecisionFixture(
-    const nlohmann::json& profile);
+SyntheticPrecisionFixture makeSyntheticPrecisionFixture(const nlohmann::json& profile);
 
-std::vector<std::int32_t> quantizeTensor(
-    const std::vector<float>& source, QuantOperator id,
-    const LstmOperatorQuantConfig& config, const LstmQuantParams& params,
-    std::size_t row_width = 0);
+std::vector<std::int32_t> quantizeTensor(const std::vector<float>& source, QuantOperator id,
+                                         const LstmOperatorQuantConfig& config,
+                                         const LstmQuantParams& params, std::size_t row_width = 0);
 
-std::vector<float> asFloatCarrier(
-    const std::vector<std::int32_t>& values);
+std::vector<float> asFloatCarrier(const std::vector<std::int32_t>& values);
 
-std::vector<float> dequantizeTensor(
-    const std::vector<std::int32_t>& source, QuantOperator id,
-    const LstmOperatorQuantConfig& config, const LstmQuantParams& params);
+std::vector<float> dequantizeTensor(const std::vector<std::int32_t>& source, QuantOperator id,
+                                    const LstmOperatorQuantConfig& config,
+                                    const LstmQuantParams& params);
 
-std::vector<float> dequantizeTensor(
-    const std::vector<float>& source, QuantOperator id,
-    const LstmOperatorQuantConfig& config, const LstmQuantParams& params);
+std::vector<float> dequantizeTensor(const std::vector<float>& source, QuantOperator id,
+                                    const LstmOperatorQuantConfig& config,
+                                    const LstmQuantParams& params);
 
-FloatLstmResult runCpuFloatOracle(const LstmShape& shape,
-                                  const FloatMaster& master);
+FloatLstmResult runCpuFloatOracle(const LstmShape& shape, const FloatMaster& master);
 
-Int32LstmResult runCpuInt32Oracle(
-    const LstmShape& shape, const LstmOperatorQuantConfig& config,
-    const LstmQuantParams& params, const LstmExecutionParams& execution,
-    const FloatMaster& master, const QuantizedMaster& quantized);
+Int32LstmResult runCpuInt32Oracle(const LstmShape& shape, const LstmOperatorQuantConfig& config,
+                                  const LstmQuantParams& params,
+                                  const LstmExecutionParams& execution, const FloatMaster& master,
+                                  const QuantizedMaster& quantized);
 
-FloatLstmResult runCpuFpQuantizedOracle(
-    const LstmShape& shape, const LstmOperatorQuantConfig& config,
-    const LstmQuantParams& params, const LstmExecutionParams& execution,
-    const FloatMaster& master, const QuantizedMaster& quantized);
+FloatLstmResult runCpuFpQuantizedOracle(const LstmShape& shape,
+                                        const LstmOperatorQuantConfig& config,
+                                        const LstmQuantParams& params,
+                                        const LstmExecutionParams& execution,
+                                        const FloatMaster& master,
+                                        const QuantizedMaster& quantized);
 
-SyntheticNumericMetrics computeSyntheticNumericMetrics(
-    const float* actual, const float* expected, std::size_t count);
+SyntheticNumericMetrics computeSyntheticNumericMetrics(const float* actual, const float* expected,
+                                                       std::size_t count);
 
 SyntheticNumericMetrics computeSyntheticNumericMetrics(
     const float* actual, const float* expected, std::size_t count,
-    const std::int32_t* quantized_values,
-    quantization::QuantizationType quantization_type);
+    const std::int32_t* quantized_values, quantization::QuantizationType quantization_type);
 
 SyntheticNumericMetrics computeSyntheticNumericMetrics(
-    const float* actual, const float* expected, std::size_t count,
-    const float* quantized_values,
+    const float* actual, const float* expected, std::size_t count, const float* quantized_values,
     quantization::QuantizationType quantization_type);
 
 TensorMetrics evaluateTensorMetrics(const std::vector<float>& actual,

@@ -85,22 +85,18 @@ struct NumericSafetyReport {
     std::string gate_boundary_bound;
 
     bool safe() const noexcept {
-        return int64_gemm_safe && bias_rescale_safe &&
-               int64_linear_accumulation_safe && linear_output_rescale_safe &&
-               int64_linear_boundary_safe && int64_cell_product_safe &&
-               int128_cell_safe && int64_cell_requantize_safe &&
-               int64_cell_boundary_safe && int64_hidden_product_safe &&
-               hidden_rescale_safe && int64_hidden_boundary_safe &&
-               gate_lhs_rescale_safe &&
-               gate_rhs_rescale_safe && int64_gate_merge_safe &&
-               int64_gate_boundary_safe && encodings_valid &&
+        return int64_gemm_safe && bias_rescale_safe && int64_linear_accumulation_safe &&
+               linear_output_rescale_safe && int64_linear_boundary_safe &&
+               int64_cell_product_safe && int128_cell_safe && int64_cell_requantize_safe &&
+               int64_cell_boundary_safe && int64_hidden_product_safe && hidden_rescale_safe &&
+               int64_hidden_boundary_safe && gate_lhs_rescale_safe && gate_rhs_rescale_safe &&
+               int64_gate_merge_safe && int64_gate_boundary_safe && encodings_valid &&
                fp32_accumulation != Fp32AccumulationClass::UnsafeNonFinite;
     }
 };
 
 NumericSafetyReport buildNumericSafetyReport(const NumericSafetyInput& input);
 
-void enforceNumericSafety(const NumericSafetyReport& report,
-                          bool require_exact_accumulation);
+void enforceNumericSafety(const NumericSafetyReport& report, bool require_exact_accumulation);
 
 }  // namespace quant_lstm::quantization

@@ -1,8 +1,8 @@
 #pragma once
 
-#include "quantization/bit_width.h"
-
 #include <cstdint>
+
+#include "quantization/bit_width.h"
 
 // 外部量化参数只保存 standard scale/zp；执行编码不能反向覆盖本结构。
 namespace quant_lstm::quantization {

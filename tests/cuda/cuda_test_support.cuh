@@ -1,7 +1,5 @@
 #pragma once
 
-#include "lstm/forward_quantized_fp_cuda.h"
-
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 
@@ -11,19 +9,19 @@
 #include <utility>
 #include <vector>
 
+#include "lstm/forward_quantized_fp_cuda.h"
+
 namespace quant_lstm::test {
 
 inline void checkCuda(cudaError_t status, const char* operation) {
     if (status != cudaSuccess) {
-        throw std::runtime_error(std::string(operation) + ": " +
-                                 cudaGetErrorString(status));
+        throw std::runtime_error(std::string(operation) + ": " + cudaGetErrorString(status));
     }
 }
 
 inline void checkCublas(cublasStatus_t status, const char* operation) {
     if (status != CUBLAS_STATUS_SUCCESS) {
-        throw std::runtime_error(std::string(operation) +
-                                 " 失败，cuBLAS status=" +
+        throw std::runtime_error(std::string(operation) + " 失败，cuBLAS status=" +
                                  std::to_string(static_cast<int>(status)));
     }
 }
@@ -35,8 +33,7 @@ class DeviceBuffer {
 
     explicit DeviceBuffer(std::size_t count) : count_(count) {
         if (count_ != 0) {
-            checkCuda(cudaMalloc(reinterpret_cast<void**>(&data_),
-                                 count_ * sizeof(T)),
+            checkCuda(cudaMalloc(reinterpret_cast<void**>(&data_), count_ * sizeof(T)),
                       "cudaMalloc");
         }
     }
@@ -51,8 +48,7 @@ class DeviceBuffer {
     DeviceBuffer& operator=(const DeviceBuffer&) = delete;
 
     DeviceBuffer(DeviceBuffer&& other) noexcept
-        : data_(std::exchange(other.data_, nullptr)),
-          count_(std::exchange(other.count_, 0)) {}
+        : data_(std::exchange(other.data_, nullptr)), count_(std::exchange(other.count_, 0)) {}
 
     DeviceBuffer& operator=(DeviceBuffer&& other) noexcept {
         if (this != &other) {
@@ -74,8 +70,7 @@ class DeviceBuffer {
             throw std::invalid_argument("host/device 元素数量不匹配");
         }
         if (count_ != 0) {
-            checkCuda(cudaMemcpy(data_, source.data(), bytes(),
-                                 cudaMemcpyHostToDevice),
+            checkCuda(cudaMemcpy(data_, source.data(), bytes(), cudaMemcpyHostToDevice),
                       "cudaMemcpy H2D");
         }
     }
@@ -83,8 +78,7 @@ class DeviceBuffer {
     std::vector<T> copyToHost() const {
         std::vector<T> result(count_);
         if (count_ != 0) {
-            checkCuda(cudaMemcpy(result.data(), data_, bytes(),
-                                 cudaMemcpyDeviceToHost),
+            checkCuda(cudaMemcpy(result.data(), data_, bytes(), cudaMemcpyDeviceToHost),
                       "cudaMemcpy D2H");
         }
         return result;
@@ -97,38 +91,29 @@ class DeviceBuffer {
 
 class QuantizedCudaContextOwner {
    public:
-    explicit QuantizedCudaContextOwner(
-        std::size_t execution_parameter_bytes = 0,
-        std::size_t static_parameter_bytes = 0) {
+    explicit QuantizedCudaContextOwner(std::size_t execution_parameter_bytes = 0,
+                                       std::size_t static_parameter_bytes = 0) {
         try {
             for (cudaStream_t& stream : context_.streams) {
-                checkCuda(cudaStreamCreateWithFlags(
-                              &stream, cudaStreamNonBlocking),
+                checkCuda(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking),
                           "cudaStreamCreateWithFlags");
             }
             for (cublasHandle_t& handle : context_.handles) {
                 checkCublas(cublasCreate(&handle), "cublasCreate");
             }
             for (cudaEvent_t& event : context_.events) {
-                checkCuda(cudaEventCreateWithFlags(
-                              &event, cudaEventDisableTiming),
+                checkCuda(cudaEventCreateWithFlags(&event, cudaEventDisableTiming),
                           "cudaEventCreateWithFlags");
             }
             if (execution_parameter_bytes != 0) {
-                checkCuda(cudaMalloc(
-                              &context_.device_execution_params,
-                              execution_parameter_bytes),
+                checkCuda(cudaMalloc(&context_.device_execution_params, execution_parameter_bytes),
                           "cudaMalloc execution parameter cache");
-                context_.device_execution_params_bytes =
-                    execution_parameter_bytes;
+                context_.device_execution_params_bytes = execution_parameter_bytes;
             }
             if (static_parameter_bytes != 0) {
-                checkCuda(cudaMalloc(
-                              &context_.device_static_parameters,
-                              static_parameter_bytes),
+                checkCuda(cudaMalloc(&context_.device_static_parameters, static_parameter_bytes),
                           "cudaMalloc static parameter cache");
-                context_.device_static_parameters_bytes =
-                    static_parameter_bytes;
+                context_.device_static_parameters_bytes = static_parameter_bytes;
             }
         } catch (...) {
             release();
@@ -139,13 +124,10 @@ class QuantizedCudaContextOwner {
     ~QuantizedCudaContextOwner() { release(); }
 
     QuantizedCudaContextOwner(const QuantizedCudaContextOwner&) = delete;
-    QuantizedCudaContextOwner& operator=(const QuantizedCudaContextOwner&) =
-        delete;
+    QuantizedCudaContextOwner& operator=(const QuantizedCudaContextOwner&) = delete;
 
     LstmQuantizedFpCudaContext& get() noexcept { return context_; }
-    const LstmQuantizedFpCudaContext& get() const noexcept {
-        return context_;
-    }
+    const LstmQuantizedFpCudaContext& get() const noexcept { return context_; }
 
     void synchronize() const {
         checkCuda(cudaEventSynchronize(context_.events[1]),

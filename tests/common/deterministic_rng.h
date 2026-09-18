@@ -40,7 +40,7 @@ float uint32ToUniformFloat(std::uint32_t value) noexcept;
 void fillNormalLike(float* data, std::size_t count, std::uint64_t seed, TensorStream stream);
 
 /// 按 PyTorch LSTM 默认范围 [-1/sqrt(H),1/sqrt(H)) 生成参数。
-void fillLstmParameter(float* data, std::size_t count, std::int64_t hidden_size,
-                       std::uint64_t seed, TensorStream stream);
+void fillLstmParameter(float* data, std::size_t count, std::int64_t hidden_size, std::uint64_t seed,
+                       TensorStream stream);
 
 }  // namespace quant_lstm::test

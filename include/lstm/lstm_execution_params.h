@@ -1,13 +1,13 @@
 #pragma once
 
-#include "lstm/quant_config.h"
-#include "lstm/quant_params.h"
-#include "quantization/numeric_safety.h"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+
+#include "lstm/quant_config.h"
+#include "lstm/quant_params.h"
+#include "quantization/numeric_safety.h"
 
 // 本模块集中把 standard scale 派生为执行编码；执行原语不得重新计算比例。
 namespace quant_lstm {
@@ -90,13 +90,13 @@ struct LstmExecutionParams {
 
 // 从已完成校准的参数一次性派生全部 Linear、四门、Cell 与 Hidden 执行编码。
 // 无法证明整数边界安全时立即抛出；exact 模式还拒绝 FP32 精度风险。
-LstmExecutionParams deriveLstmExecutionParams(
-    const LstmOperatorQuantConfig& config, const LstmQuantParams& quant_params,
-    std::int64_t input_size, bool require_exact_accumulation = false);
+LstmExecutionParams deriveLstmExecutionParams(const LstmOperatorQuantConfig& config,
+                                              const LstmQuantParams& quant_params,
+                                              std::int64_t input_size,
+                                              bool require_exact_accumulation = false);
 
 // 以下执行函数只消费编码，不接受或暴露 raw ratio。
-std::int64_t applyExecutionRescale(std::int64_t value,
-                                   const ExecutionRescale& encoded);
+std::int64_t applyExecutionRescale(std::int64_t value, const ExecutionRescale& encoded);
 float applyExecutionRescale(float value, const ExecutionRescale& encoded);
 
 }  // namespace quant_lstm

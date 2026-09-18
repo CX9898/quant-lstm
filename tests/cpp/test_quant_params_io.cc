@@ -1,14 +1,13 @@
-#include "lstm/quant_config_loader.h"
-#include "lstm/quant_params_io.h"
-
-#include <nlohmann/json.hpp>
-
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
+
+#include "lstm/quant_config_loader.h"
+#include "lstm/quant_params_io.h"
 
 namespace {
 
@@ -30,18 +29,15 @@ void requireThrows(Function&& function, const char* message) {
 }
 
 quant_lstm::LstmOperatorQuantConfig defaultConfig() {
-    return quant_lstm::resolveQuantConfigFiles(
-        std::filesystem::path(QUANT_LSTM_SOURCE_DIR) /
-        "config/defaults/lstm_quant_default_v1.json");
+    return quant_lstm::resolveQuantConfigFiles(std::filesystem::path(QUANT_LSTM_SOURCE_DIR) /
+                                               "config/defaults/lstm_quant_default_v1.json");
 }
 
 quant_lstm::LstmQuantParamsBundle makeBundle(bool bias_enabled) {
     using namespace quant_lstm;
     auto config = defaultConfig();
-    config.at(QuantOperator::WeightInputHidden).granularity =
-        QuantGranularity::PerTensor;
-    config.at(QuantOperator::WeightHiddenHidden).granularity =
-        QuantGranularity::PerGate;
+    config.at(QuantOperator::WeightInputHidden).granularity = QuantGranularity::PerTensor;
+    config.at(QuantOperator::WeightHiddenHidden).granularity = QuantGranularity::PerGate;
     LstmQuantizationRanges ranges;
     ranges.reset(config, 2, bias_enabled);
     for (std::size_t index = 0; index < kQuantOperatorCount; ++index) {
@@ -59,9 +55,7 @@ quant_lstm::LstmQuantParamsBundle makeBundle(bool bias_enabled) {
     return {1, 3, config, finalizeQuantParams(config, ranges, 2, bias_enabled)};
 }
 
-bool sameBits(float lhs, float rhs) {
-    return std::memcmp(&lhs, &rhs, sizeof(float)) == 0;
-}
+bool sameBits(float lhs, float rhs) { return std::memcmp(&lhs, &rhs, sizeof(float)) == 0; }
 
 }  // namespace
 
@@ -73,17 +67,14 @@ int main() {
         const auto decoded = importQuantParamsBundle(encoded, true);
         require(exportQuantParamsBundle(decoded) == encoded,
                 "canonical export/import must be stable");
-        for (std::size_t operator_index = 0;
-             operator_index < kQuantOperatorCount; ++operator_index) {
-            const auto& expected =
-                bundle.quant_params.operators[operator_index].values;
-            const auto& actual =
-                decoded.quant_params.operators[operator_index].values;
+        for (std::size_t operator_index = 0; operator_index < kQuantOperatorCount;
+             ++operator_index) {
+            const auto& expected = bundle.quant_params.operators[operator_index].values;
+            const auto& actual = decoded.quant_params.operators[operator_index].values;
             require(expected.size() == actual.size(), "round-trip value count");
             for (std::size_t index = 0; index < expected.size(); ++index) {
                 require(sameBits(expected[index].scale, actual[index].scale) &&
-                            expected[index].zero_point ==
-                                actual[index].zero_point,
+                            expected[index].zero_point == actual[index].zero_point,
                         "FP32 scale and zero point round-trip");
             }
         }
@@ -100,55 +91,35 @@ int main() {
 
         auto numeric_scale = root;
         numeric_scale["operators"]["input"]["scales"][0] = 0.1;
-        requireThrows(
-            [&] {
-                static_cast<void>(
-                    importQuantParamsBundle(numeric_scale.dump()));
-            },
-            "numeric scale must be rejected");
+        requireThrows([&] { static_cast<void>(importQuantParamsBundle(numeric_scale.dump())); },
+                      "numeric scale must be rejected");
 
         auto compact = root;
-        compact["operators"]["weight_ih"]["scales"] =
-            nlohmann::json::array({"0.1"});
-        compact["operators"]["weight_ih"]["zero_points"] =
-            nlohmann::json::array({0});
-        requireThrows(
-            [&] { static_cast<void>(importQuantParamsBundle(compact.dump())); },
-            "compact parameter arrays must be rejected");
+        compact["operators"]["weight_ih"]["scales"] = nlohmann::json::array({"0.1"});
+        compact["operators"]["weight_ih"]["zero_points"] = nlohmann::json::array({0});
+        requireThrows([&] { static_cast<void>(importQuantParamsBundle(compact.dump())); },
+                      "compact parameter arrays must be rejected");
 
         auto raw_ratio = root;
         raw_ratio["operators"]["input"]["raw_ratio"] = "1";
-        requireThrows(
-            [&] {
-                static_cast<void>(importQuantParamsBundle(raw_ratio.dump()));
-            },
-            "raw execution ratio must be rejected");
+        requireThrows([&] { static_cast<void>(importQuantParamsBundle(raw_ratio.dump())); },
+                      "raw execution ratio must be rejected");
 
         auto broken_repetition = root;
         broken_repetition["operators"]["weight_ih"]["scales"][1] = "0.5";
-        requireThrows(
-            [&] {
-                static_cast<void>(
-                    importQuantParamsBundle(broken_repetition.dump()));
-            },
-            "per-tensor 4H repetition must be audited");
+        requireThrows([&] { static_cast<void>(importQuantParamsBundle(broken_repetition.dump())); },
+                      "per-tensor 4H repetition must be audited");
 
         const auto no_bias_bundle = makeBundle(false);
-        const std::string no_bias_json =
-            exportQuantParamsBundle(no_bias_bundle);
+        const std::string no_bias_json = exportQuantParamsBundle(no_bias_bundle);
         const auto no_bias_root = nlohmann::json::parse(no_bias_json);
         require(!no_bias_root["operators"].contains("bias_ih") &&
                     !no_bias_root["operators"].contains("bias_hh"),
                 "bias=False fields must be absent");
         auto forbidden_bias = no_bias_root;
-        forbidden_bias["operators"]["bias_ih"] =
-            root["operators"]["bias_ih"];
-        requireThrows(
-            [&] {
-                static_cast<void>(
-                    importQuantParamsBundle(forbidden_bias.dump()));
-            },
-            "bias=False must reject even populated bias fields");
+        forbidden_bias["operators"]["bias_ih"] = root["operators"]["bias_ih"];
+        requireThrows([&] { static_cast<void>(importQuantParamsBundle(forbidden_bias.dump())); },
+                      "bias=False must reject even populated bias fields");
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return EXIT_FAILURE;

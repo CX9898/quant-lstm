@@ -61,6 +61,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
     module.attr("distribution_profile") = quant_lstm::test::kDistributionProfile;
     module.def("generate_test_tensor", &generateTestTensor,
                "使用版本化 C++ PCG32 生成阶段 1 测试张量", pybind11::arg("shape"),
-               pybind11::arg("seed"), pybind11::arg("role"),
-               pybind11::arg("parameter") = false, pybind11::arg("hidden_size") = 1);
+               pybind11::arg("seed"), pybind11::arg("role"), pybind11::arg("parameter") = false,
+               pybind11::arg("hidden_size") = 1);
 }

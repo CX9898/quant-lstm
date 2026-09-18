@@ -1,11 +1,11 @@
 #pragma once
 
-#include "lstm/forward_float.h"
-#include "lstm/quant_params.h"
-
 #include <cstdint>
 #include <string>
 #include <vector>
+
+#include "lstm/forward_float.h"
+#include "lstm/quant_params.h"
 
 // 本模块声明两套单层、单向量化 CPU reference；输入输出均为 time-major row-major q 网格。
 namespace quant_lstm {
@@ -59,20 +59,20 @@ struct LstmFpReferenceTrace {
 };
 
 /// 执行 int32 carrier reference；初始状态须同时提供或同时省略，省略时使用各自 zero point。
-void lstmForwardInt32CpuReference(
-    const LstmShape& shape, const LstmInt32Weights& weights,
-    const std::int32_t* input, const std::int32_t* initial_hidden,
-    const std::int32_t* initial_cell, const LstmOperatorQuantConfig& config,
-    const LstmQuantParams& quant_params, const LstmExecutionParams& execution_params,
-    std::int32_t* output, std::int32_t* final_hidden, std::int32_t* final_cell,
-    LstmInt32ReferenceTrace* trace = nullptr);
+void lstmForwardInt32CpuReference(const LstmShape& shape, const LstmInt32Weights& weights,
+                                  const std::int32_t* input, const std::int32_t* initial_hidden,
+                                  const std::int32_t* initial_cell,
+                                  const LstmOperatorQuantConfig& config,
+                                  const LstmQuantParams& quant_params,
+                                  const LstmExecutionParams& execution_params, std::int32_t* output,
+                                  std::int32_t* final_hidden, std::int32_t* final_cell,
+                                  LstmInt32ReferenceTrace* trace = nullptr);
 
 /// 执行 FP32 q-carrier 标量 reference；所有 float q 输入必须位于合法整数网格。
 void lstmForwardQuantizedFpCpuReference(
-    const LstmShape& shape, const LstmFpCarrierWeights& weights,
-    const float* input, const float* initial_hidden, const float* initial_cell,
-    const LstmOperatorQuantConfig& config, const LstmQuantParams& quant_params,
-    const LstmExecutionParams& execution_params, float* output, float* final_hidden,
-    float* final_cell, LstmFpReferenceTrace* trace = nullptr);
+    const LstmShape& shape, const LstmFpCarrierWeights& weights, const float* input,
+    const float* initial_hidden, const float* initial_cell, const LstmOperatorQuantConfig& config,
+    const LstmQuantParams& quant_params, const LstmExecutionParams& execution_params, float* output,
+    float* final_hidden, float* final_cell, LstmFpReferenceTrace* trace = nullptr);
 
 }  // namespace quant_lstm

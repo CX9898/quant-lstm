@@ -47,17 +47,16 @@ struct LstmFloatCudaBackwardMasks {
 
 /// 执行完整 FP32 backward。grad_output 为 [T,B,H]，最终状态梯度为 [B,H]。
 /// initial_hidden/initial_cell 可同时为空，此时按全零初始状态处理。
-void lstmBackwardFloatCuda(
-    const LstmShape& shape, const LstmFloatWeights& weights,
-    const float* input, const float* initial_hidden,
-    const float* initial_cell, const LstmFloatCudaBackwardTrace& trace,
-    const float* grad_output, const float* grad_final_hidden,
-    const float* grad_final_cell, const LstmFloatCudaGradients& gradients,
-    cublasHandle_t handle, cudaStream_t stream, float* workspace = nullptr,
-    const LstmFloatCudaBackwardMasks* masks = nullptr);
+void lstmBackwardFloatCuda(const LstmShape& shape, const LstmFloatWeights& weights,
+                           const float* input, const float* initial_hidden,
+                           const float* initial_cell, const LstmFloatCudaBackwardTrace& trace,
+                           const float* grad_output, const float* grad_final_hidden,
+                           const float* grad_final_cell, const LstmFloatCudaGradients& gradients,
+                           cublasHandle_t handle, cudaStream_t stream, float* workspace = nullptr,
+                           const LstmFloatCudaBackwardMasks* masks = nullptr);
 
 /// 返回 backward 临时存储所需的 float 元素数。
-std::int64_t cudaBackwardWorkspaceElementCount(
-    const LstmShape& shape, bool split_linear_gradients = false);
+std::int64_t cudaBackwardWorkspaceElementCount(const LstmShape& shape,
+                                               bool split_linear_gradients = false);
 
 }  // namespace quant_lstm

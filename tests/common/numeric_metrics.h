@@ -35,8 +35,7 @@ NumericMetrics computeNumericMetrics(const Actual* actual, const Expected* expec
         const double rhs = static_cast<double>(expected[index]);
         const double difference = lhs - rhs;
         const double absolute = std::abs(difference);
-        result.maximum_absolute_error =
-            std::max(result.maximum_absolute_error, absolute);
+        result.maximum_absolute_error = std::max(result.maximum_absolute_error, absolute);
         absolute_sum += absolute;
         squared_sum += difference * difference;
         dot += lhs * rhs;

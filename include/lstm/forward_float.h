@@ -44,8 +44,8 @@ void validateLstmFloatArguments(const LstmShape& shape, const LstmFloatWeights& 
 ///
 /// initial_hidden/initial_cell 可同时为 nullptr，此时使用全零状态；二者必须同时省略或提供。
 void lstmForwardFloatCpu(const LstmShape& shape, const LstmFloatWeights& weights,
-                         const float* input, const float* initial_hidden,
-                         const float* initial_cell, float* output, float* final_hidden,
-                         float* final_cell, LstmFloatReferenceTrace* trace = nullptr);
+                         const float* input, const float* initial_hidden, const float* initial_cell,
+                         float* output, float* final_hidden, float* final_cell,
+                         LstmFloatReferenceTrace* trace = nullptr);
 
 }  // namespace quant_lstm

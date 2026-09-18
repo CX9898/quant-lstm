@@ -1,11 +1,11 @@
 #include "quantization/scale_encoding.h"
 
-#include "quantization/rounding.h"
-
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+
+#include "quantization/rounding.h"
 
 namespace quant_lstm::quantization {
 namespace {
@@ -53,28 +53,24 @@ CalibrationResult calibrateMinMax(float range_minimum, float range_maximum,
     }
 
     const QuantizedRange quantized_range = type.range();
-    const double steps =
-        static_cast<double>(quantized_range.maximum) - quantized_range.minimum;
+    const double steps = static_cast<double>(quantized_range.maximum) - quantized_range.minimum;
     const float minimum_scale = minimumScale(type);
     float adjusted_minimum = range_minimum;
     float adjusted_maximum = range_maximum;
     double candidate_scale = 0.0;
 
     if (type.is_symmetric && !type.is_unsigned) {
-        const double absolute_maximum =
-            std::max(std::abs(static_cast<double>(range_minimum)),
-                     std::abs(static_cast<double>(range_maximum)));
+        const double absolute_maximum = std::max(std::abs(static_cast<double>(range_minimum)),
+                                                 std::abs(static_cast<double>(range_maximum)));
         candidate_scale = absolute_maximum / quantized_range.maximum;
     } else if (type.is_symmetric) {
         adjusted_minimum = 0.0F;
         adjusted_maximum = std::max(range_maximum, 0.0F);
-        candidate_scale =
-            static_cast<double>(adjusted_maximum) / quantized_range.maximum;
+        candidate_scale = static_cast<double>(adjusted_maximum) / quantized_range.maximum;
     } else {
         adjusted_minimum = std::min(range_minimum, 0.0F);
         adjusted_maximum = std::max(range_maximum, 0.0F);
-        candidate_scale =
-            (static_cast<double>(adjusted_maximum) - adjusted_minimum) / steps;
+        candidate_scale = (static_cast<double>(adjusted_maximum) - adjusted_minimum) / steps;
     }
 
     const bool fallback_used = candidate_scale < static_cast<double>(minimum_scale);
@@ -89,8 +85,7 @@ CalibrationResult calibrateMinMax(float range_minimum, float range_maximum,
             adjusted_maximum = static_cast<float>(quantized_range.maximum) * minimum_scale;
         } else {
             adjusted_minimum = std::min(range_minimum, 0.0F);
-            adjusted_maximum =
-                adjusted_minimum + static_cast<float>(steps) * minimum_scale;
+            adjusted_maximum = adjusted_minimum + static_cast<float>(steps) * minimum_scale;
         }
     } else {
         scale = checkedScale(candidate_scale);

@@ -1,11 +1,11 @@
 #pragma once
 
+#include <cublas_v2.h>
+#include <cuda_runtime_api.h>
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
-
-#include <cublas_v2.h>
-#include <cuda_runtime_api.h>
 
 #include "lstm/forward_float.h"
 #include "lstm/lstm_execution_params.h"
@@ -105,15 +105,12 @@ struct LstmQuantizedFpCudaTimingEvents {
     cudaEvent_t complete = nullptr;
 };
 
-LstmQuantizedFpCudaWorkspaceBreakdown
-lstmQuantizedFpCudaWorkspaceBreakdown(const LstmShape& shape,
-                                      bool bias_enabled);
+LstmQuantizedFpCudaWorkspaceBreakdown lstmQuantizedFpCudaWorkspaceBreakdown(const LstmShape& shape,
+                                                                            bool bias_enabled);
 
-std::size_t lstmQuantizedFpCudaWorkspaceBytes(const LstmShape& shape,
-                                              bool bias_enabled);
+std::size_t lstmQuantizedFpCudaWorkspaceBytes(const LstmShape& shape, bool bias_enabled);
 
-std::size_t lstmQuantizedFpCudaStaticParameterBytes(
-    const LstmShape& shape, bool bias_enabled);
+std::size_t lstmQuantizedFpCudaStaticParameterBytes(const LstmShape& shape, bool bias_enabled);
 
 /// 异步执行单层、单向 LSTM。
 ///
@@ -126,14 +123,11 @@ std::size_t lstmQuantizedFpCudaStaticParameterBytes(
 /// 已入队，events[1] 已在 streams[0] 记录；调用方不得在该事件完成前复用输出、
 /// checkpoint、workspace 或 context 资源。
 void lstmForwardQuantizedFpCuda(
-    const LstmShape& shape, const LstmFloatWeights& master_weights,
-    const float* input, const float* initial_hidden,
-    const float* initial_cell, const LstmOperatorQuantConfig& resolved_config,
-    const LstmQuantParams& quant_params,
-    const LstmExecutionParams& execution_params, float* output,
-    float* final_hidden, float* final_cell,
-    LstmQuantizedFpCudaContext& context,
-    LstmQuantizedFpCudaMathMode math_mode,
+    const LstmShape& shape, const LstmFloatWeights& master_weights, const float* input,
+    const float* initial_hidden, const float* initial_cell,
+    const LstmOperatorQuantConfig& resolved_config, const LstmQuantParams& quant_params,
+    const LstmExecutionParams& execution_params, float* output, float* final_hidden,
+    float* final_cell, LstmQuantizedFpCudaContext& context, LstmQuantizedFpCudaMathMode math_mode,
     LstmQuantizedFpCudaWorkspace workspace = {},
     const LstmQuantizedFpCudaCheckpoints* checkpoints = nullptr,
     LstmQuantizedFpCudaStats* stats = nullptr,

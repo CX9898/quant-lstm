@@ -1,12 +1,11 @@
-#include "lstm/forward_float.h"
-
-#include "lstm/gate_layout.h"
-
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
 #include <vector>
+
+#include "lstm/forward_float.h"
+#include "lstm/gate_layout.h"
 
 // CPU 标量实现是阶段 1 的浮点语义参考；仅允许 FP32 运算，不包含量化逻辑。
 namespace quant_lstm {
@@ -38,8 +37,7 @@ void validateLstmFloatArguments(const LstmShape& shape, const LstmFloatWeights& 
                                 const float* input, const float* initial_hidden,
                                 const float* initial_cell, const float* output,
                                 const float* final_hidden, const float* final_cell) {
-    checkedProduct(
-        {shape.sequence_length, shape.batch_size, shape.input_size, shape.hidden_size});
+    checkedProduct({shape.sequence_length, shape.batch_size, shape.input_size, shape.hidden_size});
     checkedProduct({kGateCount, shape.hidden_size, shape.input_size});
     checkedProduct({kGateCount, shape.hidden_size, shape.hidden_size});
 
@@ -56,9 +54,9 @@ void validateLstmFloatArguments(const LstmShape& shape, const LstmFloatWeights& 
 }
 
 void lstmForwardFloatCpu(const LstmShape& shape, const LstmFloatWeights& weights,
-                         const float* input, const float* initial_hidden,
-                         const float* initial_cell, float* output, float* final_hidden,
-                         float* final_cell, LstmFloatReferenceTrace* trace) {
+                         const float* input, const float* initial_hidden, const float* initial_cell,
+                         float* output, float* final_hidden, float* final_cell,
+                         LstmFloatReferenceTrace* trace) {
     validateLstmFloatArguments(shape, weights, input, initial_hidden, initial_cell, output,
                                final_hidden, final_cell);
 
@@ -98,8 +96,7 @@ void lstmForwardFloatCpu(const LstmShape& shape, const LstmFloatWeights& weights
             float* hidden_row = final_hidden + batch * hidden_size;
             float* cell_row = final_cell + batch * hidden_size;
             const std::size_t gate_trace_offset =
-                (static_cast<std::size_t>(time) * batch_size + batch) *
-                kGateCount * hidden_size;
+                (static_cast<std::size_t>(time) * batch_size + batch) * kGateCount * hidden_size;
             const std::size_t state_trace_offset =
                 (static_cast<std::size_t>(time) * batch_size + batch) * hidden_size;
 
@@ -141,8 +138,8 @@ void lstmForwardFloatCpu(const LstmShape& shape, const LstmFloatWeights& weights
                 output[(static_cast<std::size_t>(time) * batch_size + batch) * hidden_size +
                        hidden] = next_hidden;
                 if (trace != nullptr) {
-                    const std::array<float, kGateCount> gate_values{
-                        input_gate, forget_gate, cell_gate, output_gate};
+                    const std::array<float, kGateCount> gate_values{input_gate, forget_gate,
+                                                                    cell_gate, output_gate};
                     for (std::size_t gate = 0; gate < kGateCount; ++gate) {
                         trace->gate_outputs[gate_trace_offset + gate * hidden_size + hidden] =
                             gate_values[gate];

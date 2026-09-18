@@ -86,9 +86,8 @@ QuantOperator parseQuantOperatorName(std::string_view name) {
 }
 
 bool isParameterOperator(QuantOperator id) noexcept {
-    return id == QuantOperator::WeightInputHidden ||
-           id == QuantOperator::WeightHiddenHidden || id == QuantOperator::BiasInputHidden ||
-           id == QuantOperator::BiasHiddenHidden;
+    return id == QuantOperator::WeightInputHidden || id == QuantOperator::WeightHiddenHidden ||
+           id == QuantOperator::BiasInputHidden || id == QuantOperator::BiasHiddenHidden;
 }
 
 bool isBiasOperator(QuantOperator id) noexcept {

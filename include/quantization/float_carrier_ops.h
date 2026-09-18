@@ -1,10 +1,10 @@
 #pragma once
 
-#include "quantization/quant_param.h"
-#include "quantization/rounding.h"
-
 #include <cmath>
 #include <stdexcept>
+
+#include "quantization/quant_param.h"
+#include "quantization/rounding.h"
 
 #if defined(__CUDACC__)
 #define QUANT_LSTM_FP_HOST_DEVICE __host__ __device__
@@ -18,17 +18,15 @@ namespace quant_lstm::quantization {
 namespace detail {
 
 // 仅供已完成参数校验的 host/device 执行核心调用；不得传入 raw ratio。
-QUANT_LSTM_FP_HOST_DEVICE inline float applyRescaleCore(
-    float value, const FixedPointScale& encoded) noexcept {
+QUANT_LSTM_FP_HOST_DEVICE inline float applyRescaleCore(float value,
+                                                        const FixedPointScale& encoded) noexcept {
     return roundToNearestEven(
-        ::ldexpf(value * static_cast<float>(encoded.multiplier),
-                 -static_cast<int>(encoded.shift)));
+        ::ldexpf(value * static_cast<float>(encoded.multiplier), -static_cast<int>(encoded.shift)));
 }
 
-QUANT_LSTM_FP_HOST_DEVICE inline float applyRescaleCore(
-    float value, const Pot2Rescale& encoded) noexcept {
-    return roundToNearestEven(
-        ::ldexpf(value, -static_cast<int>(encoded.shift)));
+QUANT_LSTM_FP_HOST_DEVICE inline float applyRescaleCore(float value,
+                                                        const Pot2Rescale& encoded) noexcept {
+    return roundToNearestEven(::ldexpf(value, -static_cast<int>(encoded.shift)));
 }
 
 }  // namespace detail

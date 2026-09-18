@@ -1,11 +1,11 @@
 #pragma once
 
-#include "quantization/quant_param.h"
-
 #include <cstddef>
 #include <cstdint>
 #include <utility>
 #include <vector>
+
+#include "quantization/quant_param.h"
 
 namespace quant_lstm::quantization {
 
@@ -51,9 +51,9 @@ struct HistogramCalibrationOptions {
 
 // 返回候选连续范围；调用方仍须通过 calibrateMinMax 及 POT2
 // CoverRange 统一生成最终 standard scale/zp。
-std::pair<float, float> calibrateHistogramRange(
-    const Histogram& histogram, const QuantizationType& type,
-    HistogramCalibrationMethod method,
-    const HistogramCalibrationOptions& options = {});
+std::pair<float, float> calibrateHistogramRange(const Histogram& histogram,
+                                                const QuantizationType& type,
+                                                HistogramCalibrationMethod method,
+                                                const HistogramCalibrationOptions& options = {});
 
 }  // namespace quant_lstm::quantization

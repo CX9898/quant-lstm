@@ -31,8 +31,7 @@ struct QuantizationType {
         if (is_unsigned) {
             return {0, static_cast<std::int32_t>((std::uint32_t{1} << bitwidth) - 1U)};
         }
-        const auto maximum =
-            static_cast<std::int32_t>((std::uint32_t{1} << (bitwidth - 1U)) - 1U);
+        const auto maximum = static_cast<std::int32_t>((std::uint32_t{1} << (bitwidth - 1U)) - 1U);
         return is_symmetric ? QuantizedRange{-maximum, maximum}
                             : QuantizedRange{-maximum - 1, maximum};
     }

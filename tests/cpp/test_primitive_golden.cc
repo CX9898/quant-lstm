@@ -1,18 +1,17 @@
-#include "lstm/quant_config_loader.h"
+#include <cstdlib>
+#include <iostream>
+#include <limits>
+#include <nlohmann/json.hpp>
+#include <stdexcept>
+#include <string>
+
 #include "golden_fixtures.h"
+#include "lstm/quant_config_loader.h"
 #include "quantization/fixed_point_ops.h"
 #include "quantization/float_carrier_ops.h"
 #include "quantization/real_activation.h"
 #include "quantization/rounding.h"
 #include "quantization/scale_encoding.h"
-
-#include <nlohmann/json.hpp>
-
-#include <cstdlib>
-#include <iostream>
-#include <limits>
-#include <stdexcept>
-#include <string>
 
 namespace {
 
@@ -63,8 +62,7 @@ q::QuantizationType parseType(const Json& inputs, std::size_t index) {
 
 void checkRound(const Json& document) {
     const Json& values = tensorData(document.at("inputs"), "values");
-    const Json& expected =
-        tensorData(document.at("expected").at("checkpoints"), "rounded");
+    const Json& expected = tensorData(document.at("expected").at("checkpoints"), "rounded");
     for (std::size_t index = 0; index < values.size(); ++index) {
         require(q::roundToNearestEven(values.at(index).get<double>()) ==
                     expected.at(index).get<double>(),
@@ -74,10 +72,8 @@ void checkRound(const Json& document) {
 
 void checkRange(const Json& document) {
     const Json& inputs = document.at("inputs");
-    const Json& minimum =
-        tensorData(document.at("expected").at("checkpoints"), "minimum");
-    const Json& maximum =
-        tensorData(document.at("expected").at("checkpoints"), "maximum");
+    const Json& minimum = tensorData(document.at("expected").at("checkpoints"), "minimum");
+    const Json& maximum = tensorData(document.at("expected").at("checkpoints"), "maximum");
     for (std::size_t index = 0; index < minimum.size(); ++index) {
         const auto actual = parseType(inputs, index).range();
         require(actual.minimum == minimum.at(index).get<std::int32_t>() &&
@@ -97,9 +93,7 @@ void checkMShift(const Json& document) {
         require(actual.multiplier == multipliers.at(index).get<std::uint16_t>() &&
                     actual.shift == shifts.at(index).get<std::int8_t>() &&
                     q::applyRescale(values.at(index).get<std::int64_t>(), actual) ==
-                        tensorData(expected, "int_apply")
-                            .at(index)
-                            .get<std::int64_t>() &&
+                        tensorData(expected, "int_apply").at(index).get<std::int64_t>() &&
                     q::applyRescale(values.at(index).get<float>(), actual) ==
                         tensorData(expected, "fp_apply").at(index).get<float>(),
                 "M+shift Golden mismatch");
@@ -114,12 +108,9 @@ void checkPot2(const Json& document) {
     for (std::size_t index = 0; index < range_minimum.size(); ++index) {
         const auto type = parseType(inputs, index);
         const auto calibrated = q::calibrateMinMax(
+            quant_lstm::parseCanonicalFloat32Value(range_minimum.at(index).get<std::string>()),
             quant_lstm::parseCanonicalFloat32Value(
-                range_minimum.at(index).get<std::string>()),
-            quant_lstm::parseCanonicalFloat32Value(
-                tensorData(inputs, "range_maximum")
-                    .at(index)
-                    .get<std::string>()),
+                tensorData(inputs, "range_maximum").at(index).get<std::string>()),
             type);
         const auto actual = q::convertScaleToPot2CoverRange(calibrated, type);
         require(
@@ -130,9 +121,7 @@ void checkPot2(const Json& document) {
                 actual.exponent ==
                     tensorData(diagnostics, "exponent").at(index).get<std::int8_t>() &&
                 actual.range_is_near_power_of_two ==
-                    tensorData(diagnostics, "range_is_near_power_of_two")
-                        .at(index)
-                        .get<bool>() &&
+                    tensorData(diagnostics, "range_is_near_power_of_two").at(index).get<bool>() &&
                 calibrated.diagnostics.fallback_used ==
                     tensorData(diagnostics, "fallback_used").at(index).get<bool>(),
             "POT2 Golden mismatch");
@@ -146,24 +135,19 @@ void checkQuantDequant(const Json& document) {
     const std::string operation = document.at("attributes").at("operation").get<std::string>();
     for (std::size_t index = 0; index < values.size(); ++index) {
         const auto type = parseType(inputs, index);
-        const q::QuantParam param{
-            quant_lstm::parseCanonicalFloat32(
-                tensorData(inputs, "scale").at(index).get<std::string>()),
-            tensorData(inputs, "zero_point").at(index).get<std::int32_t>()};
+        const q::QuantParam param{quant_lstm::parseCanonicalFloat32(
+                                      tensorData(inputs, "scale").at(index).get<std::string>()),
+                                  tensorData(inputs, "zero_point").at(index).get<std::int32_t>()};
         if (operation == "quantize") {
-            require(q::quantize(quant_lstm::parseCanonicalFloat32Value(
-                                    values.at(index).get<std::string>()),
-                                param, type) ==
-                        tensorData(checkpoints, "quantized")
-                            .at(index)
-                            .get<std::int32_t>(),
+            require(q::quantize(
+                        quant_lstm::parseCanonicalFloat32Value(values.at(index).get<std::string>()),
+                        param,
+                        type) == tensorData(checkpoints, "quantized").at(index).get<std::int32_t>(),
                     "quantize Golden mismatch");
         } else if (operation == "dequantize") {
             require(q::dequantize(values.at(index).get<std::int32_t>(), param, type) ==
                         quant_lstm::parseCanonicalFloat32Value(
-                            tensorData(checkpoints, "real")
-                                .at(index)
-                                .get<std::string>()),
+                            tensorData(checkpoints, "real").at(index).get<std::string>()),
                     "dequantize Golden mismatch");
         } else {
             throw std::invalid_argument("unknown quant_dequant operation");
@@ -174,13 +158,10 @@ void checkQuantDequant(const Json& document) {
 void checkActivation(const Json& document) {
     const Json& inputs = document.at("inputs");
     const Json& values = tensorData(inputs, "quantized");
-    const Json& expected =
-        tensorData(document.at("expected").at("checkpoints"), "quantized");
-    const bool fp32_carrier =
-        document.at("execution_model").get<std::string>() == "cpu_fp32";
+    const Json& expected = tensorData(document.at("expected").at("checkpoints"), "quantized");
+    const bool fp32_carrier = document.at("execution_model").get<std::string>() == "cpu_fp32";
     for (std::size_t index = 0; index < values.size(); ++index) {
-        const std::string activation =
-            tensorData(inputs, "kind").at(index).get<std::string>();
+        const std::string activation = tensorData(inputs, "kind").at(index).get<std::string>();
         if (activation != "sigmoid" && activation != "tanh") {
             throw std::invalid_argument("unknown real activation kind");
         }
@@ -193,19 +174,16 @@ void checkActivation(const Json& document) {
             quant_lstm::parseCanonicalFloat32(
                 tensorData(inputs, "output_scale").at(index).get<std::string>()),
             tensorData(inputs, "output_zero_point").at(index).get<std::int32_t>()};
-        const auto kind =
-            sigmoid ? q::RealActivationKind::Sigmoid : q::RealActivationKind::Tanh;
+        const auto kind = sigmoid ? q::RealActivationKind::Sigmoid : q::RealActivationKind::Tanh;
         if (fp32_carrier) {
-            require(q::realActivation(values.at(index).get<float>(), input_param,
-                                      {8, false, true}, output_param,
-                                      {8, sigmoid, true}, kind) ==
-                        expected.at(index).get<float>(),
+            require(q::realActivation(values.at(index).get<float>(), input_param, {8, false, true},
+                                      output_param, {8, sigmoid, true},
+                                      kind) == expected.at(index).get<float>(),
                     "FP32 real activation Golden mismatch");
         } else {
             require(q::realActivation(values.at(index).get<std::int32_t>(), input_param,
-                                      {8, false, true}, output_param,
-                                      {8, sigmoid, true}, kind) ==
-                        expected.at(index).get<std::int32_t>(),
+                                      {8, false, true}, output_param, {8, sigmoid, true},
+                                      kind) == expected.at(index).get<std::int32_t>(),
                     "int32 real activation Golden mismatch");
         }
     }
@@ -224,8 +202,7 @@ int main() {
                     "generated fixture case_id mismatch");
             require(document.at("kind").get<std::string>() == fixture.kind,
                     "primitive Golden kind mismatch");
-            require(document.at("execution_model").get<std::string>() ==
-                        fixture.execution_model,
+            require(document.at("execution_model").get<std::string>() == fixture.execution_model,
                     "generated fixture execution_model mismatch");
             validateTensorMap(document.at("inputs"));
             validateTensorMap(document.at("expected").at("checkpoints"));

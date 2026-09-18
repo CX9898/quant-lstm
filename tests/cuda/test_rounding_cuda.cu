@@ -1,10 +1,10 @@
-#include "quantization/rounding.h"
-
 #include <cuda_runtime.h>
 
 #include <array>
 #include <cstdlib>
 #include <iostream>
+
+#include "quantization/rounding.h"
 
 namespace {
 
@@ -18,10 +18,10 @@ __global__ void roundValues(const float* input, float* output, int count) {
 }  // namespace
 
 int main() {
-    constexpr std::array<float, 10> input{
-        -3.5F, -2.5F, -1.5F, -0.5F, 0.5F, 1.5F, 2.5F, 3.5F, 4.49F, 4.51F};
-    constexpr std::array<float, 10> expected{
-        -4.0F, -2.0F, -2.0F, 0.0F, 0.0F, 2.0F, 2.0F, 4.0F, 4.0F, 5.0F};
+    constexpr std::array<float, 10> input{-3.5F, -2.5F, -1.5F, -0.5F, 0.5F,
+                                          1.5F,  2.5F,  3.5F,  4.49F, 4.51F};
+    constexpr std::array<float, 10> expected{-4.0F, -2.0F, -2.0F, 0.0F, 0.0F,
+                                             2.0F,  2.0F,  4.0F,  4.0F, 5.0F};
     float* device_input = nullptr;
     float* device_output = nullptr;
     if (cudaMalloc(reinterpret_cast<void**>(&device_input), sizeof(input)) != cudaSuccess ||

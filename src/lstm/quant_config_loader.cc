@@ -1,12 +1,11 @@
 #include "lstm/quant_config_loader.h"
 
-#include <nlohmann/json.hpp>
-
 #include <array>
 #include <charconv>
 #include <cmath>
 #include <fstream>
 #include <iterator>
+#include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
@@ -32,9 +31,8 @@ class StrictJsonScanner {
 
    private:
     void skipWhitespace() {
-        while (position_ < text_.size() &&
-               (text_[position_] == ' ' || text_[position_] == '\n' ||
-                text_[position_] == '\r' || text_[position_] == '\t')) {
+        while (position_ < text_.size() && (text_[position_] == ' ' || text_[position_] == '\n' ||
+                                            text_[position_] == '\r' || text_[position_] == '\t')) {
             ++position_;
         }
     }
@@ -169,8 +167,7 @@ void requireObject(const Json& value, std::string_view context) {
     }
 }
 
-void rejectUnknownKeys(const Json& object,
-                       std::initializer_list<std::string_view> allowed,
+void rejectUnknownKeys(const Json& object, std::initializer_list<std::string_view> allowed,
                        std::string_view context) {
     requireObject(object, context);
     for (const auto& [key, unused] : object.items()) {
@@ -385,9 +382,8 @@ std::string formatCanonicalFloat32Value(float value) {
         throw std::invalid_argument("canonical float32 必须是有限数");
     }
     std::array<char, 64> buffer{};
-    const auto [end, error] =
-        std::to_chars(buffer.data(), buffer.data() + buffer.size(), value,
-                      std::chars_format::general);
+    const auto [end, error] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value,
+                                            std::chars_format::general);
     if (error != std::errc()) {
         throw std::runtime_error("float32 canonical 格式化失败");
     }
@@ -397,10 +393,8 @@ std::string formatCanonicalFloat32Value(float value) {
 float parseCanonicalFloat32Value(std::string_view text) {
     float value = 0.0F;
     const auto [end, error] =
-        std::from_chars(text.data(), text.data() + text.size(), value,
-                        std::chars_format::general);
-    if (error != std::errc() || end != text.data() + text.size() ||
-        !std::isfinite(value)) {
+        std::from_chars(text.data(), text.data() + text.size(), value, std::chars_format::general);
+    if (error != std::errc() || end != text.data() + text.size() || !std::isfinite(value)) {
         throw std::invalid_argument("canonical float32 字符串非法");
     }
     if (formatCanonicalFloat32Value(value) != text) {

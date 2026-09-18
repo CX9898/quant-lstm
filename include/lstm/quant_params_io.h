@@ -1,12 +1,12 @@
 #pragma once
 
-#include "lstm/lstm_execution_params.h"
-#include "lstm/quant_config.h"
-#include "lstm/quant_params.h"
-
 #include <cstdint>
 #include <string>
 #include <string_view>
+
+#include "lstm/lstm_execution_params.h"
+#include "lstm/quant_config.h"
+#include "lstm/quant_params.h"
 
 namespace quant_lstm {
 
@@ -27,8 +27,7 @@ LstmQuantParamsBundle importQuantParamsBundle(std::string_view json_text,
 
 // 审计外部 standard scale/zp 并重新派生执行编码；外部 bundle 不接受
 // raw ratio、M+shift 或 POT2 shift 字段。
-LstmExecutionParams auditQuantParamsBundle(
-    const LstmQuantParamsBundle& bundle,
-    bool require_exact_accumulation = false);
+LstmExecutionParams auditQuantParamsBundle(const LstmQuantParamsBundle& bundle,
+                                           bool require_exact_accumulation = false);
 
 }  // namespace quant_lstm

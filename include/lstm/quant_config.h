@@ -1,11 +1,11 @@
 #pragma once
 
-#include "quantization/quant_param.h"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
+
+#include "quantization/quant_param.h"
 
 // 本模块冻结 18 个真实量化点及 resolved config 的强类型表示。
 namespace quant_lstm {

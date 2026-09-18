@@ -1,16 +1,16 @@
 #pragma once
 
-#include "lstm/forward_float.h"
-#include "lstm/lstm_execution_params.h"
-#include "lstm/quant_config.h"
-#include "lstm/quant_params.h"
-#include "quantization/histogram.h"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
+
+#include "lstm/forward_float.h"
+#include "lstm/lstm_execution_params.h"
+#include "lstm/quant_config.h"
+#include "lstm/quant_params.h"
+#include "quantization/histogram.h"
 
 namespace quant_lstm {
 
@@ -68,9 +68,8 @@ class LstmCalibrationCollector {
                              std::size_t histogram_bin_count = 2048);
 
     void reset();
-    void collect(const LstmShape& shape, const LstmFloatWeights& weights,
-                 const float* input, const float* initial_hidden,
-                 const float* initial_cell);
+    void collect(const LstmShape& shape, const LstmFloatWeights& weights, const float* input,
+                 const float* initial_hidden, const float* initial_cell);
 
     const LstmQuantizationRanges& ranges() const noexcept;
     const LstmContributionRanges& contributions() const noexcept;
@@ -79,15 +78,12 @@ class LstmCalibrationCollector {
     std::int64_t hiddenSize() const noexcept;
     bool biasEnabled() const noexcept;
     const LstmOperatorQuantConfig& config() const noexcept;
-    const std::array<std::vector<quantization::HistogramCollector>,
-                     kQuantOperatorCount>&
+    const std::array<std::vector<quantization::HistogramCollector>, kQuantOperatorCount>&
     histograms() const noexcept;
 
    private:
-    void observeOperator(QuantOperator id, const float* values,
-                         std::size_t count);
-    void observeParameter(QuantOperator id, const float* values,
-                          std::size_t row_width);
+    void observeOperator(QuantOperator id, const float* values, std::size_t count);
+    void observeParameter(QuantOperator id, const float* values, std::size_t row_width);
 
     LstmOperatorQuantConfig config_;
     std::int64_t input_size_;
@@ -98,9 +94,7 @@ class LstmCalibrationCollector {
     LstmContributionRanges contributions_;
     bool collect_histograms_;
     std::size_t histogram_bin_count_;
-    std::array<std::vector<quantization::HistogramCollector>,
-               kQuantOperatorCount>
-        histograms_;
+    std::array<std::vector<quantization::HistogramCollector>, kQuantOperatorCount> histograms_;
 };
 
 // 会话封装 Empty -> Dirty -> Locked 生命周期。finalize 幂等；Locked 后
@@ -110,15 +104,12 @@ class LstmCalibrationSession {
     LstmCalibrationSession(LstmOperatorQuantConfig config, std::int64_t input_size,
                            std::int64_t hidden_size, bool bias_enabled,
                            CalibrationMethod method = CalibrationMethod::MinMax,
-                           quantization::HistogramCalibrationOptions
-                               histogram_options = {},
+                           quantization::HistogramCalibrationOptions histogram_options = {},
                            std::size_t histogram_bin_count = 2048);
 
-    void collect(const LstmShape& shape, const LstmFloatWeights& weights,
-                 const float* input, const float* initial_hidden,
-                 const float* initial_cell);
-    const FinalizedLstmCalibration& finalize(
-        bool require_exact_accumulation = false);
+    void collect(const LstmShape& shape, const LstmFloatWeights& weights, const float* input,
+                 const float* initial_hidden, const float* initial_cell);
+    const FinalizedLstmCalibration& finalize(bool require_exact_accumulation = false);
     void reset();
 
     CalibrationState state() const noexcept;

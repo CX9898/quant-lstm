@@ -1,8 +1,8 @@
 #pragma once
 
-#include "quantization/quant_param.h"
-
 #include <cstdint>
+
+#include "quantization/quant_param.h"
 
 // 本模块从 standard scale/range 派生内部执行编码；不保存第二套外部 scale。
 namespace quant_lstm::quantization {

@@ -25,8 +25,7 @@ std::string toDecimal(Unsigned128 value) {
     return std::string(result.rbegin(), result.rend());
 }
 
-bool checkedMultiply(Unsigned128 lhs, Unsigned128 rhs, Unsigned128 limit,
-                     Unsigned128* result) {
+bool checkedMultiply(Unsigned128 lhs, Unsigned128 rhs, Unsigned128 limit, Unsigned128* result) {
     if (lhs != 0 && rhs > limit / lhs) {
         *result = limit;
         return false;
@@ -56,8 +55,7 @@ BoundAnalysis analyzeInt64Sum(std::uint64_t lhs, std::uint64_t rhs) {
     return {true, static_cast<Unsigned128>(lhs) + rhs};
 }
 
-BoundAnalysis analyzeRoundedRightShift(Unsigned128 value,
-                                       std::uint8_t fractional_bits) {
+BoundAnalysis analyzeRoundedRightShift(Unsigned128 value, std::uint8_t fractional_bits) {
     if (fractional_bits > 127) {
         return {};
     }
@@ -85,8 +83,7 @@ RescaleAnalysis analyzeRescale(const EncodedRescaleSafetyInput& input) {
         return analysis;
     }
     if (input.shift < std::numeric_limits<std::int8_t>::min() ||
-        input.shift > std::numeric_limits<std::int8_t>::max() ||
-        input.shift <= -127 ||
+        input.shift > std::numeric_limits<std::int8_t>::max() || input.shift <= -127 ||
         input.source_maximum > kInt64Limit) {
         return analysis;
     }
@@ -97,8 +94,7 @@ RescaleAnalysis analyzeRescale(const EncodedRescaleSafetyInput& input) {
             return analysis;
         }
         analysis.encoding_valid = true;
-        if (!checkedMultiply(intermediate, input.multiplier_maximum, kInt128Limit,
-                             &intermediate)) {
+        if (!checkedMultiply(intermediate, input.multiplier_maximum, kInt128Limit, &intermediate)) {
             return analysis;
         }
     } else if (input.encoding == SafetyRescaleEncoding::Pot2) {
@@ -122,8 +118,7 @@ RescaleAnalysis analyzeRescale(const EncodedRescaleSafetyInput& input) {
     } else {
         const int left_shift = -input.shift;
         const Unsigned128 factor = Unsigned128{1} << left_shift;
-        if (!checkedMultiply(intermediate, factor, kInt128Limit,
-                             &analysis.result_bound)) {
+        if (!checkedMultiply(intermediate, factor, kInt128Limit, &analysis.result_bound)) {
             return analysis;
         }
     }
@@ -172,29 +167,23 @@ NumericSafetyReport buildNumericSafetyReport(const NumericSafetyInput& input) {
     const RescaleAnalysis bias = analyzeRescale(input.bias_rescale);
     report.bias_rescale_safe = bias.safe;
     report.bias_rescale_bound = formatRescaleBound(bias);
-    if (report.int64_gemm_safe && bias.safe &&
-        gemm_bound <= kInt64Limit - bias.result_bound) {
+    if (report.int64_gemm_safe && bias.safe && gemm_bound <= kInt64Limit - bias.result_bound) {
         report.int64_linear_accumulation_safe = true;
         report.linear_accumulation_bound = toDecimal(gemm_bound + bias.result_bound);
     } else {
         report.linear_accumulation_bound = ">INT64_MAX";
     }
-    const RescaleAnalysis linear_output =
-        analyzeChainedRescale(input.linear_output_rescale,
-                              report.int64_linear_accumulation_safe
-                                  ? gemm_bound + bias.result_bound
-                                  : kInt64Limit + 1U);
+    const RescaleAnalysis linear_output = analyzeChainedRescale(
+        input.linear_output_rescale,
+        report.int64_linear_accumulation_safe ? gemm_bound + bias.result_bound : kInt64Limit + 1U);
     report.linear_output_rescale_safe = linear_output.safe;
     report.linear_output_rescale_bound = formatRescaleBound(linear_output);
     const BoundAnalysis linear_boundary =
-        linear_output.safe
-            ? analyzeInt64Sum(
-                  static_cast<std::uint64_t>(linear_output.result_bound),
-                  input.linear_target_zero_point_maximum)
-            : BoundAnalysis{};
+        linear_output.safe ? analyzeInt64Sum(static_cast<std::uint64_t>(linear_output.result_bound),
+                                             input.linear_target_zero_point_maximum)
+                           : BoundAnalysis{};
     report.int64_linear_boundary_safe = linear_boundary.safe;
-    report.linear_boundary_bound =
-        formatBound(linear_boundary, "INT64_MAX");
+    report.linear_boundary_bound = formatBound(linear_boundary, "INT64_MAX");
 
     const BoundAnalysis cell_product =
         analyzeInt64Product(input.cell_lhs_maximum, input.cell_rhs_maximum);
@@ -208,24 +197,18 @@ NumericSafetyReport buildNumericSafetyReport(const NumericSafetyInput& input) {
         checkedMultiply(cell_q31_bound, input.q31_multiplier_maximum, kInt128Limit,
                         &cell_q31_bound) &&
         checkedMultiply(cell_q31_bound, 2U, kInt128Limit, &cell_q31_bound);
-    report.int128_cell_safe =
-        cell_q31_representable && cell_q31_bound <= kInt128Limit;
-    report.cell_q31_bound =
-        report.int128_cell_safe ? toDecimal(cell_q31_bound) : ">INT128_MAX";
+    report.int128_cell_safe = cell_q31_representable && cell_q31_bound <= kInt128Limit;
+    report.cell_q31_bound = report.int128_cell_safe ? toDecimal(cell_q31_bound) : ">INT128_MAX";
     const BoundAnalysis cell_requantize =
         report.int128_cell_safe
-            ? analyzeRoundedRightShift(cell_q31_bound,
-                                       input.cell_fractional_bits)
+            ? analyzeRoundedRightShift(cell_q31_bound, input.cell_fractional_bits)
             : BoundAnalysis{};
     report.int64_cell_requantize_safe = cell_requantize.safe;
-    report.cell_requantize_bound =
-        formatBound(cell_requantize, "INT64_MAX");
+    report.cell_requantize_bound = formatBound(cell_requantize, "INT64_MAX");
     const BoundAnalysis cell_boundary =
-        cell_requantize.safe
-            ? analyzeInt64Sum(
-                  static_cast<std::uint64_t>(cell_requantize.bound),
-                  input.cell_target_zero_point_maximum)
-            : BoundAnalysis{};
+        cell_requantize.safe ? analyzeInt64Sum(static_cast<std::uint64_t>(cell_requantize.bound),
+                                               input.cell_target_zero_point_maximum)
+                             : BoundAnalysis{};
     report.int64_cell_boundary_safe = cell_boundary.safe;
     report.cell_boundary_bound = formatBound(cell_boundary, "INT64_MAX");
 
@@ -234,21 +217,16 @@ NumericSafetyReport buildNumericSafetyReport(const NumericSafetyInput& input) {
     report.int64_hidden_product_safe = hidden_product.safe;
     report.hidden_product_bound = formatBound(hidden_product, "INT64_MAX");
 
-    const RescaleAnalysis hidden =
-        analyzeChainedRescale(input.hidden_rescale,
-                              hidden_product.safe ? hidden_product.bound
-                                                  : kInt64Limit + 1U);
+    const RescaleAnalysis hidden = analyzeChainedRescale(
+        input.hidden_rescale, hidden_product.safe ? hidden_product.bound : kInt64Limit + 1U);
     report.hidden_rescale_safe = hidden.safe;
     report.hidden_rescale_bound = formatRescaleBound(hidden);
     const BoundAnalysis hidden_boundary =
-        hidden.safe
-            ? analyzeInt64Sum(
-                  static_cast<std::uint64_t>(hidden.result_bound),
-                  input.hidden_target_zero_point_maximum)
-            : BoundAnalysis{};
+        hidden.safe ? analyzeInt64Sum(static_cast<std::uint64_t>(hidden.result_bound),
+                                      input.hidden_target_zero_point_maximum)
+                    : BoundAnalysis{};
     report.int64_hidden_boundary_safe = hidden_boundary.safe;
-    report.hidden_boundary_bound =
-        formatBound(hidden_boundary, "INT64_MAX");
+    report.hidden_boundary_bound = formatBound(hidden_boundary, "INT64_MAX");
     const RescaleAnalysis gate_lhs = analyzeRescale(input.gate_lhs_rescale);
     const RescaleAnalysis gate_rhs = analyzeRescale(input.gate_rhs_rescale);
     report.gate_lhs_rescale_safe = gate_lhs.safe;
@@ -263,16 +241,14 @@ NumericSafetyReport buildNumericSafetyReport(const NumericSafetyInput& input) {
     report.int64_gate_merge_safe = gate_merge.safe;
     report.gate_merge_bound = formatBound(gate_merge, "INT64_MAX");
     const BoundAnalysis gate_boundary =
-        gate_merge.safe
-            ? analyzeInt64Sum(static_cast<std::uint64_t>(gate_merge.bound),
-                              input.gate_target_zero_point_maximum)
-            : BoundAnalysis{};
+        gate_merge.safe ? analyzeInt64Sum(static_cast<std::uint64_t>(gate_merge.bound),
+                                          input.gate_target_zero_point_maximum)
+                        : BoundAnalysis{};
     report.int64_gate_boundary_safe = gate_boundary.safe;
     report.gate_boundary_bound = formatBound(gate_boundary, "INT64_MAX");
-    report.encodings_valid =
-        bias.encoding_valid && linear_output.encoding_valid &&
-        hidden.encoding_valid && gate_lhs.encoding_valid &&
-        gate_rhs.encoding_valid;
+    report.encodings_valid = bias.encoding_valid && linear_output.encoding_valid &&
+                             hidden.encoding_valid && gate_lhs.encoding_valid &&
+                             gate_rhs.encoding_valid;
 #else
     report.gemm_bound = "unsupported";
     report.bias_rescale_bound = "unsupported";
@@ -302,8 +278,7 @@ NumericSafetyReport buildNumericSafetyReport(const NumericSafetyInput& input) {
     return report;
 }
 
-void enforceNumericSafety(const NumericSafetyReport& report,
-                          bool require_exact_accumulation) {
+void enforceNumericSafety(const NumericSafetyReport& report, bool require_exact_accumulation) {
     if (!report.safe()) {
         throw std::overflow_error("NumericSafetyReport 无法证明执行安全");
     }

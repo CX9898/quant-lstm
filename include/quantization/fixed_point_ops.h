@@ -1,25 +1,23 @@
 #pragma once
 
-#include "quantization/quant_param.h"
-#include "quantization/rounding.h"
-
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
 
+#include "quantization/quant_param.h"
+#include "quantization/rounding.h"
+
 // CPU int32 carrier 使用的边界量化与受检执行编码。
 namespace quant_lstm::quantization {
 
 inline std::int32_t clampToRange(std::int64_t value, const QuantizationType& type) {
     const QuantizedRange range = type.range();
-    return static_cast<std::int32_t>(
-        std::clamp<std::int64_t>(value, range.minimum, range.maximum));
+    return static_cast<std::int32_t>(std::clamp<std::int64_t>(value, range.minimum, range.maximum));
 }
 
-inline std::int32_t quantize(float value, const QuantParam& param,
-                             const QuantizationType& type) {
+inline std::int32_t quantize(float value, const QuantParam& param, const QuantizationType& type) {
     param.validate(type);
     if (!std::isfinite(value)) {
         throw std::invalid_argument("量化输入必须有限");
@@ -36,8 +34,7 @@ inline std::int32_t quantize(float value, const QuantParam& param,
     return clampToRange(roundToInteger<std::int64_t>(translated), type);
 }
 
-inline float dequantize(std::int32_t value, const QuantParam& param,
-                        const QuantizationType& type) {
+inline float dequantize(std::int32_t value, const QuantParam& param, const QuantizationType& type) {
     param.validate(type);
     type.validateValue(value);
     const double real_value =
@@ -83,10 +80,9 @@ inline std::int64_t applyRescale(std::int64_t value, const FixedPointScale& enco
 #if defined(__SIZEOF_INT128__)
     const __int128 product =
         static_cast<__int128>(value) * static_cast<__int128>(encoded.multiplier);
-    const __int128 rounded =
-        encoded.shift >= 0
-            ? roundShiftRight128(product, encoded.shift)
-            : checkedScaleInt128ByPowerOfTwo(product, -static_cast<int>(encoded.shift));
+    const __int128 rounded = encoded.shift >= 0 ? roundShiftRight128(product, encoded.shift)
+                                                : checkedScaleInt128ByPowerOfTwo(
+                                                      product, -static_cast<int>(encoded.shift));
     return checkedInt128ToInt64(rounded);
 #else
     throw std::runtime_error("当前编译器不支持阶段 2 所需的 int128");
@@ -94,9 +90,8 @@ inline std::int64_t applyRescale(std::int64_t value, const FixedPointScale& enco
 }
 
 inline std::int64_t applyRescale(std::int64_t value, const Pot2Rescale& encoded) {
-    return encoded.shift >= 0
-               ? roundShiftRight(value, encoded.shift)
-               : checkedScaleByPowerOfTwo(value, -static_cast<int>(encoded.shift));
+    return encoded.shift >= 0 ? roundShiftRight(value, encoded.shift)
+                              : checkedScaleByPowerOfTwo(value, -static_cast<int>(encoded.shift));
 }
 
 }  // namespace quant_lstm::quantization

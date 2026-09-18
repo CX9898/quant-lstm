@@ -1,13 +1,13 @@
 #pragma once
 
-#include "lstm/quant_config.h"
-#include "quantization/quant_param.h"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <vector>
+
+#include "lstm/quant_config.h"
+#include "quantization/quant_param.h"
 
 // 本模块将各粒度校准组一次性物化为执行期 4H 参数；kernel 不再广播。
 namespace quant_lstm {
@@ -26,10 +26,9 @@ struct CalibrationRange {
 struct LstmQuantizationRanges {
     std::array<std::vector<CalibrationRange>, kQuantOperatorCount> operators;
 
-    void reset(const LstmOperatorQuantConfig& config, std::int64_t hidden_size,
-               bool bias_enabled);
-    void validateComplete(const LstmOperatorQuantConfig& config,
-                          std::int64_t hidden_size, bool bias_enabled) const;
+    void reset(const LstmOperatorQuantConfig& config, std::int64_t hidden_size, bool bias_enabled);
+    void validateComplete(const LstmOperatorQuantConfig& config, std::int64_t hidden_size,
+                          bool bias_enabled) const;
     const std::vector<CalibrationRange>& at(QuantOperator id) const;
     std::vector<CalibrationRange>& at(QuantOperator id);
 };
@@ -55,7 +54,7 @@ struct LstmQuantParams {
 };
 
 LstmQuantParams finalizeQuantParams(const LstmOperatorQuantConfig& config,
-                                    const LstmQuantizationRanges& ranges,
-                                    std::int64_t hidden_size, bool bias_enabled);
+                                    const LstmQuantizationRanges& ranges, std::int64_t hidden_size,
+                                    bool bias_enabled);
 
 }  // namespace quant_lstm

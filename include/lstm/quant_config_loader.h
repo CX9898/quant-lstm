@@ -1,11 +1,11 @@
 #pragma once
 
-#include "lstm/quant_config.h"
-
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
+
+#include "lstm/quant_config.h"
 
 // 唯一 C++ resolver：严格解析 defaults/override，并生成字节稳定的 canonical resolved JSON。
 namespace quant_lstm {

@@ -1,13 +1,13 @@
 #pragma once
 
-#include "lstm/lstm_execution_params.h"
-#include "quantization/float_carrier_ops.h"
-#include "quantization/rounding.h"
-
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <stdexcept>
+
+#include "lstm/lstm_execution_params.h"
+#include "quantization/float_carrier_ops.h"
+#include "quantization/rounding.h"
 
 #if defined(__CUDACC__)
 #define QUANT_LSTM_FP_CELL_HOST_DEVICE __host__ __device__
@@ -65,78 +65,61 @@ struct QuantizedHiddenFpCoreParams {
     float output_maximum;
 };
 
-QUANT_LSTM_FP_CELL_HOST_DEVICE inline float clampFpCore(
-    float value, float minimum, float maximum) noexcept {
+QUANT_LSTM_FP_CELL_HOST_DEVICE inline float clampFpCore(float value, float minimum,
+                                                        float maximum) noexcept {
     return value < minimum ? minimum : (value > maximum ? maximum : value);
 }
 
 QUANT_LSTM_FP_CELL_HOST_DEVICE inline float applyExecutionRescaleFpCore(
     float value, const ExecutionRescale& encoded) noexcept {
     return encoded.kind == ExecutionRescaleKind::MShift
-               ? quantization::detail::applyRescaleCore(value,
-                                                        encoded.m_shift)
+               ? quantization::detail::applyRescaleCore(value, encoded.m_shift)
                : quantization::detail::applyRescaleCore(value, encoded.pot2);
 }
 
 // 已验证参数的 Q31 Cell 核心；两路 contribution 合并后只舍入一次。
-QUANT_LSTM_FP_CELL_HOST_DEVICE inline QuantizedCellFpResult
-computeQuantizedCellFpCore(float forget_gate, float old_cell,
-                           float input_gate, float cell_gate,
-                           const QuantizedCellFpCoreParams& params) noexcept {
+QUANT_LSTM_FP_CELL_HOST_DEVICE inline QuantizedCellFpResult computeQuantizedCellFpCore(
+    float forget_gate, float old_cell, float input_gate, float cell_gate,
+    const QuantizedCellFpCoreParams& params) noexcept {
     QuantizedCellFpResult result;
     result.diagnostics.p_forget =
-        (forget_gate - params.forget_zero_point) *
-        (old_cell - params.old_cell_zero_point);
+        (forget_gate - params.forget_zero_point) * (old_cell - params.old_cell_zero_point);
     result.diagnostics.p_input =
-        (input_gate - params.input_zero_point) *
-        (cell_gate - params.cell_gate_zero_point);
-    const float forget_ratio = ::ldexpf(
-        static_cast<float>(params.forget_multiplier),
-        -static_cast<int>(Q31Scale::kFractionalBits));
-    const float input_ratio = ::ldexpf(
-        static_cast<float>(params.input_multiplier),
-        -static_cast<int>(Q31Scale::kFractionalBits));
-    result.diagnostics.scaled_forget_contribution =
-        result.diagnostics.p_forget * forget_ratio;
-    result.diagnostics.scaled_input_contribution =
-        result.diagnostics.p_input * input_ratio;
-    result.diagnostics.pre_round_sum =
-        result.diagnostics.scaled_forget_contribution +
-        result.diagnostics.scaled_input_contribution;
+        (input_gate - params.input_zero_point) * (cell_gate - params.cell_gate_zero_point);
+    const float forget_ratio = ::ldexpf(static_cast<float>(params.forget_multiplier),
+                                        -static_cast<int>(Q31Scale::kFractionalBits));
+    const float input_ratio = ::ldexpf(static_cast<float>(params.input_multiplier),
+                                       -static_cast<int>(Q31Scale::kFractionalBits));
+    result.diagnostics.scaled_forget_contribution = result.diagnostics.p_forget * forget_ratio;
+    result.diagnostics.scaled_input_contribution = result.diagnostics.p_input * input_ratio;
+    result.diagnostics.pre_round_sum = result.diagnostics.scaled_forget_contribution +
+                                       result.diagnostics.scaled_input_contribution;
     result.diagnostics.forget_contribution_vanished =
-        result.diagnostics.p_forget != 0.0F &&
-        params.forget_multiplier == 0;
+        result.diagnostics.p_forget != 0.0F && params.forget_multiplier == 0;
     result.diagnostics.input_contribution_vanished =
         result.diagnostics.p_input != 0.0F && params.input_multiplier == 0;
-    const float translated =
-        quantization::roundToNearestEven(result.diagnostics.pre_round_sum) +
-        params.new_cell_zero_point;
-    result.value = clampFpCore(translated, params.new_cell_minimum,
-                               params.new_cell_maximum);
+    const float translated = quantization::roundToNearestEven(result.diagnostics.pre_round_sum) +
+                             params.new_cell_zero_point;
+    result.value = clampFpCore(translated, params.new_cell_minimum, params.new_cell_maximum);
     return result;
 }
 
 // 已验证参数的 Hidden 核心；只消费 M+shift/POT2 编码，不接受 raw ratio。
-QUANT_LSTM_FP_CELL_HOST_DEVICE inline QuantizedHiddenFpResult
-computeQuantizedHiddenFpCore(
-    float output_gate, float cell_tanh,
-    const QuantizedHiddenFpCoreParams& params) noexcept {
+QUANT_LSTM_FP_CELL_HOST_DEVICE inline QuantizedHiddenFpResult computeQuantizedHiddenFpCore(
+    float output_gate, float cell_tanh, const QuantizedHiddenFpCoreParams& params) noexcept {
     QuantizedHiddenFpResult result;
     result.diagnostics.raw_product =
-        (output_gate - params.output_gate_zero_point) *
-        (cell_tanh - params.cell_tanh_zero_point);
-    const float centered = applyExecutionRescaleFpCore(
-        result.diagnostics.raw_product, params.product_to_output);
-    result.value =
-        clampFpCore(centered + params.output_zero_point,
-                    params.output_minimum, params.output_maximum);
+        (output_gate - params.output_gate_zero_point) * (cell_tanh - params.cell_tanh_zero_point);
+    const float centered =
+        applyExecutionRescaleFpCore(result.diagnostics.raw_product, params.product_to_output);
+    result.value = clampFpCore(centered + params.output_zero_point, params.output_minimum,
+                               params.output_maximum);
     return result;
 }
 
 inline float centeredValue(float value, const QuantizedPoint& point) {
     point.param.validate(point.type);
-    if (!std::isfinite(value) ||
-        quantization::roundToNearestEven(value) != value) {
+    if (!std::isfinite(value) || quantization::roundToNearestEven(value) != value) {
         throw std::invalid_argument("FP carrier q 值必须是有限整数");
     }
     point.type.validateValue(static_cast<std::int64_t>(value));
@@ -150,12 +133,10 @@ inline float checkedFinite(float value, const char* message) {
     return value;
 }
 
-inline float addZeroPointAndClamp(float centered,
-                                  const QuantizedPoint& target) {
+inline float addZeroPointAndClamp(float centered, const QuantizedPoint& target) {
     target.param.validate(target.type);
-    const float translated = checkedFinite(
-        centered + static_cast<float>(target.param.zero_point),
-        "FP carrier 添加 zero point 后产生 Inf/NaN");
+    const float translated = checkedFinite(centered + static_cast<float>(target.param.zero_point),
+                                           "FP carrier 添加 zero point 后产生 Inf/NaN");
     const auto range = target.type.range();
     return std::clamp(translated, static_cast<float>(range.minimum),
                       static_cast<float>(range.maximum));
@@ -166,17 +147,16 @@ inline float decodeQ31ForFp(const Q31Scale& encoded) {
         throw std::invalid_argument("Cell Q31 multiplier 不能为负");
     }
     return checkedFinite(
-        std::ldexp(static_cast<float>(encoded.multiplier),
-                   -Q31Scale::kFractionalBits),
+        std::ldexp(static_cast<float>(encoded.multiplier), -Q31Scale::kFractionalBits),
         "FP carrier Q31 解码产生 Inf/NaN");
 }
 
 }  // namespace detail
 
 // 两路 contribution 先以 Q31 已编码比例融合，最外层只舍入一次。
-inline QuantizedCellFpResult computeQuantizedCellFp(
-    float forget_gate, float old_cell, float input_gate, float cell_gate,
-    const CellExecutionParams& params) {
+inline QuantizedCellFpResult computeQuantizedCellFp(float forget_gate, float old_cell,
+                                                    float input_gate, float cell_gate,
+                                                    const CellExecutionParams& params) {
     detail::centeredValue(forget_gate, params.forget_gate);
     detail::centeredValue(old_cell, params.old_cell);
     detail::centeredValue(input_gate, params.input_gate);
@@ -195,32 +175,24 @@ inline QuantizedCellFpResult computeQuantizedCellFp(
         static_cast<float>(params.new_cell.param.zero_point),
         static_cast<float>(range.minimum),
         static_cast<float>(range.maximum)};
-    auto result = detail::computeQuantizedCellFpCore(
-        forget_gate, old_cell, input_gate, cell_gate, core_params);
-    detail::checkedFinite(result.diagnostics.p_forget,
-                          "FP carrier Cell forget 乘积产生 Inf/NaN");
-    detail::checkedFinite(result.diagnostics.p_input,
-                          "FP carrier Cell input 乘积产生 Inf/NaN");
-    detail::checkedFinite(
-        result.diagnostics.scaled_forget_contribution,
-        "FP carrier Cell forget contribution 产生 Inf/NaN");
-    detail::checkedFinite(
-        result.diagnostics.scaled_input_contribution,
-        "FP carrier Cell input contribution 产生 Inf/NaN");
-    detail::checkedFinite(
-        result.diagnostics.pre_round_sum,
-        "FP carrier Cell 融合和产生 Inf/NaN");
-    detail::checkedFinite(
-        quantization::roundToNearestEven(result.diagnostics.pre_round_sum) +
-            static_cast<float>(params.new_cell.param.zero_point),
-        "FP carrier 添加 zero point 后产生 Inf/NaN");
+    auto result = detail::computeQuantizedCellFpCore(forget_gate, old_cell, input_gate, cell_gate,
+                                                     core_params);
+    detail::checkedFinite(result.diagnostics.p_forget, "FP carrier Cell forget 乘积产生 Inf/NaN");
+    detail::checkedFinite(result.diagnostics.p_input, "FP carrier Cell input 乘积产生 Inf/NaN");
+    detail::checkedFinite(result.diagnostics.scaled_forget_contribution,
+                          "FP carrier Cell forget contribution 产生 Inf/NaN");
+    detail::checkedFinite(result.diagnostics.scaled_input_contribution,
+                          "FP carrier Cell input contribution 产生 Inf/NaN");
+    detail::checkedFinite(result.diagnostics.pre_round_sum, "FP carrier Cell 融合和产生 Inf/NaN");
+    detail::checkedFinite(quantization::roundToNearestEven(result.diagnostics.pre_round_sum) +
+                              static_cast<float>(params.new_cell.param.zero_point),
+                          "FP carrier 添加 zero point 后产生 Inf/NaN");
     return result;
 }
 
 // Hidden 乘积复用 M+shift/POT2 编码，并在 output 边界完成唯一舍入。
-inline QuantizedHiddenFpResult computeQuantizedHiddenFp(
-    float output_gate, float cell_tanh,
-    const HiddenExecutionParams& params) {
+inline QuantizedHiddenFpResult computeQuantizedHiddenFp(float output_gate, float cell_tanh,
+                                                        const HiddenExecutionParams& params) {
     detail::centeredValue(output_gate, params.output_gate);
     detail::centeredValue(cell_tanh, params.cell_tanh);
     if (params.product_to_output.kind == ExecutionRescaleKind::MShift) {
@@ -239,21 +211,15 @@ inline QuantizedHiddenFpResult computeQuantizedHiddenFp(
         static_cast<float>(params.output.param.zero_point),
         static_cast<float>(range.minimum),
         static_cast<float>(range.maximum)};
-    auto result = detail::computeQuantizedHiddenFpCore(
-        output_gate, cell_tanh, core_params);
-    detail::checkedFinite(
-        result.diagnostics.raw_product,
-        "FP carrier Hidden 原始乘积产生 Inf/NaN");
-    const float centered = detail::applyExecutionRescaleFpCore(
-        result.diagnostics.raw_product, params.product_to_output);
-    detail::checkedFinite(
-        centered,
-        params.product_to_output.kind == ExecutionRescaleKind::MShift
-            ? "FP carrier M+shift 产生 Inf/NaN"
-            : "FP carrier POT2 产生 Inf/NaN");
-    detail::checkedFinite(
-        centered + static_cast<float>(params.output.param.zero_point),
-        "FP carrier 添加 zero point 后产生 Inf/NaN");
+    auto result = detail::computeQuantizedHiddenFpCore(output_gate, cell_tanh, core_params);
+    detail::checkedFinite(result.diagnostics.raw_product, "FP carrier Hidden 原始乘积产生 Inf/NaN");
+    const float centered = detail::applyExecutionRescaleFpCore(result.diagnostics.raw_product,
+                                                               params.product_to_output);
+    detail::checkedFinite(centered, params.product_to_output.kind == ExecutionRescaleKind::MShift
+                                        ? "FP carrier M+shift 产生 Inf/NaN"
+                                        : "FP carrier POT2 产生 Inf/NaN");
+    detail::checkedFinite(centered + static_cast<float>(params.output.param.zero_point),
+                          "FP carrier 添加 zero point 后产生 Inf/NaN");
     return result;
 }
 

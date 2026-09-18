@@ -14,8 +14,7 @@ std::uint32_t rotateRight(std::uint32_t value, std::uint32_t rotation) noexcept 
 
 }  // namespace
 
-Pcg32::Pcg32(std::uint64_t seed, std::uint64_t stream_id)
-    : increment_((stream_id << 1U) | 1U) {
+Pcg32::Pcg32(std::uint64_t seed, std::uint64_t stream_id) : increment_((stream_id << 1U) | 1U) {
     nextUint32();
     state_ += seed;
     nextUint32();
@@ -34,9 +33,7 @@ float uint32ToUniformFloat(std::uint32_t value) noexcept {
     return static_cast<float>(value >> 8U) * 0x1p-24F;
 }
 
-float Pcg32::uniformFloat32() noexcept {
-    return uint32ToUniformFloat(nextUint32());
-}
+float Pcg32::uniformFloat32() noexcept { return uint32ToUniformFloat(nextUint32()); }
 
 float Pcg32::normalLikeFloat32() noexcept {
     float value = 0.0F;
@@ -56,8 +53,8 @@ void fillNormalLike(float* data, std::size_t count, std::uint64_t seed, TensorSt
     }
 }
 
-void fillLstmParameter(float* data, std::size_t count, std::int64_t hidden_size,
-                       std::uint64_t seed, TensorStream stream) {
+void fillLstmParameter(float* data, std::size_t count, std::int64_t hidden_size, std::uint64_t seed,
+                       TensorStream stream) {
     if ((data == nullptr && count != 0) || hidden_size <= 0) {
         throw std::invalid_argument("参数张量指针或 hidden_size 非法");
     }

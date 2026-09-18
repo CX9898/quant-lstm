@@ -22,8 +22,7 @@ void lstmForwardFloatCuda(const LstmShape& shape, const LstmFloatWeights& weight
                           const float* input, const float* initial_hidden,
                           const float* initial_cell, float* output, float* final_hidden,
                           float* final_cell, cublasHandle_t handle, cudaStream_t stream,
-                          float* workspace = nullptr,
-                          LstmFloatCudaTrace* trace = nullptr);
+                          float* workspace = nullptr, LstmFloatCudaTrace* trace = nullptr);
 
 /// 返回 CUDA 前向所需 workspace 的 float 元素数。
 std::int64_t cudaWorkspaceElementCount(const LstmShape& shape);

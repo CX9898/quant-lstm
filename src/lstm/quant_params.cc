@@ -1,12 +1,12 @@
 #include "lstm/quant_params.h"
 
-#include "lstm/gate_layout.h"
-#include "quantization/scale_encoding.h"
-
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+
+#include "lstm/gate_layout.h"
+#include "quantization/scale_encoding.h"
 
 namespace quant_lstm {
 namespace {
@@ -20,17 +20,16 @@ std::size_t operatorIndex(QuantOperator id) {
 }
 
 std::size_t checkedChannelCount(std::int64_t hidden_size) {
-    if (hidden_size <= 0 ||
-        hidden_size > std::numeric_limits<std::int64_t>::max() /
-                          static_cast<std::int64_t>(kGateCount)) {
+    if (hidden_size <= 0 || hidden_size > std::numeric_limits<std::int64_t>::max() /
+                                              static_cast<std::int64_t>(kGateCount)) {
         throw std::invalid_argument("hidden_size 非法或 4H 溢出");
     }
     return static_cast<std::size_t>(hidden_size) * kGateCount;
 }
 
-quantization::CalibrationResult calibrateGroup(
-    const CalibrationRange& range, const quantization::QuantizationType& type,
-    quantization::ScaleMode scale_mode) {
+quantization::CalibrationResult calibrateGroup(const CalibrationRange& range,
+                                               const quantization::QuantizationType& type,
+                                               quantization::ScaleMode scale_mode) {
     quantization::CalibrationResult result =
         quantization::calibrateMinMax(range.minimum, range.maximum, type);
     if (scale_mode == quantization::ScaleMode::Pot2) {
@@ -112,8 +111,8 @@ std::size_t quantizationGroupIndex(QuantOperator id, QuantGranularity granularit
     throw std::invalid_argument("QuantGranularity 枚举值非法");
 }
 
-void LstmQuantizationRanges::reset(const LstmOperatorQuantConfig& config,
-                                   std::int64_t hidden_size, bool bias_enabled) {
+void LstmQuantizationRanges::reset(const LstmOperatorQuantConfig& config, std::int64_t hidden_size,
+                                   bool bias_enabled) {
     config.validate();
     for (std::size_t index = 0; index < operators.size(); ++index) {
         const auto id = static_cast<QuantOperator>(index);
@@ -122,14 +121,13 @@ void LstmQuantizationRanges::reset(const LstmOperatorQuantConfig& config,
             groups.clear();
             continue;
         }
-        groups.assign(
-            quantizationGroupCount(id, config.operators[index].granularity, hidden_size), {});
+        groups.assign(quantizationGroupCount(id, config.operators[index].granularity, hidden_size),
+                      {});
     }
 }
 
-void LstmQuantizationRanges::validateComplete(
-    const LstmOperatorQuantConfig& config, std::int64_t hidden_size,
-    bool bias_enabled) const {
+void LstmQuantizationRanges::validateComplete(const LstmOperatorQuantConfig& config,
+                                              std::int64_t hidden_size, bool bias_enabled) const {
     config.validate();
     for (std::size_t index = 0; index < operators.size(); ++index) {
         const auto id = static_cast<QuantOperator>(index);
@@ -140,8 +138,8 @@ void LstmQuantizationRanges::validateComplete(
             }
             continue;
         }
-        const std::size_t expected = quantizationGroupCount(
-            id, config.operators[index].granularity, hidden_size);
+        const std::size_t expected =
+            quantizationGroupCount(id, config.operators[index].granularity, hidden_size);
         if (groups.size() != expected) {
             throw std::invalid_argument("校准 range 数量与 granularity 不匹配");
         }
@@ -200,8 +198,7 @@ void LstmQuantParams::validate(const LstmOperatorQuantConfig& config) const {
                 }
             }
         }
-        if (isParameterOperator(id) &&
-            finalized.source_granularity == QuantGranularity::PerGate) {
+        if (isParameterOperator(id) && finalized.source_granularity == QuantGranularity::PerGate) {
             for (std::size_t gate = 0; gate < kGateCount; ++gate) {
                 const std::size_t start = gate * static_cast<std::size_t>(hidden_size);
                 for (std::size_t channel = start + 1;
@@ -218,8 +215,8 @@ void LstmQuantParams::validate(const LstmOperatorQuantConfig& config) const {
 }
 
 LstmQuantParams finalizeQuantParams(const LstmOperatorQuantConfig& config,
-                                    const LstmQuantizationRanges& ranges,
-                                    std::int64_t hidden_size, bool bias_enabled) {
+                                    const LstmQuantizationRanges& ranges, std::int64_t hidden_size,
+                                    bool bias_enabled) {
     config.validate();
     const std::size_t channel_count = checkedChannelCount(hidden_size);
     LstmQuantParams result;

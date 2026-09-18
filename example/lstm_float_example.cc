@@ -1,15 +1,15 @@
-#include "lstm/forward_float.h"
-
 #include <array>
 #include <iostream>
+
+#include "lstm/forward_float.h"
 
 int main() {
     constexpr quant_lstm::LstmShape shape{2, 1, 1, 1};
     const std::array<float, 2> input{0.25F, -0.5F};
     const std::array<float, 4> weight_ih{};
     const std::array<float, 4> weight_hh{};
-    const quant_lstm::LstmFloatWeights weights{
-        weight_ih.data(), weight_hh.data(), nullptr, nullptr};
+    const quant_lstm::LstmFloatWeights weights{weight_ih.data(), weight_hh.data(), nullptr,
+                                               nullptr};
     std::array<float, 2> output{};
     std::array<float, 1> final_hidden{};
     std::array<float, 1> final_cell{};

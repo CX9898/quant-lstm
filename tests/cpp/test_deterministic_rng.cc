@@ -1,11 +1,11 @@
-#include "common/deterministic_rng.h"
-
 #include <array>
 #include <cmath>
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <utility>
+
+#include "common/deterministic_rng.h"
 
 namespace {
 
@@ -23,8 +23,8 @@ int main() {
     using quant_lstm::test::TensorStream;
 
     Pcg32 official_rng(42, 54);
-    constexpr std::array<std::uint32_t, 5> official_sequence{
-        0xa15c02b7U, 0x7b47f409U, 0xba1d3330U, 0x83d2f293U, 0xbfa4784bU};
+    constexpr std::array<std::uint32_t, 5> official_sequence{0xa15c02b7U, 0x7b47f409U, 0xba1d3330U,
+                                                             0x83d2f293U, 0xbfa4784bU};
     for (const std::uint32_t expected : official_sequence) {
         if (official_rng.nextUint32() != expected) {
             std::cerr << "PCG32 官方已知向量不匹配\n";
@@ -61,8 +61,7 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    using StreamVector =
-        std::pair<TensorStream, std::array<std::uint32_t, 3>>;
+    using StreamVector = std::pair<TensorStream, std::array<std::uint32_t, 3>>;
     constexpr std::array<StreamVector, 7> registry_vectors{{
         {TensorStream::Input, {0xcbf35ab7U, 0x8db3c0abU, 0x459d9da1U}},
         {TensorStream::InitialHidden, {0x52897be8U, 0x7d41c103U, 0xb28c55d4U}},
@@ -85,8 +84,8 @@ int main() {
     std::array<float, 4> normal_values{};
     quant_lstm::test::fillNormalLike(normal_values.data(), normal_values.size(), 3001,
                                      TensorStream::Input);
-    constexpr std::array<std::uint32_t, 4> normal_bits{
-        0x3fece4c0U, 0x3f723158U, 0xbfaeb960U, 0x3f1aef38U};
+    constexpr std::array<std::uint32_t, 4> normal_bits{0x3fece4c0U, 0x3f723158U, 0xbfaeb960U,
+                                                       0x3f1aef38U};
     for (std::size_t index = 0; index < normal_values.size(); ++index) {
         if (floatBits(normal_values[index]) != normal_bits[index]) {
             std::cerr << "pytorch_typical_v1 类正态位模式不匹配\n";
@@ -96,9 +95,9 @@ int main() {
 
     std::array<float, 4> parameter_values{};
     quant_lstm::test::fillLstmParameter(parameter_values.data(), parameter_values.size(), 32, 3001,
-                                         TensorStream::WeightInputHidden);
-    constexpr std::array<std::uint32_t, 4> parameter_bits{
-        0xbd50ef15U, 0xbda91196U, 0x3d00b656U, 0xbdf92eb6U};
+                                        TensorStream::WeightInputHidden);
+    constexpr std::array<std::uint32_t, 4> parameter_bits{0xbd50ef15U, 0xbda91196U, 0x3d00b656U,
+                                                          0xbdf92eb6U};
     for (std::size_t index = 0; index < parameter_values.size(); ++index) {
         if (floatBits(parameter_values[index]) != parameter_bits[index]) {
             std::cerr << "pytorch_typical_v1 参数位模式不匹配\n";

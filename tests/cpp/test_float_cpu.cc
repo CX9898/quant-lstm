@@ -1,9 +1,9 @@
-#include "lstm/forward_float.h"
-
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
+
+#include "lstm/forward_float.h"
 
 namespace {
 
