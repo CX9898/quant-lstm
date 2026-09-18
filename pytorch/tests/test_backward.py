@@ -4,10 +4,12 @@ import json
 import unittest
 import warnings
 from pathlib import Path
+from unittest import mock
 
 import torch
 from torch import nn
 
+import lstm_autograd
 from quant_lstm import QuantLSTM
 from tests.test_quantized_interface import (
     calibrate,
@@ -214,6 +216,23 @@ class BackwardTest(unittest.TestCase):
                                 self.assert_gradient_metrics(
                                     case, name, value, reference
                                 )
+
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
+    def test_float_cuda_backward_bypasses_python_reference(self):
+        module = QuantLSTM(3, 4, device="cuda")
+        initialize_parameters(module)
+        input_value = deterministic_tensor(
+            (4, 2, 3), -0.31, 0.29, device="cuda"
+        ).requires_grad_()
+        with mock.patch.object(
+            lstm_autograd,
+            "_lstm_backward",
+            side_effect=AssertionError("CUDA float backward used Python fallback"),
+        ):
+            output, _ = module(input_value)
+            output.square().mean().backward()
+        self.assertIsNotNone(input_value.grad)
+        self.assertGreater(input_value.grad.abs().max().item(), 0.0)
 
     @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_qat_gradients_match_float_surrogate(self):

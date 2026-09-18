@@ -293,16 +293,34 @@ class _FloatLSTMFunction(torch.autograd.Function):
         initial_cell: Optional[Tensor],
         batch_first: bool,
     ):
-        output, hidden, cell = _quant_lstm.lstm_forward(
-            input,
-            weight_ih,
-            weight_hh,
-            bias_ih,
-            bias_hh,
-            initial_hidden,
-            initial_cell,
-            batch_first,
+        ctx.native_cuda_backward = input.is_cuda and any(
+            ctx.needs_input_grad[:7]
         )
+        trace = ()
+        if ctx.native_cuda_backward:
+            result = _quant_lstm.lstm_forward_training(
+                input,
+                weight_ih,
+                weight_hh,
+                bias_ih,
+                bias_hh,
+                initial_hidden,
+                initial_cell,
+                batch_first,
+            )
+            output, hidden, cell = result[:3]
+            trace = result[3:]
+        else:
+            output, hidden, cell = _quant_lstm.lstm_forward(
+                input,
+                weight_ih,
+                weight_hh,
+                bias_ih,
+                bias_hh,
+                initial_hidden,
+                initial_cell,
+                batch_first,
+            )
         empty = input.new_empty(0)
         ctx.save_for_backward(
             input,
@@ -312,6 +330,7 @@ class _FloatLSTMFunction(torch.autograd.Function):
             empty if bias_hh is None else bias_hh,
             empty if initial_hidden is None else initial_hidden,
             empty if initial_cell is None else initial_cell,
+            *trace,
         )
         ctx.batch_first = bool(batch_first)
         ctx.has_bias = bias_ih is not None
@@ -320,13 +339,51 @@ class _FloatLSTMFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output, grad_hidden, grad_cell):
+        saved = ctx.saved_tensors
         input, weight_ih, weight_hh, bias_ih, bias_hh, initial_hidden, initial_cell = (
-            ctx.saved_tensors
+            saved[:7]
         )
-        input_time = _as_time_major(input, ctx.batch_first)
         zero_state = _zero_state(input, weight_hh, ctx.batch_first)
         hidden = initial_hidden if ctx.has_state else zero_state
         cell = initial_cell if ctx.has_state else zero_state
+        if ctx.native_cuda_backward:
+            gate_outputs, cell_states, cell_tanh_outputs, hidden_outputs = saved[7:]
+            grad_output_time = _gradient_or_zeros(
+                None
+                if grad_output is None
+                else _as_time_major(grad_output, ctx.batch_first),
+                hidden_outputs,
+            )
+            grad_hidden_value = _gradient_or_zeros(grad_hidden, hidden)[0]
+            grad_cell_value = _gradient_or_zeros(grad_cell, cell)[0]
+            gradients = _quant_lstm.lstm_backward_float(
+                input,
+                weight_ih,
+                weight_hh,
+                bias_ih if ctx.has_bias else None,
+                bias_hh if ctx.has_bias else None,
+                initial_hidden if ctx.has_state else None,
+                initial_cell if ctx.has_state else None,
+                ctx.batch_first,
+                gate_outputs,
+                cell_states,
+                cell_tanh_outputs,
+                hidden_outputs,
+                grad_output_time,
+                grad_hidden_value,
+                grad_cell_value,
+            )
+            return (
+                gradients[0],
+                gradients[1],
+                gradients[2],
+                gradients[3] if ctx.has_bias else None,
+                gradients[4] if ctx.has_bias else None,
+                gradients[5].unsqueeze(0) if ctx.has_state else None,
+                gradients[6].unsqueeze(0) if ctx.has_state else None,
+                None,
+            )
+        input_time = _as_time_major(input, ctx.batch_first)
         trace = _float_trace(
             input_time,
             weight_ih,
