@@ -60,6 +60,26 @@ struct LstmQuantizedFpCudaWorkspaceBreakdown {
     std::size_t total_bytes = 0;
 };
 
+/// 训练态可选输出。所有 value 保存本次 forward 实际消费的 q 网格值，mask 中 1 表示
+/// 对应 master value 在量化时发生 Clamp。input 使用内部 time-major 布局。
+struct LstmQuantizedFpCudaMasters {
+    float* input = nullptr;
+    float* weight_ih = nullptr;
+    float* weight_hh = nullptr;
+    float* bias_ih = nullptr;
+    float* bias_hh = nullptr;
+    float* initial_hidden = nullptr;
+    float* initial_cell = nullptr;
+
+    std::uint8_t* input_clamped = nullptr;
+    std::uint8_t* weight_ih_clamped = nullptr;
+    std::uint8_t* weight_hh_clamped = nullptr;
+    std::uint8_t* bias_ih_clamped = nullptr;
+    std::uint8_t* bias_hh_clamped = nullptr;
+    std::uint8_t* initial_hidden_clamped = nullptr;
+    std::uint8_t* initial_cell_clamped = nullptr;
+};
+
 /// 所有 checkpoint 都是可选 device float 指针，保存 q 网格值。
 /// 非空张量分别采用 [T,B,4H]、[T,B,4H]、[T,B,4H]、[T,B,4H]、
 /// [T,B,H]、[T,B,H]、[T,B,H] 的连续 row-major 布局。
@@ -132,6 +152,15 @@ void lstmForwardQuantizedFpCuda(
     const LstmQuantizedFpCudaCheckpoints* checkpoints = nullptr,
     LstmQuantizedFpCudaStats* stats = nullptr,
     const LstmQuantizedFpCudaTimingEvents* timing_events = nullptr,
-    std::uint64_t static_parameter_cache_key = 0);
+    std::uint64_t static_parameter_cache_key = 0,
+    const LstmQuantizedFpCudaMasters* masters = nullptr);
+
+/// 将 CUDA FP32 q-carrier 反量化为 real-domain FP32。parameter_count 为 1 时按
+/// per-tensor 处理；否则参数按 leading channel 展开，elements_per_channel 指定每个
+/// channel 的连续元素数。scales/zero_points 必须位于当前 CUDA device。
+void lstmDequantizeQCarrierCuda(const float* source, float* destination, std::size_t count,
+                                std::size_t elements_per_channel, const float* scales,
+                                const float* zero_points, std::size_t parameter_count,
+                                cudaStream_t stream);
 
 }  // namespace quant_lstm

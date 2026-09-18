@@ -1012,9 +1012,13 @@ Golden 只使用一个入库的版本化 JSON schema。根对象以 `kind=primit
 3. QAT 的 mask-aware CUDA 结果与迁移前 Python STE oracle 逐梯度一致；路径测试
    禁止 CUDA QAT 回退到 Python 时间步循环。直接 CUDA mask 公式测试同时覆盖
    checkpoint 与 master 边界。
-4. 全量 C++/Python 回归、memcheck、racecheck 和 Nsight kernel trace 通过。
+4. 训练态 CUDA forward 直接输出实际消费的 master q-carrier 与 Clamp mask，QAT
+   backward 前由 CUDA kernel 反量化；生产 Python 不再重算量化张量或执行 LSTM
+   backward 公式，Python 实现仅保留在测试 oracle 中。
+5. 全量 C++/Python 回归、memcheck、racecheck 和 Nsight kernel trace 通过。
    `T=4` 的 QAT trace 包含 4 次 backward pointwise、1 次 bias reduction、7 次
-   master clamp mask kernel 及对应 cuBLAS GEMM；未修改本节公式和 STE 语义。
+   master gradient clamp kernel 及对应 cuBLAS GEMM；master quantization mask 已融合到
+   input/weight/bias/state CUDA 量化 kernel；未修改本节公式和 STE 语义。
 
 最终冻结继续受以下回归门禁保护：
 

@@ -666,8 +666,9 @@ quant-lstm/
 - native backward 由逐时间步 CUDA pointwise kernel、循环状态 cuBLAS SGEMM、
   跨时间批量 input/weight SGEMM 和一次 bias reduction kernel 组成；Python
   autograd 不再执行浮点 CUDA 的逐时间步反向循环。
-- CPU 浮点 backward 保留 PyTorch tensor reference。FP32 q-carrier QAT 通过专用
-  binding 反量化 master/checkpoint，CUDA pointwise 按
+- CPU 浮点 forward/backward 由 C++ 标量核心执行。训练态 CUDA forward 直接保存
+  实际消费的 q-carrier master/checkpoint 和 Clamp mask，不在 Python 中重新量化；
+  FP32 q-carrier QAT 通过 CUDA kernel 反量化这些张量，CUDA pointwise 按
   `hidden -> cell_tanh -> cell -> gate_output -> gate_input` 应用 checkpoint STE，
   再分别生成经过 `weight_ih_linear/weight_hh_linear` mask 的 `dp/dq`。
 - input、W/R、两组 bias 和 h0/c0 的 master mask 在对应最终梯度上执行。Mask 中
@@ -676,7 +677,8 @@ quant-lstm/
 - 单向/双向、bias 开关、两种布局和显式/省略 h0/c0 的梯度继续对齐
   `torch.nn.LSTM`。QAT native 结果还与迁移前 Python STE oracle 逐梯度对齐；直接
   CUDA 公式测试、路径防回退测试、全量回归、memcheck、racecheck 和 Nsight
-  kernel trace 均通过。
+  kernel trace 均通过。生产 Python autograd 只负责布局、张量保存和扩展调用，
+  PyTorch 公式仅保留在测试专用 oracle。
 
 ### 阶段 10：条件性 CUDA int32 载体与整数集成
 

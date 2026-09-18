@@ -348,7 +348,10 @@ Golden 使用显式 `dtype/shape/data`、row-major 一维 data。Standard scale 
 6. 已完成：SQNR/Percentile 独立候选范围搜索复用统一 MinMax、minimum-scale、POT2 CoverRange 和执行参数派生链；参数包导入后 CUDA FP 主路径结果逐值一致。
 7. 已完成：PyTorch 接口只通过 C++ resolver 消费 canonical resolved config；校准、完整 `4H` 参数包导入导出、CUDA 直接调用、两种布局和真实 Clamp mask 已通过阶段 6 验收。
 8. 已完成：双向 forward/reverse 分别校准并强制共享 input 网格，输出与 `h_n/c_n` 顺序对齐 PyTorch；CPU-only 构建、测试、安装、外部消费和无 CUDA 链接门禁通过。
-9. 已完成：浮点 backward 对齐 PyTorch；QAT gradient、h0/c0、bias disabled、双向、Clamp STE、单步优化和多步 loss 下降通过阶段 8 验收。
+9. 已完成：CPU/CUDA 浮点 backward 位于 C++/CUDA 核心并对齐 PyTorch；训练态
+   CUDA forward 原生输出实际消费的 master q-carrier/checkpoint/Clamp mask，QAT
+   通过 CUDA 反量化与 mask-aware backward 完成 gradient、h0/c0、bias disabled、
+   双向、Clamp STE、单步优化和多步 loss 下降验收。生产 Python 仅负责扩展调度。
 10. 已完成：标准 ONNX `LSTM` 单节点导出；量化静态参数缓存保持 Golden 与精度指标不变，P50/P95 获得稳定收益，memcheck/racecheck、Nsight SGEMM 计数和版本化设备阈值通过。
 11. 待后续阶段完成：代表性真实数据和模型级指标；接入前只能声明 `synthetic_numeric` 数值验证通过。
 

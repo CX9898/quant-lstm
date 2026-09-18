@@ -15,11 +15,12 @@ synthetic numeric 精度门禁保持生效。量化执行语义以
 `use_quantization=False` 是完全 FP32 训练模式。在 CUDA 上，训练前向由原生
 CUDA/cuBLAS 执行并保存最少的 gate/cell checkpoint，反向的逐时间步链式计算、
 循环状态梯度、input/weight GEMM 和 bias reduction 均由 CUDA kernel/cuBLAS
-完成；Python autograd 只负责张量保存和调用调度。CPU 浮点训练保留 PyTorch
-tensor reference fallback。量化 QAT backward 由专用 binding 反量化保存的
-q-carrier master/checkpoint，再调用同一 CUDA backward 核心的 mask-aware 模式。
-checkpoint STE 在逐时间步 kernel 内按计算图逆序执行，master mask 在最终梯度上
-执行；Python 实现只保留为测试 oracle。
+完成。CPU 浮点训练由 C++ 标量 forward/backward 执行。量化训练前向由同一次
+CUDA 执行直接保存实际使用的 q-carrier master、checkpoint 和 Clamp mask；QAT
+backward 由 CUDA kernel 反量化这些张量，再调用同一 CUDA backward 核心的
+mask-aware 模式。checkpoint STE 在逐时间步 kernel 内按计算图逆序执行，master
+mask 在最终梯度上执行。Python autograd 只负责张量保存、布局整理和扩展调用；
+PyTorch 公式仅存在于测试专用 oracle。
 
 ## 构建
 

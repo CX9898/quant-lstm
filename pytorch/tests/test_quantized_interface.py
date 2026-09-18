@@ -9,6 +9,7 @@ import torch
 
 import _quant_lstm
 from quant_lstm import QuantLSTM
+from tests import lstm_backward_oracle as oracle
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -268,6 +269,15 @@ class QuantizedInterfaceTest(unittest.TestCase):
             self.assertTrue(torch.equal(module_value, direct_value))
         checkpoints = direct[3]
         self.assertEqual(
+            set(checkpoints),
+            {
+                "values",
+                "clamp_masks",
+                "quantized_master",
+                "master_clamp_masks",
+            },
+        )
+        self.assertEqual(
             set(checkpoints["values"]),
             {
                 "weight_ih_linear",
@@ -285,6 +295,29 @@ class QuantizedInterfaceTest(unittest.TestCase):
         for mask in checkpoints["clamp_masks"].values():
             self.assertEqual(mask.dtype, torch.uint8)
             self.assertTrue(torch.all((mask == 0) | (mask == 1)))
+        bundle = json.loads(bundle_json)
+        master_cases = (
+            ("input", input_time, "input", False),
+            ("weight_ih", time_module.weight_ih_l0, "weight_ih", True),
+            ("weight_hh", time_module.weight_hh_l0, "weight_hh", True),
+            ("bias_ih", time_module.bias_ih_l0, "bias_ih", True),
+            ("bias_hh", time_module.bias_hh_l0, "bias_hh", True),
+            ("h_0", state[0], "output", False),
+            ("c_0", state[1], "cell_state", False),
+        )
+        for name, source, operator, per_channel in master_cases:
+            expected, expected_mask = oracle.quantize_tensor(
+                source, bundle["operators"][operator], per_channel
+            )
+            self.assertTrue(
+                torch.equal(checkpoints["quantized_master"][name], expected), name
+            )
+            self.assertTrue(
+                torch.equal(
+                    checkpoints["master_clamp_masks"][name], expected_mask
+                ),
+                f"{name} mask",
+            )
 
         time_module.train()
         with torch.no_grad():

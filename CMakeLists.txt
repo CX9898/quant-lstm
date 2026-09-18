@@ -25,6 +25,7 @@ target_include_directories(
 
 add_library(
     quant_lstm STATIC
+    src/lstm/backward_float_cpu.cc
     src/lstm/calibration.cc
     src/lstm/forward_float_cpu.cc
     src/lstm/forward_int32_cpu.cc

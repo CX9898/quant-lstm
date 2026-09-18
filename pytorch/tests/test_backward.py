@@ -9,8 +9,10 @@ from unittest import mock
 import torch
 from torch import nn
 
+import _quant_lstm
 import lstm_autograd
 from quant_lstm import QuantLSTM
+from tests import lstm_backward_oracle as oracle
 from tests.test_quantized_interface import (
     calibrate,
     copy_parameters,
@@ -86,40 +88,38 @@ def qat_backward_reference(
     checkpoint_values = state["checkpoints"]
     checkpoint_masks = state["checkpoint_clamp_masks"]
 
-    input_value = lstm_autograd._dequantize_tensor(
+    input_value = oracle.dequantize_tensor(
         masters["input"], operators["input"]
     )
-    weight_ih = lstm_autograd._dequantize_tensor(
+    weight_ih = oracle.dequantize_tensor(
         masters["weight_ih"], operators["weight_ih"], True
     )
-    weight_hh = lstm_autograd._dequantize_tensor(
+    weight_hh = oracle.dequantize_tensor(
         masters["weight_hh"], operators["weight_hh"], True
     )
-    initial_hidden = lstm_autograd._dequantize_tensor(
+    initial_hidden = oracle.dequantize_tensor(
         masters["h_0"], operators["output"]
     )
-    initial_cell = lstm_autograd._dequantize_tensor(
+    initial_cell = oracle.dequantize_tensor(
         masters["c_0"], operators["cell_state"]
     )
     trace = {
-        "gate_outputs": lstm_autograd._dequantize_gates(
-            checkpoint_values["gate_outputs"],
-            bundle,
-            lstm_autograd._GATE_OUTPUT_OPERATORS,
+        "gate_outputs": oracle.dequantize_gates(
+            checkpoint_values["gate_outputs"], bundle
         ),
-        "cell_states": lstm_autograd._dequantize_tensor(
+        "cell_states": oracle.dequantize_tensor(
             checkpoint_values["cell_states"], operators["cell_state"]
         ),
-        "cell_tanh_outputs": lstm_autograd._dequantize_tensor(
+        "cell_tanh_outputs": oracle.dequantize_tensor(
             checkpoint_values["cell_tanh_outputs"],
             operators["cell_tanh_output"],
         ),
-        "hidden_outputs": lstm_autograd._dequantize_tensor(
+        "hidden_outputs": oracle.dequantize_tensor(
             checkpoint_values["hidden_outputs"], operators["output"]
         ),
     }
     gradients = list(
-        lstm_autograd._lstm_backward(
+        oracle.lstm_backward(
             lstm_autograd._as_time_major(input_value, module.batch_first),
             weight_ih,
             weight_hh,
@@ -149,9 +149,7 @@ def qat_backward_reference(
         mask = master_masks[name]
         if name in ("h_0", "c_0"):
             mask = mask[0]
-        gradients[index] *= lstm_autograd._keep_gradient(
-            mask, gradients[index]
-        )
+        gradients[index] *= oracle.keep_gradient(mask, gradients[index])
     return gradients
 
 
@@ -305,12 +303,13 @@ class BackwardTest(unittest.TestCase):
             (4, 2, 3), -0.31, 0.29, device="cuda"
         ).requires_grad_()
         with mock.patch.object(
-            lstm_autograd,
-            "_lstm_backward",
-            side_effect=AssertionError("CUDA float backward used Python fallback"),
-        ):
+            _quant_lstm,
+            "lstm_backward_float",
+            wraps=_quant_lstm.lstm_backward_float,
+        ) as native_backward:
             output, _ = module(input_value)
             output.square().mean().backward()
+        native_backward.assert_called_once()
         self.assertIsNotNone(input_value.grad)
         self.assertGreater(input_value.grad.abs().max().item(), 0.0)
 
@@ -471,12 +470,13 @@ class BackwardTest(unittest.TestCase):
         prepare_quantized(module, calibration_input, None)
         input_value = calibration_input.clone().requires_grad_()
         with mock.patch.object(
-            lstm_autograd,
-            "_lstm_backward",
-            side_effect=AssertionError("CUDA QAT used Python fallback"),
-        ):
+            _quant_lstm,
+            "lstm_backward_qat",
+            wraps=_quant_lstm.lstm_backward_qat,
+        ) as native_backward:
             output, _ = module(input_value)
             output.square().mean().backward()
+        native_backward.assert_called_once()
         self.assertIsNotNone(input_value.grad)
         self.assertGreater(input_value.grad.abs().max().item(), 0.0)
 

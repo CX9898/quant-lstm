@@ -505,9 +505,14 @@ __device__ __forceinline__ float clampDevice(float value, const DeviceQuantPoint
     return fminf(point.maximum, fmaxf(point.minimum, value));
 }
 
-__device__ __forceinline__ float quantizeMasterDevice(float value, const DeviceQuantPoint& point) {
+__device__ __forceinline__ float quantizeMasterDevice(float value, const DeviceQuantPoint& point,
+                                                      std::uint8_t* clamped = nullptr) {
     const double translated = static_cast<double>(value) / static_cast<double>(point.scale) +
                               static_cast<double>(point.zero_point);
+    if (clamped != nullptr) {
+        *clamped = translated < static_cast<double>(point.minimum) ||
+                   translated > static_cast<double>(point.maximum);
+    }
     if (translated <= static_cast<double>(point.minimum)) {
         return point.minimum;
     }
@@ -546,48 +551,98 @@ __device__ __forceinline__ float realActivationDevice(float quantized_input,
     return result;
 }
 
-__global__ void quantizeScalarKernel(const float* source, float* destination, std::size_t count,
+__global__ void quantizeScalarKernel(const float* source, float* destination, float* saved,
+                                     std::uint8_t* clamped, std::size_t count,
                                      DeviceQuantPoint point) {
     const std::size_t stride = static_cast<std::size_t>(gridDim.x) * blockDim.x;
     for (std::size_t index = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
          index < count; index += stride) {
-        destination[index] = quantizeMasterDevice(source[index], point);
+        std::uint8_t value_clamped = 0;
+        const float quantized = quantizeMasterDevice(source[index], point, &value_clamped);
+        destination[index] = quantized;
+        if (saved != nullptr) {
+            saved[index] = quantized;
+        }
+        if (clamped != nullptr) {
+            clamped[index] = value_clamped;
+        }
     }
 }
 
-__global__ void quantizeInitialStateKernel(const float* source, float* destination,
-                                           std::size_t count, DeviceQuantPoint point) {
+__global__ void quantizeInitialStateKernel(const float* source, float* destination, float* saved,
+                                           std::uint8_t* clamped, std::size_t count,
+                                           DeviceQuantPoint point) {
     const std::size_t stride = static_cast<std::size_t>(gridDim.x) * blockDim.x;
     for (std::size_t index = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
          index < count; index += stride) {
-        destination[index] =
-            source == nullptr ? point.zero_point : quantizeMasterDevice(source[index], point);
+        std::uint8_t value_clamped = 0;
+        const float quantized = source == nullptr
+                                    ? point.zero_point
+                                    : quantizeMasterDevice(source[index], point, &value_clamped);
+        destination[index] = quantized;
+        if (saved != nullptr) {
+            saved[index] = quantized;
+        }
+        if (clamped != nullptr) {
+            clamped[index] = value_clamped;
+        }
     }
 }
 
 template <bool InputWeight>
 __global__ void quantizeWeightKernel(const float* source, float* destination, std::size_t count,
                                      std::size_t reduction,
-                                     const DeviceLinearChannelParams* channel_params) {
+                                     const DeviceLinearChannelParams* channel_params, float* saved,
+                                     std::uint8_t* clamped) {
     const std::size_t stride = static_cast<std::size_t>(gridDim.x) * blockDim.x;
     for (std::size_t index = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
          index < count; index += stride) {
         const std::size_t channel = index / reduction;
         const DeviceQuantPoint point =
             InputWeight ? channel_params[channel].weight_ih : channel_params[channel].weight_hh;
-        destination[index] = quantizeMasterDevice(source[index], point);
+        std::uint8_t value_clamped = 0;
+        const float quantized = quantizeMasterDevice(source[index], point, &value_clamped);
+        destination[index] = quantized;
+        if (saved != nullptr) {
+            saved[index] = quantized;
+        }
+        if (clamped != nullptr) {
+            clamped[index] = value_clamped;
+        }
     }
 }
 
 template <bool InputBias>
 __global__ void quantizeBiasKernel(const float* source, float* destination, std::size_t channels,
-                                   const DeviceLinearChannelParams* channel_params) {
+                                   const DeviceLinearChannelParams* channel_params, float* saved,
+                                   std::uint8_t* clamped) {
     const std::size_t stride = static_cast<std::size_t>(gridDim.x) * blockDim.x;
     for (std::size_t channel = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
          channel < channels; channel += stride) {
         const DeviceQuantPoint point =
             InputBias ? channel_params[channel].bias_ih : channel_params[channel].bias_hh;
-        destination[channel] = quantizeMasterDevice(source[channel], point);
+        std::uint8_t value_clamped = 0;
+        const float quantized = quantizeMasterDevice(source[channel], point, &value_clamped);
+        destination[channel] = quantized;
+        if (saved != nullptr) {
+            saved[channel] = quantized;
+        }
+        if (clamped != nullptr) {
+            clamped[channel] = value_clamped;
+        }
+    }
+}
+
+__global__ void dequantizeQCarrierKernel(const float* source, float* destination, std::size_t count,
+                                         std::size_t elements_per_channel, const float* scales,
+                                         const float* zero_points, std::size_t parameter_count) {
+    const std::size_t stride = static_cast<std::size_t>(gridDim.x) * blockDim.x;
+    for (std::size_t index = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+         index < count; index += stride) {
+        const std::size_t parameter_index = parameter_count == 1 ? 0 : index / elements_per_channel;
+        destination[index] =
+            static_cast<float>(static_cast<double>(source[index] - zero_points[parameter_index]) *
+                               static_cast<double>(scales[parameter_index]));
     }
 }
 
@@ -818,7 +873,7 @@ void lstmForwardQuantizedFpCuda(
     float* final_cell, LstmQuantizedFpCudaContext& context, LstmQuantizedFpCudaMathMode math_mode,
     LstmQuantizedFpCudaWorkspace workspace, const LstmQuantizedFpCudaCheckpoints* checkpoints,
     LstmQuantizedFpCudaStats* stats, const LstmQuantizedFpCudaTimingEvents* timing_events,
-    std::uint64_t static_parameter_cache_key) {
+    std::uint64_t static_parameter_cache_key, const LstmQuantizedFpCudaMasters* masters) {
     const WorkspaceLayout layout = makeWorkspaceLayout(shape, quant_params.bias_enabled);
     const StaticParameterLayout static_layout =
         makeStaticParameterLayout(shape, quant_params.bias_enabled);
@@ -973,6 +1028,41 @@ void lstmForwardQuantizedFpCuda(
                                    current_device, "checkpoint hidden_outputs_clamped");
     }
 
+    LstmQuantizedFpCudaMasters device_masters{};
+    if (masters != nullptr) {
+        device_masters = *masters;
+        const std::size_t input_elements = checkedMul(sequence_batch_size, input_width, "T*B*I");
+        const std::size_t weight_ih_elements = checkedMul(channels, input_width, "4H*I");
+        const std::size_t weight_hh_elements = checkedMul(channels, hidden, "4H*H");
+        const auto require_span = [&](const void* pointer, std::size_t bytes, const char* name) {
+            if (pointer == nullptr) {
+                throw std::invalid_argument(std::string(name) + " 不能为空");
+            }
+            validateDeviceSpan(pointer, bytes, current_device, name);
+        };
+        require_span(masters->input, floatBytes(input_elements, "saved input"), "saved input");
+        require_span(masters->weight_ih, floatBytes(weight_ih_elements, "saved weight_ih"),
+                     "saved weight_ih");
+        require_span(masters->weight_hh, floatBytes(weight_hh_elements, "saved weight_hh"),
+                     "saved weight_hh");
+        require_span(masters->initial_hidden, floatBytes(states, "saved h_0"), "saved h_0");
+        require_span(masters->initial_cell, floatBytes(states, "saved c_0"), "saved c_0");
+        require_span(masters->input_clamped, input_elements, "saved input mask");
+        require_span(masters->weight_ih_clamped, weight_ih_elements, "saved weight_ih mask");
+        require_span(masters->weight_hh_clamped, weight_hh_elements, "saved weight_hh mask");
+        require_span(masters->initial_hidden_clamped, states, "saved h_0 mask");
+        require_span(masters->initial_cell_clamped, states, "saved c_0 mask");
+        if (quant_params.bias_enabled) {
+            require_span(masters->bias_ih, floatBytes(channels, "saved bias_ih"), "saved bias_ih");
+            require_span(masters->bias_hh, floatBytes(channels, "saved bias_hh"), "saved bias_hh");
+            require_span(masters->bias_ih_clamped, channels, "saved bias_ih mask");
+            require_span(masters->bias_hh_clamped, channels, "saved bias_hh mask");
+        } else if (masters->bias_ih != nullptr || masters->bias_hh != nullptr ||
+                   masters->bias_ih_clamped != nullptr || masters->bias_hh_clamped != nullptr) {
+            throw std::invalid_argument("bias disabled 时 saved bias 与 mask 必须为空");
+        }
+    }
+
     cudaDeviceProp properties{};
     checkCuda(cudaGetDeviceProperties(&properties, current_device), "cudaGetDeviceProperties");
     const dim3 pointwise_block(32, 8);
@@ -1049,6 +1139,7 @@ void lstmForwardQuantizedFpCuda(
             : 0;
     const bool static_parameters_cached =
         static_cache_enabled && context.cached_static_parameter_signature == static_signature;
+    const bool reuse_static_parameters = static_parameters_cached && masters == nullptr;
 
     if (timing_events != nullptr) {
         checkCuda(cudaEventRecord(timing_events->start, context.streams[0]),
@@ -1075,15 +1166,16 @@ void lstmForwardQuantizedFpCuda(
               "input stream wait device parameters");
     const std::size_t input_elements = checkedMul(sequence_batch_size, input_width, "T*B*I");
     quantizeScalarKernel<<<oneDimensionalBlocks(input_elements), kThreads, 0, context.streams[1]>>>(
-        input, quantized_input, input_elements, scalar_params.input);
+        input, quantized_input, device_masters.input, device_masters.input_clamped, input_elements,
+        scalar_params.input);
     checkKernel("quantize input kernel");
 
-    if (!static_parameters_cached) {
+    if (!reuse_static_parameters) {
         const std::size_t weight_ih_elements = checkedMul(channels, input_width, "4H*I");
         quantizeWeightKernel<true>
             <<<oneDimensionalBlocks(weight_ih_elements), kThreads, 0, context.streams[1]>>>(
                 master_weights.weight_ih, quantized_weight_ih, weight_ih_elements, input_width,
-                device_channel_params);
+                device_channel_params, device_masters.weight_ih, device_masters.weight_ih_clamped);
         checkKernel("quantize weight_ih kernel");
         weightSumKernel<<<oneDimensionalBlocks(channels), kThreads, 0, context.streams[1]>>>(
             quantized_weight_ih, weight_ih_sums, channels, input_width);
@@ -1094,12 +1186,12 @@ void lstmForwardQuantizedFpCuda(
                   "record input quantization complete");
     }
 
-    if (!static_parameters_cached) {
+    if (!reuse_static_parameters) {
         const std::size_t weight_hh_elements = checkedMul(channels, hidden, "4H*H");
         quantizeWeightKernel<false>
             <<<oneDimensionalBlocks(weight_hh_elements), kThreads, 0, context.streams[0]>>>(
                 master_weights.weight_hh, quantized_weight_hh, weight_hh_elements, hidden,
-                device_channel_params);
+                device_channel_params, device_masters.weight_hh, device_masters.weight_hh_clamped);
         checkKernel("quantize weight_hh kernel");
         weightSumKernel<<<oneDimensionalBlocks(channels), kThreads, 0, context.streams[0]>>>(
             quantized_weight_hh, weight_hh_sums, channels, hidden);
@@ -1108,11 +1200,13 @@ void lstmForwardQuantizedFpCuda(
         if (quant_params.bias_enabled) {
             quantizeBiasKernel<true>
                 <<<oneDimensionalBlocks(channels), kThreads, 0, context.streams[0]>>>(
-                    master_weights.bias_ih, quantized_bias_ih, channels, device_channel_params);
+                    master_weights.bias_ih, quantized_bias_ih, channels, device_channel_params,
+                    device_masters.bias_ih, device_masters.bias_ih_clamped);
             checkKernel("quantize bias_ih kernel");
             quantizeBiasKernel<false>
                 <<<oneDimensionalBlocks(channels), kThreads, 0, context.streams[0]>>>(
-                    master_weights.bias_hh, quantized_bias_hh, channels, device_channel_params);
+                    master_weights.bias_hh, quantized_bias_hh, channels, device_channel_params,
+                    device_masters.bias_hh, device_masters.bias_hh_clamped);
             checkKernel("quantize bias_hh kernel");
         }
     }
@@ -1121,10 +1215,12 @@ void lstmForwardQuantizedFpCuda(
     }
 
     quantizeInitialStateKernel<<<oneDimensionalBlocks(states), kThreads, 0, context.streams[0]>>>(
-        initial_hidden, quantized_hidden, states, scalar_params.hidden);
+        initial_hidden, quantized_hidden, device_masters.initial_hidden,
+        device_masters.initial_hidden_clamped, states, scalar_params.hidden);
     checkKernel("quantize initial hidden kernel");
     quantizeInitialStateKernel<<<oneDimensionalBlocks(states), kThreads, 0, context.streams[0]>>>(
-        initial_cell, quantized_cell, states, scalar_params.cell);
+        initial_cell, quantized_cell, device_masters.initial_cell,
+        device_masters.initial_cell_clamped, states, scalar_params.cell);
     checkKernel("quantize initial cell kernel");
     if (timing_events != nullptr) {
         checkCuda(cudaEventRecord(timing_events->recurrent_quantized, context.streams[0]),
@@ -1187,8 +1283,26 @@ void lstmForwardQuantizedFpCuda(
         stats->workspace_bytes = layout.breakdown.total_bytes;
         stats->used_internal_workspace = uses_internal_workspace;
         stats->execution_parameter_cache_hit = parameters_cached;
-        stats->static_parameter_cache_hit = static_parameters_cached;
+        stats->static_parameter_cache_hit = reuse_static_parameters;
     }
+}
+
+void lstmDequantizeQCarrierCuda(const float* source, float* destination, std::size_t count,
+                                std::size_t elements_per_channel, const float* scales,
+                                const float* zero_points, std::size_t parameter_count,
+                                cudaStream_t stream) {
+    if (source == nullptr || destination == nullptr || scales == nullptr ||
+        zero_points == nullptr) {
+        throw std::invalid_argument("q-carrier 反量化指针不能为空");
+    }
+    if (count == 0 || parameter_count == 0 || elements_per_channel == 0 ||
+        (parameter_count != 1 &&
+         (count % parameter_count != 0 || count / parameter_count != elements_per_channel))) {
+        throw std::invalid_argument("q-carrier 反量化 shape/参数数量不匹配");
+    }
+    dequantizeQCarrierKernel<<<oneDimensionalBlocks(count), kThreads, 0, stream>>>(
+        source, destination, count, elements_per_channel, scales, zero_points, parameter_count);
+    checkKernel("dequantize q-carrier kernel");
 }
 
 }  // namespace quant_lstm

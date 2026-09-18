@@ -31,11 +31,12 @@ h0/c0，不改变任何 checkpoint 或 Clamp 边界。持久缓存容量通过
 
 Pedantic 模式关闭 TF32/Tensor Core，用于正确性验收；TF32 只能显式选择并独立报告
 精度。每次执行都会消费导入参数重新派生出的编码，不接受 raw ratio。训练态前向会
-保存量化后的 master tensor、最少 backward checkpoint 和对应真实 Clamp mask。
-QAT backward 将这些 q 值按 standard scale/zp 反量化后复用同一浮点 LSTM backward；
+由同一次 CUDA 量化 kernel 直接保存实际消费的 master q-carrier、最少 backward
+checkpoint 和对应真实 Clamp mask，不在 Python 中重新量化。QAT backward 通过
+CUDA kernel 将这些 q 值按 standard scale/zp 反量化后复用同一浮点 LSTM backward；
 Round 使用 STE 恒等梯度，只有 mask 标记为 Clamp 的真实边界会把梯度置零。两路
 Linear、四门 input/output、Cell、`tanh(Cell)` 和 Hidden 拥有 mask，融合乘法临时值
-没有 mask。
+没有 mask。Python autograd 只保存张量并调用 C++/CUDA 扩展。
 
 双向模块调用同一个单向 CUDA 核心两次。reverse 方向只在输入和输出的时间维做翻转；
 两个方向的 output 在最后一维拼接，`h_n/c_n` 按 forward、reverse 顺序堆叠。
