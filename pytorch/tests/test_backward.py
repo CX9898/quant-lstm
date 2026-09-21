@@ -678,6 +678,137 @@ class BackwardTest(unittest.TestCase):
             }
         )
 
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
+    def test_qat_bias_clamp_lifecycle_matches_round_clamp(self):
+        device = torch.device("cuda")
+        input_value = deterministic_tensor(
+            (4, 2, 3), -0.20, 0.25, device=device
+        )
+        first_clamped_steps = {}
+        for bitwidth in (8, 16):
+            with self.subTest(bitwidth=bitwidth):
+                module = QuantLSTM(3, 4, device=device)
+                initialize_parameters(module)
+                module.set_all_bitwidth(bitwidth)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)
+                    calibrate(module, input_value, None)
+                module.use_quantization = True
+                module.train()
+                bundle = json.loads(module._quant_params_bundle_json)
+                optimizer = torch.optim.SGD(module.parameters(), lr=0.8)
+                first_clamped_step = {"bias_ih": None, "bias_hh": None}
+
+                for step in range(6):
+                    optimizer.zero_grad(set_to_none=True)
+                    output, (hidden, cell) = module(input_value)
+                    saved = module.qat_saved_state()
+                    for name in first_clamped_step:
+                        parameter = getattr(module, f"{name}_l0")
+                        _, expected_mask = oracle.quantize_tensor(
+                            parameter, bundle["operators"][name], True
+                        )
+                        actual_mask = saved["master_clamp_masks"][name]
+                        self.assertTrue(
+                            torch.equal(actual_mask, expected_mask), name
+                        )
+                        if (
+                            actual_mask.any()
+                            and first_clamped_step[name] is None
+                        ):
+                            first_clamped_step[name] = step
+
+                    loss = output.sum() + hidden.sum() + 0.1 * cell.sum()
+                    loss.backward()
+                    optimizer.step()
+
+                self.assertEqual(
+                    first_clamped_step, {"bias_ih": 1, "bias_hh": 1}
+                )
+                first_clamped_steps[str(bitwidth)] = first_clamped_step
+        self.records.append(
+            {
+                "path": "qat_bias_clamp_lifecycle",
+                "tensor": "bias",
+                "first_clamped_step": first_clamped_steps,
+            }
+        )
+
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
+    def test_qat_bias_ste_blocks_only_saturated_channels(self):
+        device = torch.device("cuda")
+        module = QuantLSTM(3, 4, batch_first=True, device=device)
+        initialize_parameters(module)
+        calibration_input = deterministic_tensor(
+            (2, 4, 3), -0.04, 0.05, device=device
+        )
+        calibration_state = (
+            deterministic_tensor((1, 2, 4), -0.03, 0.03, device=device),
+            deterministic_tensor((1, 2, 4), -0.04, 0.04, device=device),
+        )
+        module.set_all_bitwidth(8)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            calibrate(module, calibration_input, calibration_state)
+        bundle = json.loads(module._quant_params_bundle_json)
+
+        with torch.no_grad():
+            for name in ("bias_ih", "bias_hh"):
+                parameter = getattr(module, f"{name}_l0")
+                operator = bundle["operators"][name]
+                scales = torch.tensor(
+                    [float(value) for value in operator["scales"]],
+                    device=device,
+                )
+                qmax = (1 << (operator["bitwidth"] - 1)) - 1
+                parameter.mul_(0.5)
+                parameter[0] = (qmax + 2) * scales[0]
+                parameter[1] = (-qmax - 2) * scales[1]
+
+        module.use_quantization = True
+        module.train()
+        input_value = calibration_input.clone().requires_grad_()
+        state = tuple(value.clone().requires_grad_() for value in calibration_state)
+        output, (hidden, cell) = module(input_value, state)
+        grad_output = deterministic_tensor(
+            output.shape, -0.08, 0.09, device=device
+        )
+        grad_hidden = deterministic_tensor(
+            hidden.shape, -0.07, 0.06, device=device
+        )
+        grad_cell = deterministic_tensor(
+            cell.shape, -0.05, 0.08, device=device
+        )
+        expected_gradients = qat_backward_reference(
+            module, grad_output, grad_hidden, grad_cell
+        )
+        torch.autograd.backward(
+            (output, hidden, cell),
+            (grad_output, grad_hidden, grad_cell),
+        )
+
+        for gradient_index, name in enumerate(("bias_ih", "bias_hh"), 3):
+            parameter = getattr(module, f"{name}_l0")
+            mask = module.qat_saved_state()["master_clamp_masks"][name]
+            _, expected_mask = oracle.quantize_tensor(
+                parameter, bundle["operators"][name], True
+            )
+            self.assertTrue(torch.equal(mask, expected_mask), name)
+            self.assertEqual(mask.nonzero().flatten().tolist(), [0, 1])
+            self.assertTrue(
+                torch.equal(parameter.grad[mask], torch.zeros(2, device=device))
+            )
+            self.assertGreater(parameter.grad[~mask].abs().max().item(), 0.0)
+            self.assertTrue(
+                torch.allclose(
+                    parameter.grad,
+                    expected_gradients[gradient_index],
+                    atol=5.0e-5,
+                    rtol=5.0e-5,
+                ),
+                name,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

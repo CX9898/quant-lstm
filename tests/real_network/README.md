@@ -78,6 +78,9 @@ checks:
 - final 16-bit logit MAE against the same trained model's native-float path is
   less than 10% of the corresponding 8-bit MAE, with cosine >= 0.9999;
 - per-epoch `weight_ih` and `weight_hh` Clamp rates remain below 10%;
+- each QAT epoch reports bias Clamp rates before and after optimizer updates,
+  plus per-channel parameter values, representable ranges, quantization steps,
+  and Clamp decisions before and after calibration refresh;
 - every initial and refreshed calibration uses 32 samples from each label;
 - neither calibration safety report contains a non-finite unsafe entry.
 

@@ -60,7 +60,7 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
             bitwidth: report["training"][f"quant_lstm_qat_{bitwidth}bit"]
             for bitwidth in (8, 16)
         }
-        self.assertEqual(report["schema_version"], 4)
+        self.assertEqual(report["schema_version"], 5)
         self.assertEqual(report["replacement"]["changed_module"], "lstm")
         self.assertEqual(report["quantization"]["bitwidths"], [8, 16])
         self.assertEqual(
@@ -154,6 +154,32 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
                     self.assertLess(
                         rates["master_clamp_masks.weight_hh"], 0.10
                     )
+                    bias_rates = epoch["qat_bias_clamp_rates"]
+                    self.assertEqual(set(bias_rates), {"pre_step", "post_step"})
+                    for timing in bias_rates.values():
+                        self.assertEqual(set(timing), {"bias_ih", "bias_hh"})
+                        self.assertTrue(
+                            all(0.0 <= value <= 1.0 for value in timing.values())
+                        )
+                    ranges = epoch["qat_bias_ranges"]
+                    self.assertEqual(
+                        set(ranges), {"before_refresh", "after_refresh"}
+                    )
+                    for timing in ranges.values():
+                        for name in ("bias_ih", "bias_hh"):
+                            diagnostic = timing[name]
+                            self.assertEqual(
+                                len(diagnostic["channels"]), 4 * 64
+                            )
+                            self.assertLessEqual(
+                                diagnostic["representable_min"],
+                                diagnostic["representable_max"],
+                            )
+                            self.assertGreater(
+                                diagnostic["quantization_step_min"], 0.0
+                            )
+                    for diagnostic in ranges["after_refresh"].values():
+                        self.assertEqual(diagnostic["clamp_rate"], 0.0)
 
         quantized_8 = quantized_variants[8]
         quantized_16 = quantized_variants[16]

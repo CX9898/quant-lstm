@@ -428,6 +428,58 @@ def _calibration_summary(calibration: dict, epoch: int) -> dict:
     }
 
 
+def _quant_range(operator: dict) -> tuple[int, int]:
+    bitwidth = operator["bitwidth"]
+    if operator["is_unsigned"]:
+        return 0, (1 << bitwidth) - 1
+    if operator["is_symmetric"]:
+        maximum = (1 << (bitwidth - 1)) - 1
+        return -maximum, maximum
+    return -(1 << (bitwidth - 1)), (1 << (bitwidth - 1)) - 1
+
+
+def _bias_range_diagnostics(lstm: nn.Module) -> dict[str, dict]:
+    bundle = json.loads(lstm._quant_params_bundle_json)
+    diagnostics = {}
+    for name in ("bias_ih", "bias_hh"):
+        parameter = getattr(lstm, f"{name}_l0").detach().double().cpu()
+        operator = bundle["operators"][name]
+        scales = torch.tensor(
+            [float(value) for value in operator["scales"]], dtype=torch.float64
+        )
+        zero_points = torch.tensor(operator["zero_points"], dtype=torch.float64)
+        qmin, qmax = _quant_range(operator)
+        lower = (qmin - zero_points) * scales
+        upper = (qmax - zero_points) * scales
+        rounded = torch.round(parameter / scales + zero_points)
+        below = rounded < qmin
+        above = rounded > qmax
+        clamped = below | above
+        diagnostics[name] = {
+            "parameter_min": parameter.min().item(),
+            "parameter_max": parameter.max().item(),
+            "representable_min": lower.min().item(),
+            "representable_max": upper.max().item(),
+            "quantization_step_min": scales.min().item(),
+            "quantization_step_max": scales.max().item(),
+            "below_count": int(below.sum().item()),
+            "above_count": int(above.sum().item()),
+            "clamp_rate": clamped.double().mean().item(),
+            "channels": [
+                {
+                    "index": index,
+                    "parameter": parameter[index].item(),
+                    "representable_min": lower[index].item(),
+                    "representable_max": upper[index].item(),
+                    "quantization_step": scales[index].item(),
+                    "clamped": bool(clamped[index].item()),
+                }
+                for index in range(parameter.numel())
+            ],
+        }
+    return diagnostics
+
+
 def _quantization_error(
     model: SpeechCommandsLstmClassifier,
     data: tuple[Tensor, Tensor],
@@ -496,6 +548,8 @@ def _train(
         sample_count = 0
         clamp_counts: dict[str, int] = {}
         clamp_elements: dict[str, int] = {}
+        post_step_bias_clamp_counts = {"bias_ih": 0, "bias_hh": 0}
+        post_step_bias_elements = {"bias_ih": 0, "bias_hh": 0}
         for features, labels in _batches(
             *feature_sets["training"], config.batch_size, indices=order
         ):
@@ -532,8 +586,22 @@ def _train(
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
+            if qat_bitwidth is not None:
+                post_step = _bias_range_diagnostics(model.lstm)
+                for bias_name, diagnostic in post_step.items():
+                    post_step_bias_clamp_counts[bias_name] += (
+                        diagnostic["below_count"] + diagnostic["above_count"]
+                    )
+                    post_step_bias_elements[bias_name] += len(
+                        diagnostic["channels"]
+                    )
             loss_sum += loss.item() * labels.numel()
             sample_count += labels.numel()
+        bias_ranges_before_refresh = (
+            _bias_range_diagnostics(model.lstm)
+            if qat_bitwidth is not None
+            else None
+        )
         if (
             qat_bitwidth is not None
             and (epoch + 1) % config.calibration_refresh_epochs == 0
@@ -562,6 +630,22 @@ def _train(
             epoch_result["qat_clamp_rates"] = {
                 name: clamp_counts[name] / clamp_elements[name]
                 for name in sorted(clamp_counts)
+            }
+            epoch_result["qat_bias_clamp_rates"] = {
+                "pre_step": {
+                    name: clamp_counts[f"master_clamp_masks.{name}"]
+                    / clamp_elements[f"master_clamp_masks.{name}"]
+                    for name in post_step_bias_clamp_counts
+                },
+                "post_step": {
+                    name: post_step_bias_clamp_counts[name]
+                    / post_step_bias_elements[name]
+                    for name in post_step_bias_clamp_counts
+                },
+            }
+            epoch_result["qat_bias_ranges"] = {
+                "before_refresh": bias_ranges_before_refresh,
+                "after_refresh": _bias_range_diagnostics(model.lstm),
             }
         history.append(epoch_result)
         print(
@@ -678,7 +762,7 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
         for name, model in quantized_variants.items()
     }
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "validation_scope": "real_network_training",
         "dataset": {
             "name": "speech_commands_v0.02",
