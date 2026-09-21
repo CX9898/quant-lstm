@@ -216,6 +216,48 @@ void LstmCalibrationCollector::collect(const LstmShape& shape, const LstmFloatWe
     ++batch_count_;
 }
 
+void LstmCalibrationCollector::merge(const LstmCalibrationBatch& batch) {
+    for (std::size_t index = 0; index < kQuantOperatorCount; ++index) {
+        const auto id = static_cast<QuantOperator>(index);
+        const auto& source_ranges = batch.ranges.operators[index];
+        auto& destination_ranges = ranges_.operators[index];
+        if (source_ranges.size() != destination_ranges.size()) {
+            throw std::invalid_argument("CUDA 校准 range group 数量不匹配");
+        }
+        for (std::size_t group = 0; group < source_ranges.size(); ++group) {
+            if (source_ranges[group].empty()) {
+                throw std::invalid_argument("CUDA 校准 batch 缺少有限 range");
+            }
+            destination_ranges[group].merge(source_ranges[group]);
+        }
+
+        const auto& source_histograms = batch.histograms[index];
+        auto& destination_histograms = histograms_[index];
+        if (!collect_histograms_) {
+            if (!source_histograms.empty()) {
+                throw std::invalid_argument("MinMax CUDA 校准不应包含 histogram");
+            }
+            continue;
+        }
+        if (!bias_enabled_ && isBiasOperator(id)) {
+            if (!source_histograms.empty()) {
+                throw std::invalid_argument("bias=False 的 CUDA 校准不应包含 bias histogram");
+            }
+            continue;
+        }
+        if (source_histograms.size() != destination_histograms.size()) {
+            throw std::invalid_argument("CUDA 校准 histogram group 数量不匹配");
+        }
+        for (std::size_t group = 0; group < source_histograms.size(); ++group) {
+            destination_histograms[group].merge(source_histograms[group].histogram());
+        }
+    }
+    contributions_.forget_times_old_cell.merge(batch.contributions.forget_times_old_cell);
+    contributions_.input_times_cell.merge(batch.contributions.input_times_cell);
+    contributions_.output_times_cell_tanh.merge(batch.contributions.output_times_cell_tanh);
+    ++batch_count_;
+}
+
 const LstmQuantizationRanges& LstmCalibrationCollector::ranges() const noexcept { return ranges_; }
 
 const LstmContributionRanges& LstmCalibrationCollector::contributions() const noexcept {
@@ -229,6 +271,12 @@ std::int64_t LstmCalibrationCollector::inputSize() const noexcept { return input
 std::int64_t LstmCalibrationCollector::hiddenSize() const noexcept { return hidden_size_; }
 
 bool LstmCalibrationCollector::biasEnabled() const noexcept { return bias_enabled_; }
+
+bool LstmCalibrationCollector::collectsHistograms() const noexcept { return collect_histograms_; }
+
+std::size_t LstmCalibrationCollector::histogramBinCount() const noexcept {
+    return histogram_bin_count_;
+}
 
 const LstmOperatorQuantConfig& LstmCalibrationCollector::config() const noexcept { return config_; }
 
@@ -258,6 +306,15 @@ void LstmCalibrationSession::collect(const LstmShape& shape, const LstmFloatWeig
         throw std::logic_error("Locked 校准会话拒绝继续采集");
     }
     collector_.collect(shape, weights, input, initial_hidden, initial_cell);
+    state_ = CalibrationState::Dirty;
+    has_finalized_ = false;
+}
+
+void LstmCalibrationSession::collect(LstmCalibrationBatch batch) {
+    if (state_ == CalibrationState::Locked) {
+        throw std::logic_error("Locked 校准会话拒绝继续采集");
+    }
+    collector_.merge(batch);
     state_ = CalibrationState::Dirty;
     has_finalized_ = false;
 }

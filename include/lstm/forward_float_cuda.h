@@ -9,9 +9,12 @@
 namespace quant_lstm {
 
 struct LstmFloatCudaTrace {
-    float* gate_outputs;
-    float* cell_states;
-    float* cell_tanh_outputs;
+    float* gate_outputs = nullptr;
+    float* cell_states = nullptr;
+    float* cell_tanh_outputs = nullptr;
+    float* weight_input_hidden_linear = nullptr;
+    float* weight_hidden_hidden_linear = nullptr;
+    float* gate_inputs = nullptr;
 };
 
 /// 使用调用方持有的 cuBLAS handle 和 stream 执行前向。

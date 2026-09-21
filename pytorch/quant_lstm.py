@@ -271,15 +271,9 @@ class _UnidirectionalQuantLSTM(nn.Module):
             )
         return self._calibration_session
 
-    @staticmethod
-    def _cpu_tensor(value: Optional[Tensor]) -> Optional[Tensor]:
-        if value is None:
-            return None
-        return value.detach().to(device="cpu", dtype=torch.float32).contiguous()
-
     def _collect_calibration(
         self, input: Tensor, hx: Optional[tuple[Tensor, Tensor]]
-    ) -> None:
+    ) -> tuple[Tensor, tuple[Tensor, Tensor]]:
         if hx is None:
             h0 = c0 = None
         else:
@@ -287,16 +281,17 @@ class _UnidirectionalQuantLSTM(nn.Module):
                 raise ValueError("hx 必须是 (h_0, c_0)")
             h0, c0 = hx
         session = self._ensure_calibration_session()
-        session.collect(
-            self._cpu_tensor(input),
-            self._cpu_tensor(self.weight_ih_l0),
-            self._cpu_tensor(self.weight_hh_l0),
-            self._cpu_tensor(self.bias_ih_l0),
-            self._cpu_tensor(self.bias_hh_l0),
-            self._cpu_tensor(h0),
-            self._cpu_tensor(c0),
+        output, final_hidden, final_cell = session.collect(
+            input,
+            self.weight_ih_l0,
+            self.weight_hh_l0,
+            self.bias_ih_l0,
+            self.bias_hh_l0,
+            h0,
+            c0,
             self.batch_first,
         )
+        return output, (final_hidden, final_cell)
 
     def reset_calibration(self) -> None:
         self._invalidate_quant_params()
@@ -402,8 +397,7 @@ class _UnidirectionalQuantLSTM(nn.Module):
                 "CPU 实现仅用于 C++ reference model"
             )
         if self.calibrating:
-            self._collect_calibration(input, hx)
-            return self._float_forward(input, hx)
+            return self._collect_calibration(input, hx)
         if self.use_quantization:
             return self._quantized_forward(input, hx)
         return self._float_forward(input, hx)
@@ -647,21 +641,28 @@ class QuantLSTM(_UnidirectionalQuantLSTM):
 
     def _collect_calibration(
         self, input: Tensor, hx: Optional[tuple[Tensor, Tensor]]
-    ) -> None:
+    ) -> tuple[Tensor, tuple[Tensor, Tensor]]:
         if not self.bidirectional:
             return super()._collect_calibration(input, hx)
         forward_state, reverse_state = self._split_bidirectional_state(input, hx)
-        super()._collect_calibration(input, forward_state)
+        forward_output, (forward_hidden, forward_cell) = super()._collect_calibration(
+            input, forward_state
+        )
         reverse_session = self._ensure_reverse_calibration_session()
-        reverse_session.collect(
-            self._cpu_tensor(self._reverse_sequence(input)),
-            self._cpu_tensor(self.weight_ih_l0_reverse),
-            self._cpu_tensor(self.weight_hh_l0_reverse),
-            self._cpu_tensor(self.bias_ih_l0_reverse),
-            self._cpu_tensor(self.bias_hh_l0_reverse),
-            self._cpu_tensor(reverse_state[0]),
-            self._cpu_tensor(reverse_state[1]),
+        reverse_output, reverse_hidden, reverse_cell = reverse_session.collect(
+            self._reverse_sequence(input),
+            self.weight_ih_l0_reverse,
+            self.weight_hh_l0_reverse,
+            self.bias_ih_l0_reverse,
+            self.bias_hh_l0_reverse,
+            reverse_state[0],
+            reverse_state[1],
             self.batch_first,
+        )
+        reverse_output = self._reverse_sequence(reverse_output)
+        return torch.cat((forward_output, reverse_output), dim=-1), (
+            torch.cat((forward_hidden, reverse_hidden), dim=0),
+            torch.cat((forward_cell, reverse_cell), dim=0),
         )
 
     def finalize_calibration(self) -> dict[str, Any]:

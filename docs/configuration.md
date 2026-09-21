@@ -35,11 +35,15 @@ report = module.finalize_calibration()
 module.use_quantization = True
 ```
 
-校准 batch、参数和状态必须位于 CUDA；forward 由 CUDA 主路径返回浮点结果，同时
-显式复制校准输入到 CPU collector，并使用 CPU reference 累积正式 FP32 checkpoint。
-这不是运行时 fallback。`finalize_calibration()` 将会话锁定，并生成 standard
-scale/zp 和执行编码。
+校准 batch、参数和状态必须位于 CUDA。一次 CUDA 浮点 forward 同时生成输出和完整
+checkpoint；range、per-channel/per-gate 参数统计、直方图以及三个 cell contribution
+诊断都直接在设备端计算。只有每组 min/max 和可选 histogram bins 会回传给 C++
+finalization，原始 tensor 不复制到 CPU，也不会额外执行第二次 forward。
+`finalize_calibration()` 将会话锁定，并生成 standard scale/zp 和执行编码。
 `reset_calibration()` 是开始新会话的唯一入口。
+
+CPU 标量 collector 仅作为独立 C++ reference，CUDA 校准测试会逐组比较两者的范围、
+样本数和最终参数；它不属于 PyTorch 校准路径或运行时 fallback。
 
 双向模块为 forward/reverse 分别保存参数统计。两个方向使用同一 resolved config，
 并强制 input 的完整 standard scale/zp、位宽和对称性逐值相同；h/c、Linear、门和

@@ -338,7 +338,8 @@ quant-lstm/
 │       ├── forward_cpu.h              # CPU 定点 reference API
 │       ├── forward_fp_reference_cpu.h # CPU 标量 FP 载体 reference API
 │       ├── forward_fp_cuda.h          # CUDA FP 载体主路径
-│       ├── calibration.h              # 校准数据模型与接口
+│       ├── calibration.h              # 校准数据模型与公共 finalization 接口
+│       ├── calibration_cuda.h         # CUDA 校准前向与设备统计 API
 │       └── interface.h                # 对外 C++ API
 ├── src/
 │   ├── quantization/
@@ -353,7 +354,7 @@ quant-lstm/
 │       ├── forward_quantized_fp_cuda.cu # cuBLAS + FP 载体主路径
 │       ├── quant_config_loader.cc     # 唯一默认合并与 canonical 序列化实现
 │       ├── quant_params.cc            # range 到参数及 rescale 派生
-│       ├── calibration_cuda.cu
+│       ├── calibration_cuda.cu        # CUDA range/histogram/contribution 统计
 │       └── interface.cc
 ├── config/
 │   ├── defaults/

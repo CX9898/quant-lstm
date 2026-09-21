@@ -3,6 +3,7 @@
 import json
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import jsonschema
 import torch
@@ -192,6 +193,47 @@ class QuantizedInterfaceTest(unittest.TestCase):
                     imported.get_quant_config(),
                     module.get_quant_config(),
                 )
+
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
+    def test_calibration_uses_single_cuda_forward(self):
+        module = QuantLSTM(3, 4, device="cuda")
+        initialize_module(module)
+        input_tensor = deterministic_tensor((3, 2, 3), device="cuda")
+        state = (
+            deterministic_tensor((1, 2, 4), -0.1, 0.12, device="cuda"),
+            deterministic_tensor((1, 2, 4), -0.2, 0.18, device="cuda"),
+        )
+        with torch.no_grad():
+            expected = module(input_tensor, state)
+            module.calibrating = True
+            with mock.patch.object(
+                module,
+                "_float_forward",
+                side_effect=AssertionError("calibration ran a second float forward"),
+            ):
+                actual = module(input_tensor, state)
+        module.calibrating = False
+        self.assertTrue(actual[0].is_cuda)
+        for actual_value, expected_value in zip(
+            (actual[0], *actual[1]), (expected[0], *expected[1])
+        ):
+            self.assertTrue(torch.equal(actual_value, expected_value))
+        self.assertEqual(module.finalize_calibration()["batch_count"], 1)
+
+        session = _quant_lstm.CalibrationSession(
+            module._resolved_config_json, 3, 4, True, "minmax"
+        )
+        with self.assertRaisesRegex(RuntimeError, "CUDA"):
+            session.collect(
+                input_tensor.cpu(),
+                module.weight_ih_l0,
+                module.weight_hh_l0,
+                module.bias_ih_l0,
+                module.bias_hh_l0,
+                state[0],
+                state[1],
+                False,
+            )
 
     @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_bias_disabled_bundle_omits_bias_operators(self):

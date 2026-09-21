@@ -16,7 +16,8 @@ __global__ void updateLstmState(std::int64_t batch_size, std::int64_t hidden_siz
                                 const float* input_linear, const float* recurrent_linear,
                                 const float* bias_ih, const float* bias_hh, float* hidden,
                                 float* cell, float* output, float* gate_outputs, float* cell_states,
-                                float* cell_tanh_outputs) {
+                                float* cell_tanh_outputs, float* traced_input_linear,
+                                float* traced_recurrent_linear, float* gate_inputs) {
     const std::int64_t count = batch_size * hidden_size;
     const std::int64_t stride = static_cast<std::int64_t>(gridDim.x) * blockDim.x;
     for (std::int64_t element = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -30,11 +31,19 @@ __global__ void updateLstmState(std::int64_t batch_size, std::int64_t hidden_siz
 #pragma unroll
         for (int gate = 0; gate < 4; ++gate) {
             const std::int64_t gate_index = base + static_cast<std::int64_t>(gate) * hidden_size;
+            const std::int64_t bias_index =
+                static_cast<std::int64_t>(gate) * hidden_size + hidden_index;
             float value = input_linear[gate_index] + recurrent_linear[gate_index];
             if (bias_ih != nullptr) {
-                const std::int64_t bias_index =
-                    static_cast<std::int64_t>(gate) * hidden_size + hidden_index;
                 value += bias_ih[bias_index] + bias_hh[bias_index];
+            }
+            if (gate_inputs != nullptr) {
+                traced_input_linear[gate_index] =
+                    input_linear[gate_index] + (bias_ih == nullptr ? 0.0F : bias_ih[bias_index]);
+                traced_recurrent_linear[gate_index] =
+                    recurrent_linear[gate_index] +
+                    (bias_hh == nullptr ? 0.0F : bias_hh[bias_index]);
+                gate_inputs[gate_index] = value;
             }
             gate_values[gate] = value;
         }
@@ -92,7 +101,14 @@ void lstmForwardFloatCuda(const LstmShape& shape, const LstmFloatWeights& weight
     }
     if (trace != nullptr && (trace->gate_outputs == nullptr || trace->cell_states == nullptr ||
                              trace->cell_tanh_outputs == nullptr)) {
-        throw std::invalid_argument("CUDA float trace 指针必须全部提供");
+        throw std::invalid_argument("CUDA float recurrent trace 指针必须全部提供");
+    }
+    if (trace != nullptr) {
+        const bool has_calibration_trace = trace->gate_inputs != nullptr;
+        if (has_calibration_trace != (trace->weight_input_hidden_linear != nullptr) ||
+            has_calibration_trace != (trace->weight_hidden_hidden_linear != nullptr)) {
+            throw std::invalid_argument("CUDA float calibration trace 指针必须全部提供或全部省略");
+        }
     }
 
     const int sequence_length =
@@ -166,6 +182,20 @@ void lstmForwardFloatCuda(const LstmShape& shape, const LstmFloatWeights& weight
             trace == nullptr
                 ? nullptr
                 : trace->cell_tanh_outputs + static_cast<std::int64_t>(time) * state_elements;
+        float* traced_input_linear =
+            trace == nullptr || trace->gate_inputs == nullptr
+                ? nullptr
+                : trace->weight_input_hidden_linear +
+                      static_cast<std::int64_t>(time) * batch_size * gate_size;
+        float* traced_recurrent_linear =
+            trace == nullptr || trace->gate_inputs == nullptr
+                ? nullptr
+                : trace->weight_hidden_hidden_linear +
+                      static_cast<std::int64_t>(time) * batch_size * gate_size;
+        float* gate_inputs =
+            trace == nullptr || trace->gate_inputs == nullptr
+                ? nullptr
+                : trace->gate_inputs + static_cast<std::int64_t>(time) * batch_size * gate_size;
         cuda_detail::runGemm(handle, batch_size, gate_size, hidden_size, final_hidden,
                              weights.weight_hh, recurrent_linear);
         updateLstmState<<<blocks, threads, 0, stream>>>(
@@ -173,7 +203,7 @@ void lstmForwardFloatCuda(const LstmShape& shape, const LstmFloatWeights& weight
             input_linear + static_cast<std::int64_t>(time) * batch_size * gate_size,
             recurrent_linear, weights.bias_ih, weights.bias_hh, final_hidden, final_cell,
             output + static_cast<std::int64_t>(time) * state_elements, gate_outputs, cell_states,
-            cell_tanh_outputs);
+            cell_tanh_outputs, traced_input_linear, traced_recurrent_linear, gate_inputs);
         cuda_detail::checkCuda(cudaGetLastError(), "updateLstmState kernel");
     }
     settings.restore();

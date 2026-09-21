@@ -6,7 +6,7 @@
 Round/Clamp 边界保存 STE mask，并支持 h0/c0、bias=False 和双向梯度。标准 ONNX
 `LSTM` 导出、显式 generation-key 量化静态参数缓存，以及 RTX 6000D
 设备/profile/version 性能门禁均已验收。PyTorch `QuantLSTM` 执行接口只支持
-CUDA；CPU int32 与标量 FP32 q-carrier reference 只用于 Golden、校准、数值验证
+CUDA；CPU int32 与标量 FP32 q-carrier reference 只用于 Golden、数值验证
 和无 CUDA 安装包，不作为 Python 运行时 fallback。统一 Golden、NumericSafety 和
 synthetic numeric 精度门禁保持生效。量化执行语义以
 `docs/quantized-execution-spec.md` 为准；配置和双载体流程分别见
@@ -105,7 +105,8 @@ tests/real_network/run_speech_commands_lstm_test.sh \
 
 典型流程是先以 `calibrating=True` 在 CUDA 上运行一个或多个校准 batch，随后调用
 `finalize_calibration()`，再设置 `use_quantization=True`。完全浮点、量化和 QAT
-模式都只接受 CUDA FP32 tensor；校准 collector 会显式使用 CPU reference，但执行
+模式都只接受 CUDA FP32 tensor。校准前向、18 个量化点的 range/histogram 统计和
+cell contribution 诊断均由 CUDA 完成，只将紧凑统计量交给 C++ finalization；执行
 接口不会回退到 CPU，也未暴露未实现的 int32 后端。
 双向模块会分别导出 forward/reverse 参数，并拒绝没有共享 input 网格的参数文档。
 

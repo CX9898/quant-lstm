@@ -63,6 +63,7 @@ if(QUANT_LSTM_ENABLE_CUDA)
         quant_lstm
         PRIVATE
             src/lstm/backward_float_cuda.cu
+            src/lstm/calibration_cuda.cu
             src/lstm/forward_float_cuda.cu
             src/lstm/forward_quantized_fp_cuda.cu
     )

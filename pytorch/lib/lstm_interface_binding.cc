@@ -17,6 +17,7 @@
 
 #include "lstm/backward_float_cuda.h"
 #include "lstm/calibration.h"
+#include "lstm/calibration_cuda.h"
 #include "lstm/forward_float.h"
 #include "lstm/forward_float_cuda.h"
 #include "lstm/forward_quantized_fp_cuda.h"
@@ -811,23 +812,42 @@ class CalibrationSessionBinding {
           session_(config_, input_size, hidden_size, bias_enabled, parseCalibrationMethod(method)) {
     }
 
-    void collect(const torch::Tensor& input, const torch::Tensor& weight_ih,
-                 const torch::Tensor& weight_hh, const std::optional<torch::Tensor>& bias_ih,
-                 const std::optional<torch::Tensor>& bias_hh,
-                 const std::optional<torch::Tensor>& initial_hidden,
-                 const std::optional<torch::Tensor>& initial_cell, bool batch_first) {
+    std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> collect(
+        const torch::Tensor& input, const torch::Tensor& weight_ih, const torch::Tensor& weight_hh,
+        const std::optional<torch::Tensor>& bias_ih, const std::optional<torch::Tensor>& bias_hh,
+        const std::optional<torch::Tensor>& initial_hidden,
+        const std::optional<torch::Tensor>& initial_cell, bool batch_first) {
+        checkCudaExecutionInput(input);
         PreparedForward prepared = prepareForward(input, weight_ih, weight_hh, bias_ih, bias_hh,
                                                   initial_hidden, initial_cell, batch_first);
-        TORCH_CHECK(prepared.time_major.device().is_cpu(), "校准 binding 只接受 CPU tensor");
         TORCH_CHECK(prepared.shape.input_size == session_.collector().inputSize() &&
                         prepared.shape.hidden_size == session_.collector().hiddenSize(),
                     "校准 tensor shape 与 session 不匹配");
         TORCH_CHECK(prepared.bias_ih.has_value() == session_.collector().biasEnabled(),
                     "校准 bias 状态与 session 不匹配");
-        py::gil_scoped_release release;
-        session_.collect(
-            prepared.shape, preparedWeights(prepared), prepared.time_major.data_ptr<float>(),
-            optionalData(prepared.initial_hidden), optionalData(prepared.initial_cell));
+        auto output = torch::empty(
+            {prepared.shape.sequence_length, prepared.shape.batch_size, prepared.shape.hidden_size},
+            prepared.time_major.options());
+        auto final_hidden = torch::empty({1, prepared.shape.batch_size, prepared.shape.hidden_size},
+                                         prepared.time_major.options());
+        auto final_cell = torch::empty_like(final_hidden);
+
+        c10::cuda::CUDAGuard guard(prepared.time_major.device());
+        const cudaStream_t stream =
+            c10::cuda::getCurrentCUDAStream(prepared.time_major.get_device()).stream();
+        cublasHandle_t handle = at::cuda::getCurrentCUDABlasHandle();
+        {
+            py::gil_scoped_release release;
+            quant_lstm::lstmForwardCalibrateCuda(
+                prepared.shape, preparedWeights(prepared), prepared.time_major.data_ptr<float>(),
+                optionalData(prepared.initial_hidden), optionalData(prepared.initial_cell),
+                output.data_ptr<float>(), final_hidden.data_ptr<float>(),
+                final_cell.data_ptr<float>(), handle, stream, session_);
+        }
+        if (batch_first) {
+            output = output.transpose(0, 1);
+        }
+        return {output, final_hidden, final_cell};
     }
 
     py::dict finalize(bool require_exact_accumulation) {

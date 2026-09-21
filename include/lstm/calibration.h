@@ -59,6 +59,14 @@ struct FinalizedLstmCalibration {
     LstmCalibrationReport report;
 };
 
+// CUDA 校准先在设备端归约原始 checkpoint，再将紧凑的 range/histogram
+// 统计合并到公共会话。CPU reference collector 也保留为独立正确性基准。
+struct LstmCalibrationBatch {
+    LstmQuantizationRanges ranges;
+    LstmContributionRanges contributions;
+    std::array<std::vector<quantization::HistogramCollector>, kQuantOperatorCount> histograms;
+};
+
 // 负责把正式 FP32 reference checkpoint 累积到 18 个真实量化点。
 class LstmCalibrationCollector {
    public:
@@ -70,6 +78,7 @@ class LstmCalibrationCollector {
     void reset();
     void collect(const LstmShape& shape, const LstmFloatWeights& weights, const float* input,
                  const float* initial_hidden, const float* initial_cell);
+    void merge(const LstmCalibrationBatch& batch);
 
     const LstmQuantizationRanges& ranges() const noexcept;
     const LstmContributionRanges& contributions() const noexcept;
@@ -77,6 +86,8 @@ class LstmCalibrationCollector {
     std::int64_t inputSize() const noexcept;
     std::int64_t hiddenSize() const noexcept;
     bool biasEnabled() const noexcept;
+    bool collectsHistograms() const noexcept;
+    std::size_t histogramBinCount() const noexcept;
     const LstmOperatorQuantConfig& config() const noexcept;
     const std::array<std::vector<quantization::HistogramCollector>, kQuantOperatorCount>&
     histograms() const noexcept;
@@ -109,6 +120,7 @@ class LstmCalibrationSession {
 
     void collect(const LstmShape& shape, const LstmFloatWeights& weights, const float* input,
                  const float* initial_hidden, const float* initial_cell);
+    void collect(LstmCalibrationBatch batch);
     const FinalizedLstmCalibration& finalize(bool require_exact_accumulation = false);
     void reset();
 
