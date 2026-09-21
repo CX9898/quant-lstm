@@ -85,6 +85,19 @@ PYTHONPATH=. python3 -m unittest -v tests.test_backward
 PYTHONPATH=. python3 -m unittest -v tests.test_onnx_export
 ```
 
+基于 Google Research `kws_streaming` LSTM 与 Speech Commands v0.02 的真实网络
+训练对照是显式运行的慢测试，不进入默认 CI：
+
+```bash
+tests/real_network/run_speech_commands_lstm_test.sh \
+  --dataset-root /path/to/speech_commands_v0.02
+```
+
+该测试保持 MFCC、样本、初始化、batch 顺序和优化器一致，只把
+`torch.nn.LSTM` 替换为 8-bit `QuantLSTM` QAT，并输出完整训练曲线、validation/test
+准确率、参数更新范数和 native QAT checkpoint 证据。测试设计、阈值与官方来源见
+`tests/real_network/README.md` 和 `docs/research/speech-commands-lstm-baseline.md`。
+
 典型流程是先以 `calibrating=True` 在 CUDA 上运行一个或多个校准 batch，随后调用
 `finalize_calibration()`，再设置 `use_quantization=True`。完全浮点、量化和 QAT
 模式都只接受 CUDA FP32 tensor；校准 collector 会显式使用 CPU reference，但执行
@@ -98,7 +111,8 @@ scale mode 元数据的文档；外部参数仍只包含完整 standard scale/zp
 M+shift、POT2 shift 或 raw ratio。
 
 正确性模式固定使用 Pedantic math；TF32 仅作为显式性能模式并独立报告精度。
-当前精度范围仍为 `synthetic_numeric`，真实数据状态为 `not_configured`。
+算子级精度门禁范围仍为 `synthetic_numeric`；另有显式运行的四分类
+`real_network_training` 回归，但不等价于完整 12 类模型精度验收。
 阶段 9 已完成标准 ONNX 单节点导出和 CUDA 静态参数缓存优化；版本化绝对性能阈值
 只适用于配置中精确匹配的 GPU/CUDA/cuBLAS 环境，不跨设备复用。
 CUDA int32 与整数 LUT 仍受阶段 10 的条件性启动规则约束。
