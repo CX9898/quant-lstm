@@ -509,17 +509,18 @@ __device__ __forceinline__ float quantizeMasterDevice(float value, const DeviceQ
                                                       std::uint8_t* clamped = nullptr) {
     const double translated = static_cast<double>(value) / static_cast<double>(point.scale) +
                               static_cast<double>(point.zero_point);
+    const double rounded = quantization::roundToNearestEven(translated);
     if (clamped != nullptr) {
-        *clamped = translated < static_cast<double>(point.minimum) ||
-                   translated > static_cast<double>(point.maximum);
+        *clamped = rounded < static_cast<double>(point.minimum) ||
+                   rounded > static_cast<double>(point.maximum);
     }
-    if (translated <= static_cast<double>(point.minimum)) {
+    if (rounded <= static_cast<double>(point.minimum)) {
         return point.minimum;
     }
-    if (translated >= static_cast<double>(point.maximum)) {
+    if (rounded >= static_cast<double>(point.maximum)) {
         return point.maximum;
     }
-    return static_cast<float>(quantization::roundToNearestEven(translated));
+    return static_cast<float>(rounded);
 }
 
 __device__ __forceinline__ float dequantizeDevice(float value, const DeviceQuantPoint& point) {
