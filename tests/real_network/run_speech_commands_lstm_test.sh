@@ -6,18 +6,20 @@ python_bin="${PYTHON:-python3}"
 cache_root="${QUANT_LSTM_SPEECH_COMMANDS_CACHE:-${HOME}/.cache/quant-lstm/speech_commands_v0.02}"
 dataset_root="${QUANT_LSTM_SPEECH_COMMANDS_ROOT:-}"
 download=0
+full_dataset=0
 
 usage() {
   cat <<'EOF'
 Usage: tests/real_network/run_speech_commands_lstm_test.sh [options]
 
 Run matched torch.nn.LSTM, native-float QuantLSTM, 8-bit QuantLSTM QAT, and
-16-bit QuantLSTM QAT training on a deterministic Speech Commands v0.02 subset.
+16-bit QuantLSTM QAT training on Speech Commands v0.02.
 
 Options:
   --dataset-root PATH  Extracted dataset containing validation_list.txt
   --cache-root PATH    Download/extraction cache root
   --download           Download the official 2.3 GiB archive when absent
+  --full-dataset       Train and evaluate all 35 words and 105,829 samples
   -h, --help           Show this help
 
 Environment:
@@ -46,6 +48,10 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --download)
       download=1
+      shift
+      ;;
+    --full-dataset)
+      full_dataset=1
       shift
       ;;
     -h|--help)
@@ -85,4 +91,11 @@ for name in ("torch", "torchaudio", "_quant_lstm"):
 PY
 
 export QUANT_LSTM_SPEECH_COMMANDS_ROOT="${dataset_root}"
-"${python_bin}" "${root_dir}/tests/real_network/test_speech_commands_lstm_training.py"
+if [[ "${full_dataset}" -eq 1 ]]; then
+  export QUANT_LSTM_RUN_FULL_SPEECH_COMMANDS=1
+  "${python_bin}" \
+    "${root_dir}/tests/real_network/test_speech_commands_full_training.py"
+else
+  "${python_bin}" \
+    "${root_dir}/tests/real_network/test_speech_commands_lstm_training.py"
+fi

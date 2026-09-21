@@ -1,6 +1,6 @@
 # Quant-LSTM 纯定点量化实现计划
 
-> 状态：阶段 9 已完成；标准 ONNX、CUDA 静态参数缓存、性能门禁及浮点/QAT native CUDA backward 已验收
+> 状态：阶段 9 已完成；标准 ONNX、CUDA 静态参数缓存、性能门禁、浮点/QAT native CUDA backward 及 Speech Commands v0.02 全量真实网络门禁已验收
 > 参考基线：`/home/chengxing.zou/projects/quant-gru`，commit `9c25d14`
 > 目标仓库：`/home/chengxing.zou/projects/quant-lstm`
 
@@ -682,6 +682,20 @@ quant-lstm/
   kernel trace 均通过。生产 Python autograd 只负责布局、张量保存和扩展调用，
   PyTorch 公式仅保留在测试专用 oracle；CPU tensor 进入执行接口时明确失败，不做
   reference fallback。
+
+阶段 9 后续还补充了独立的 `real_network_training` 模型级门禁：
+
+- 使用 Google Research `kws_streaming` 的 MFCC-LSTM-Dense 拓扑和 Speech
+  Commands v0.02 官方 split，35 个词目录的 105,829 条语音全部进入且只进入一个
+  train/validation/test split；`_background_noise_` 单独审计，不作为词类别。
+- 在完全相同的特征、初始化和训练配置下比较 `torch.nn.LSTM`、native CUDA
+  FP32、INT8 QAT 和 INT16 QAT。门禁覆盖完整测试集准确率、macro/per-class F1、
+  logit 误差、预测一致率、真实 batch CUDA backward、校准样本平衡和非有限值。
+- 全量 profile 使用分块 MFCC 提取和带 split digest 的忽略目录缓存；报告包含
+  35x35 confusion matrix、逐类指标、数据清单审计和完整训练曲线。扩展算子归因与
+  校准策略矩阵仍由四分类快速回归承担，避免在全量测试中重复相同诊断。
+- 该门禁完成 CUDA 生产路径的代表性模型精度验收，但不替代阶段 3 延期的 CPU
+  reference 真实张量逐时间步严格矩阵。
 
 ### 阶段 10：条件性 CUDA int32 载体与整数集成
 

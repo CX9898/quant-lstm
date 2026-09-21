@@ -9,13 +9,20 @@ topology to the standard LSTM interface supported by this repository:
   -> one unidirectional LSTM (hidden size 64)
   -> final hidden state
   -> dropout(0)
-  -> four-class linear classifier
+  -> profile-sized linear classifier
 ```
 
 The source selection and exact upstream citations are recorded in
 [`docs/research/speech-commands-lstm-baseline.md`](../../docs/research/speech-commands-lstm-baseline.md).
 Peepholes and projection are disabled because neither `torch.nn.LSTM` nor the
 current `QuantLSTM` replacement exposes Google's projected peephole cell.
+
+Two profiles use the same model and replacement contract. The fast regression
+uses four words and a deterministic balanced subset. The full profile
+classifies all 35 word directories and consumes every one of the 105,829
+labeled clips through the official train/validation/test split.
+`_background_noise_` is audited separately and is not presented as a word
+class.
 
 ## Comparison contract
 
@@ -48,6 +55,22 @@ extracted v0.02 directory:
 tests/real_network/run_speech_commands_lstm_test.sh \
   --dataset-root /path/to/speech_commands_v0.02
 ```
+
+Run the complete 35-class dataset gate with:
+
+```bash
+tests/real_network/run_speech_commands_lstm_test.sh \
+  --dataset-root /path/to/speech_commands_v0.02 \
+  --full-dataset
+```
+
+The full profile uses 84,843 training, 9,981 validation, and 11,005 testing
+clips. MFCC extraction is chunked and cached in
+`tests/results/speech_commands_v0.02_full_mfcc.pt`; the cache is accepted only
+when the split path digests and feature contract match. Its JSON report is
+`tests/results/speech_commands_lstm_full_training.json` and includes the full
+35x35 confusion matrix plus per-class support, accuracy, precision, recall,
+and F1 for every branch.
 
 To use the script-managed cache and explicitly download the official 2.3 GiB
 archive:
@@ -150,3 +173,24 @@ and no non-finite unsafe entries. This is expected for the FP32 integer carrier:
 `2^24`. The warning is retained in the JSON safety report as required by the
 quantized execution specification; it does not select a CPU or floating-point
 LSTM fallback.
+
+## Full-dataset result
+
+The complete 35-class profile was run on 2026-09-21 with seed `20260921`, ten
+epochs, hidden size 64, and batch size 256. Dataset audit reported 105,829
+selected word samples, zero omitted samples, and zero split overlap.
+
+| Metric | `torch.nn.LSTM` | Native FP32 | 8-bit QAT | 16-bit QAT |
+|---|---:|---:|---:|---:|
+| Best validation accuracy | 90.18% | 89.94% | 86.90% | 87.86% |
+| Final test accuracy | 89.09% | 89.13% | 85.16% | 86.96% |
+| Test macro F1 | 0.8815 | 0.8813 | 0.8390 | 0.8628 |
+| Logit MAE vs own native path | N/A | N/A | 0.562870 | 0.003233 |
+| Prediction agreement | N/A | N/A | 92.24% | 99.94% |
+
+All branches reduced training loss. The 256-sample balanced real-batch CUDA
+backward check had a maximum absolute gradient error of `3.73e-9`. INT16 logit
+MAE was 0.58% of INT8 MAE, so the full-data result independently distinguishes
+the two bitwidth paths. Extended 18-operator ablation and the 12-case
+calibration matrix remain in the fast regression instead of multiplying those
+diagnostics across the full test split.

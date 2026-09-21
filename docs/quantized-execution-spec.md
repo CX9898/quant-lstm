@@ -1,6 +1,6 @@
 # LSTM 量化执行规格
 
-> 状态：阶段 9 已完成标准 ONNX 导出、CUDA 静态参数缓存和版本化性能门禁；真实数据精度仍待后续阶段接入
+> 状态：阶段 9 已完成标准 ONNX 导出、CUDA 静态参数缓存和版本化性能门禁；Speech Commands v0.02 全量真实网络精度门禁已接入
 > 参考基线：`/home/chengxing.zou/projects/quant-gru`，commit `9c25d14`
 > 公式推导：`docs/lstm-quantization-formula-derivation.md`
 > 分阶段计划：`docs/implementation-plan.md`
@@ -358,6 +358,11 @@ Golden 使用显式 `dtype/shape/data`、row-major 一维 data。Standard scale 
    单步优化和多步 loss 下降验收。生产 Python 仅负责扩展调度并拒绝 CPU 执行；
    CPU FP/int32 实现仅作为 C++ reference model。
 10. 已完成：标准 ONNX `LSTM` 单节点导出；量化静态参数缓存保持 Golden 与精度指标不变，P50/P95 获得稳定收益，memcheck/racecheck、Nsight SGEMM 计数和版本化设备阈值通过。
-11. 待后续阶段完成：代表性真实数据和模型级指标；接入前只能声明 `synthetic_numeric` 数值验证通过。
+11. 已完成：Google Research `kws_streaming` LSTM 拓扑的 Speech Commands
+    v0.02 全量真实网络门禁。官方 split 的 105,829 条带标签语音全部纳入
+    35 类训练/验证/测试，分别比较 `torch.nn.LSTM`、native CUDA FP32、INT8
+    QAT 和 INT16 QAT，并冻结任务准确率、macro/per-class F1、logit 误差、预测
+    一致率、真实 batch CUDA backward 和校准安全门禁。该结果验证 CUDA 生产
+    路径的模型级精度，不替代第 2 项尚待补充的 CPU reference 真实张量严格矩阵。
 
 上述证据文件按次生成且不提交仓库；审核通过的 schema、配置、阈值和规则变更必须入库并单独审查。

@@ -95,6 +95,11 @@ PYTHONPATH=. python3 -m unittest -v tests.test_onnx_export
 ```bash
 tests/real_network/run_speech_commands_lstm_test.sh \
   --dataset-root /path/to/speech_commands_v0.02
+
+# 完整 35 类、105,829 条语音的训练与测试
+tests/real_network/run_speech_commands_lstm_test.sh \
+  --dataset-root /path/to/speech_commands_v0.02 \
+  --full-dataset
 ```
 
 该测试保持 MFCC、样本、初始化、batch 顺序和优化器一致，只把
@@ -102,6 +107,9 @@ tests/real_network/run_speech_commands_lstm_test.sh \
 完整训练曲线、validation/test 准确率、参数更新范数和 native QAT checkpoint 证据。
 测试设计、阈值与官方来源见 `tests/real_network/README.md` 和
 `docs/research/speech-commands-lstm-baseline.md`。
+完整 profile 使用官方 split 的全部 84,843/9,981/11,005 条
+train/validation/test 样本，输出 35x35 confusion matrix 和逐类指标；MFCC 分块
+提取结果缓存于忽略目录，缓存以 split digest 和特征契约校验。
 
 典型流程是先以 `calibrating=True` 在 CUDA 上运行一个或多个校准 batch，随后调用
 `finalize_calibration()`，再设置 `use_quantization=True`。完全浮点、量化和 QAT
@@ -117,8 +125,8 @@ scale mode 元数据的文档；外部参数仍只包含完整 standard scale/zp
 M+shift、POT2 shift 或 raw ratio。
 
 正确性模式固定使用 Pedantic math；TF32 仅作为显式性能模式并独立报告精度。
-算子级精度门禁范围仍为 `synthetic_numeric`；另有显式运行的四分类
-`real_network_training` 回归，但不等价于完整 12 类模型精度验收。
+算子级精度门禁范围仍为 `synthetic_numeric`；真实网络同时提供四分类快速回归和
+完整 35 分类、全量样本的 `real_network_training` 门禁。
 阶段 9 已完成标准 ONNX 单节点导出和 CUDA 静态参数缓存优化；版本化绝对性能阈值
 只适用于配置中精确匹配的 GPU/CUDA/cuBLAS 环境，不跨设备复用。
 CUDA int32 与整数 LUT 仍受阶段 10 的条件性启动规则约束。
