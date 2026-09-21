@@ -10,7 +10,6 @@ import torch
 from torch import nn
 
 import _quant_lstm
-import lstm_autograd
 from quant_lstm import QuantLSTM
 from tests import lstm_backward_oracle as oracle
 from tests.test_quantized_interface import (
@@ -75,82 +74,6 @@ def prepare_quantized(module, calibration_input, calibration_state):
         calibrate(module, calibration_input, calibration_state)
     module.use_quantization = True
     module.train()
-
-
-def qat_backward_reference(
-    module, grad_output, grad_hidden, grad_cell
-):
-    state = module.qat_saved_state()
-    bundle = json.loads(module._quant_params_bundle_json)
-    operators = bundle["operators"]
-    masters = state["quantized_master"]
-    master_masks = state["master_clamp_masks"]
-    checkpoint_values = state["checkpoints"]
-    checkpoint_masks = state["checkpoint_clamp_masks"]
-
-    input_value = oracle.dequantize_tensor(
-        masters["input"], operators["input"]
-    )
-    weight_ih = oracle.dequantize_tensor(
-        masters["weight_ih"], operators["weight_ih"], True
-    )
-    weight_hh = oracle.dequantize_tensor(
-        masters["weight_hh"], operators["weight_hh"], True
-    )
-    initial_hidden = oracle.dequantize_tensor(
-        masters["h_0"], operators["output"]
-    )
-    initial_cell = oracle.dequantize_tensor(
-        masters["c_0"], operators["cell_state"]
-    )
-    trace = {
-        "gate_outputs": oracle.dequantize_gates(
-            checkpoint_values["gate_outputs"], bundle
-        ),
-        "cell_states": oracle.dequantize_tensor(
-            checkpoint_values["cell_states"], operators["cell_state"]
-        ),
-        "cell_tanh_outputs": oracle.dequantize_tensor(
-            checkpoint_values["cell_tanh_outputs"],
-            operators["cell_tanh_output"],
-        ),
-        "hidden_outputs": oracle.dequantize_tensor(
-            checkpoint_values["hidden_outputs"], operators["output"]
-        ),
-    }
-    gradients = list(
-        oracle.lstm_backward(
-            lstm_autograd._as_time_major(input_value, module.batch_first),
-            weight_ih,
-            weight_hh,
-            initial_hidden[0],
-            initial_cell[0],
-            trace,
-            lstm_autograd._as_time_major(grad_output, module.batch_first),
-            grad_hidden[0],
-            grad_cell[0],
-            checkpoint_masks,
-        )
-    )
-    if module.batch_first:
-        gradients[0] = gradients[0].transpose(0, 1)
-    master_mask_order = (
-        "input",
-        "weight_ih",
-        "weight_hh",
-        "bias_ih",
-        "bias_hh",
-        "h_0",
-        "c_0",
-    )
-    for index, name in enumerate(master_mask_order):
-        if name not in master_masks:
-            continue
-        mask = master_masks[name]
-        if name in ("h_0", "c_0"):
-            mask = mask[0]
-        gradients[index] *= oracle.keep_gradient(mask, gradients[index])
-    return gradients
 
 
 class BackwardTest(unittest.TestCase):
@@ -553,7 +476,7 @@ class BackwardTest(unittest.TestCase):
         grad_cell = deterministic_tensor(
             cell.shape, -0.05, 0.08, device=device
         )
-        reference = qat_backward_reference(
+        reference = oracle.qat_backward_reference(
             module, grad_output, grad_hidden, grad_cell
         )
         masks = module.qat_saved_state()["checkpoint_clamp_masks"]
@@ -779,7 +702,7 @@ class BackwardTest(unittest.TestCase):
         grad_cell = deterministic_tensor(
             cell.shape, -0.05, 0.08, device=device
         )
-        expected_gradients = qat_backward_reference(
+        expected_gradients = oracle.qat_backward_reference(
             module, grad_output, grad_hidden, grad_cell
         )
         torch.autograd.backward(

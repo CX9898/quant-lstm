@@ -111,6 +111,7 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
                 calibration_refresh_epochs=1,
                 quant_bitwidths=(8, 16),
                 seed=20260921,
+                quality_gate_seeds=(20260921, 20260922, 20260923),
             )
         )
         REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -125,9 +126,34 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
             bitwidth: report["training"][f"quant_lstm_qat_{bitwidth}bit"]
             for bitwidth in (8, 16)
         }
-        self.assertEqual(report["schema_version"], 7)
+        self.assertEqual(report["schema_version"], 8)
         self.assertEqual(report["replacement"]["changed_module"], "lstm")
         self.assertEqual(report["quantization"]["bitwidths"], [8, 16])
+        backward_oracle = report["quantization"]["real_batch_backward_oracle"]
+        self.assertEqual(set(backward_oracle), {"8", "16"})
+        for bitwidth, result in backward_oracle.items():
+            with self.subTest(backward_oracle_bitwidth=bitwidth):
+                self.assertEqual(result["sample_count"], 32)
+                self.assertEqual(result["label_counts"], [8, 8, 8, 8])
+                self.assertEqual(
+                    set(result["gradients"]),
+                    {
+                        "input",
+                        "weight_ih",
+                        "weight_hh",
+                        "bias_ih",
+                        "bias_hh",
+                        "h_0",
+                        "c_0",
+                    },
+                )
+                self.assertTrue(
+                    all(
+                        metrics["max_absolute_error"] <= 5.0e-6
+                        and metrics["cosine"] >= 0.99999
+                        for metrics in result["gradients"].values()
+                    )
+                )
         self.assertEqual(
             report["quantization"]["calibration_strategy"],
             {
@@ -343,6 +369,47 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
         )
         self.assertGreaterEqual(
             quantized_16["final_quantization_error"]["cosine"], 0.9999
+        )
+
+        multi_seed = report["multi_seed_quality"]
+        self.assertEqual(
+            multi_seed["seeds"], [20260921, 20260922, 20260923]
+        )
+        self.assertEqual(
+            set(multi_seed["runs"]),
+            {"20260921", "20260922", "20260923"},
+        )
+        for seed, run in multi_seed["runs"].items():
+            with self.subTest(quality_seed=seed):
+                for name in (
+                    "torch_lstm",
+                    "quant_lstm_qat_8bit",
+                    "quant_lstm_qat_16bit",
+                ):
+                    self.assertLess(
+                        run[name]["final_train_loss"],
+                        run[name]["initial_train_loss"],
+                    )
+                self.assertGreaterEqual(
+                    run["quant_lstm_qat_8bit"]["prediction_agreement"], 0.95
+                )
+                self.assertLess(
+                    run["quant_lstm_qat_16bit"]["logit_mae"],
+                    run["quant_lstm_qat_8bit"]["logit_mae"] * 0.10,
+                )
+        aggregate = multi_seed["aggregate"]
+        self.assertGreaterEqual(
+            aggregate["torch_lstm"]["minimum_test_accuracy"], 0.58
+        )
+        self.assertGreaterEqual(
+            aggregate["quant_lstm_qat_8bit"]["minimum_test_accuracy"], 0.47
+        )
+        self.assertGreaterEqual(
+            aggregate["quant_lstm_qat_16bit"]["minimum_test_accuracy"], 0.50
+        )
+        self.assertGreaterEqual(
+            aggregate["quant_lstm_qat_16bit"]["mean_test_accuracy"],
+            aggregate["quant_lstm_qat_8bit"]["mean_test_accuracy"] + 0.02,
         )
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Optional
 
 import torch
@@ -202,3 +203,79 @@ def lstm_backward(
         grad_hidden,
         grad_cell,
     )
+
+
+def qat_backward_reference(
+    module, grad_output: Tensor, grad_hidden: Tensor, grad_cell: Tensor
+) -> list[Tensor]:
+    state = module.qat_saved_state()
+    bundle = json.loads(module._quant_params_bundle_json)
+    operators = bundle["operators"]
+    masters = state["quantized_master"]
+    master_masks = state["master_clamp_masks"]
+    checkpoint_values = state["checkpoints"]
+    checkpoint_masks = state["checkpoint_clamp_masks"]
+
+    input_value = dequantize_tensor(masters["input"], operators["input"])
+    weight_ih = dequantize_tensor(
+        masters["weight_ih"], operators["weight_ih"], True
+    )
+    weight_hh = dequantize_tensor(
+        masters["weight_hh"], operators["weight_hh"], True
+    )
+    initial_hidden = dequantize_tensor(masters["h_0"], operators["output"])
+    initial_cell = dequantize_tensor(
+        masters["c_0"], operators["cell_state"]
+    )
+    trace = {
+        "gate_outputs": dequantize_gates(
+            checkpoint_values["gate_outputs"], bundle
+        ),
+        "cell_states": dequantize_tensor(
+            checkpoint_values["cell_states"], operators["cell_state"]
+        ),
+        "cell_tanh_outputs": dequantize_tensor(
+            checkpoint_values["cell_tanh_outputs"],
+            operators["cell_tanh_output"],
+        ),
+        "hidden_outputs": dequantize_tensor(
+            checkpoint_values["hidden_outputs"], operators["output"]
+        ),
+    }
+    input_time = input_value.transpose(0, 1) if module.batch_first else input_value
+    grad_output_time = (
+        grad_output.transpose(0, 1) if module.batch_first else grad_output
+    )
+    gradients = list(
+        lstm_backward(
+            input_time,
+            weight_ih,
+            weight_hh,
+            initial_hidden[0],
+            initial_cell[0],
+            trace,
+            grad_output_time,
+            grad_hidden[0],
+            grad_cell[0],
+            checkpoint_masks,
+        )
+    )
+    if module.batch_first:
+        gradients[0] = gradients[0].transpose(0, 1)
+    master_mask_order = (
+        "input",
+        "weight_ih",
+        "weight_hh",
+        "bias_ih",
+        "bias_hh",
+        "h_0",
+        "c_0",
+    )
+    for index, name in enumerate(master_mask_order):
+        if name not in master_masks:
+            continue
+        mask = master_masks[name]
+        if name in ("h_0", "c_0"):
+            mask = mask[0]
+        gradients[index] *= keep_gradient(mask, gradients[index])
+    return gradients

@@ -17,7 +17,7 @@ import time
 import urllib.request
 import warnings
 import wave
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -53,6 +53,7 @@ class ExperimentConfig:
     calibration_refresh_epochs: int = 1
     quant_bitwidths: tuple[int, ...] = (8, 16)
     seed: int = 20260921
+    quality_gate_seeds: tuple[int, ...] = ()
     device: str = "cuda"
 
     def validate(self) -> None:
@@ -78,6 +79,10 @@ class ExperimentConfig:
             raise ValueError("quant_bitwidths must be unique")
         if any(bitwidth not in (8, 16) for bitwidth in self.quant_bitwidths):
             raise ValueError("quant_bitwidths may only contain 8 or 16")
+        if len(set(self.quality_gate_seeds)) != len(self.quality_gate_seeds):
+            raise ValueError("quality_gate_seeds must be unique")
+        if self.quality_gate_seeds and self.seed not in self.quality_gate_seeds:
+            raise ValueError("quality_gate_seeds must include the primary seed")
 
 
 class SpeechCommandsLstmClassifier(nn.Module):
@@ -545,6 +550,80 @@ def _tensor_error_metrics(actual: Tensor, reference: Tensor) -> dict[str, float]
     }
 
 
+def _real_batch_backward_oracle(
+    model: SpeechCommandsLstmClassifier,
+    training: tuple[Tensor, Tensor],
+    config: ExperimentConfig,
+    device: torch.device,
+) -> dict:
+    from tests import lstm_backward_oracle as backward_oracle
+
+    indices = _balanced_calibration_indices(training[1], config.batch_size)
+    input_value = (
+        training[0][indices].to(device, non_blocking=True).requires_grad_()
+    )
+    labels = training[1][indices].to(device, non_blocking=True)
+    batch = input_value.size(0)
+    hidden_size = model.lstm.hidden_size
+    initial_hidden = torch.zeros(
+        (1, batch, hidden_size), device=device, requires_grad=True
+    )
+    initial_cell = torch.zeros(
+        (1, batch, hidden_size), device=device, requires_grad=True
+    )
+    model.zero_grad(set_to_none=True)
+    model.train()
+    model.lstm.use_quantization = True
+    output, (hidden, cell) = model.lstm(
+        input_value, (initial_hidden, initial_cell)
+    )
+    logits = model.classifier(model.dropout(hidden[-1]))
+    loss = F.cross_entropy(logits, labels)
+
+    grad_logits = torch.softmax(logits.detach(), dim=1)
+    grad_logits[torch.arange(batch, device=device), labels] -= 1.0
+    grad_logits /= batch
+    grad_hidden = torch.zeros_like(hidden)
+    grad_hidden[-1] = grad_logits.matmul(model.classifier.weight.detach())
+    grad_output = torch.zeros_like(output)
+    grad_cell = torch.zeros_like(cell)
+    expected = backward_oracle.qat_backward_reference(
+        model.lstm, grad_output, grad_hidden, grad_cell
+    )
+    loss.backward()
+    actual = (
+        input_value.grad,
+        model.lstm.weight_ih_l0.grad,
+        model.lstm.weight_hh_l0.grad,
+        model.lstm.bias_ih_l0.grad,
+        model.lstm.bias_hh_l0.grad,
+        initial_hidden.grad[0],
+        initial_cell.grad[0],
+    )
+    names = (
+        "input",
+        "weight_ih",
+        "weight_hh",
+        "bias_ih",
+        "bias_hh",
+        "h_0",
+        "c_0",
+    )
+    result = {
+        "sample_count": batch,
+        "label_counts": torch.bincount(
+            labels.detach().cpu(), minlength=len(config.labels)
+        ).tolist(),
+        "loss": loss.item(),
+        "gradients": {
+            name: _tensor_error_metrics(value, reference)
+            for name, value, reference in zip(names, actual, expected)
+        },
+    }
+    model.zero_grad(set_to_none=True)
+    return result
+
+
 def _quantization_error(
     model: SpeechCommandsLstmClassifier,
     data: tuple[Tensor, Tensor],
@@ -793,6 +872,8 @@ def _train(
     config: ExperimentConfig,
     device: torch.device,
     qat_bitwidth: int | None = None,
+    *,
+    extended_diagnostics: bool = True,
 ) -> dict:
     torch.manual_seed(config.seed)
     torch.cuda.manual_seed_all(config.seed)
@@ -955,7 +1036,7 @@ def _train(
             device,
             quantization_error,
         )
-        if qat_bitwidth == 8
+        if qat_bitwidth == 8 and extended_diagnostics
         else None
     )
     update_squared_norm = sum(
@@ -978,6 +1059,132 @@ def _train(
         "operator_bitwidth_ablation": operator_bitwidth_ablation,
         "duration_seconds": time.perf_counter() - started,
         "epochs": history,
+    }
+
+
+def _quality_result(result: dict, *, quantized: bool) -> dict:
+    summary = {
+        name: result[name]
+        for name in (
+            "initial_train_loss",
+            "final_train_loss",
+            "best_validation_accuracy",
+            "final_test_accuracy",
+        )
+    }
+    if quantized:
+        summary["logit_mae"] = result["final_quantization_error"]["mae"]
+        summary["prediction_agreement"] = result["final_quantization_error"][
+            "prediction_agreement"
+        ]
+    return summary
+
+
+def _run_additional_quality_seed(
+    feature_sets: dict[str, tuple[Tensor, Tensor]],
+    config: ExperimentConfig,
+    device: torch.device,
+) -> dict[str, dict]:
+    torch.manual_seed(config.seed)
+    torch.cuda.manual_seed_all(config.seed)
+    baseline = SpeechCommandsLstmClassifier(
+        config.hidden_size,
+        len(config.labels),
+        use_quant_lstm=False,
+        device=device,
+    )
+    quantized_variants = {}
+    for bitwidth in config.quant_bitwidths:
+        name = f"quant_lstm_qat_{bitwidth}bit"
+        model = SpeechCommandsLstmClassifier(
+            config.hidden_size,
+            len(config.labels),
+            use_quant_lstm=True,
+            device=device,
+        )
+        _copy_shared_initial_state(baseline, model)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            _calibrate_quant_lstm(
+                model, feature_sets["training"], config, device, bitwidth
+            )
+        quantized_variants[name] = model
+
+    baseline_result = _train(
+        f"seed_{config.seed}_torch_lstm",
+        baseline,
+        feature_sets,
+        config,
+        device,
+        extended_diagnostics=False,
+    )
+    results = {
+        "torch_lstm": _quality_result(baseline_result, quantized=False)
+    }
+    for name, model in quantized_variants.items():
+        bitwidth = int(name.removesuffix("bit").rsplit("_", 1)[1])
+        result = _train(
+            f"seed_{config.seed}_{name}",
+            model,
+            feature_sets,
+            config,
+            device,
+            qat_bitwidth=bitwidth,
+            extended_diagnostics=False,
+        )
+        results[name] = _quality_result(result, quantized=True)
+    return results
+
+
+def _multi_seed_quality(
+    primary_results: dict[str, dict],
+    feature_sets: dict[str, tuple[Tensor, Tensor]],
+    config: ExperimentConfig,
+    device: torch.device,
+) -> dict:
+    seeds = config.quality_gate_seeds or (config.seed,)
+    model_names = (
+        "torch_lstm",
+        *(f"quant_lstm_qat_{bitwidth}bit" for bitwidth in config.quant_bitwidths),
+    )
+    runs = {
+        str(config.seed): {
+            name: _quality_result(
+                primary_results[name], quantized=name != "torch_lstm"
+            )
+            for name in model_names
+        }
+    }
+    for seed in seeds:
+        if seed == config.seed:
+            continue
+        seed_config = replace(config, seed=seed, quality_gate_seeds=())
+        runs[str(seed)] = _run_additional_quality_seed(
+            feature_sets, seed_config, device
+        )
+    aggregate = {}
+    for name in model_names:
+        values = [run[name] for run in runs.values()]
+        aggregate[name] = {
+            "minimum_validation_accuracy": min(
+                value["best_validation_accuracy"] for value in values
+            ),
+            "mean_validation_accuracy": sum(
+                value["best_validation_accuracy"] for value in values
+            )
+            / len(values),
+            "minimum_test_accuracy": min(
+                value["final_test_accuracy"] for value in values
+            ),
+            "mean_test_accuracy": sum(
+                value["final_test_accuracy"] for value in values
+            )
+            / len(values),
+        }
+    return {
+        "seeds": list(seeds),
+        "runs": runs,
+        "aggregate": aggregate,
     }
 
 
@@ -1029,6 +1236,16 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
         )
         quantized_variants[name] = quantized
 
+    real_batch_backward_oracle = {
+        str(bitwidth): _real_batch_backward_oracle(
+            quantized_variants[f"quant_lstm_qat_{bitwidth}bit"],
+            feature_sets["training"],
+            config,
+            device,
+        )
+        for bitwidth in config.quant_bitwidths
+    }
+
     baseline_result = _train(
         "torch_lstm", baseline, feature_sets, config, device
     )
@@ -1058,8 +1275,15 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
         config,
         device,
     )
+    primary_results = {
+        "torch_lstm": baseline_result,
+        **quantized_results,
+    }
+    multi_seed_quality = _multi_seed_quality(
+        primary_results, feature_sets, config, device
+    )
     return {
-        "schema_version": 7,
+        "schema_version": 8,
         "validation_scope": "real_network_training",
         "dataset": {
             "name": "speech_commands_v0.02",
@@ -1096,6 +1320,7 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
             },
             "calibration": calibrations,
             "calibration_strategy_matrix": calibration_strategy_matrix,
+            "real_batch_backward_oracle": real_batch_backward_oracle,
         },
         "environment": {
             "torch": torch.__version__,
@@ -1113,6 +1338,7 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
             "quant_lstm_float": native_float_result,
             **quantized_results,
         },
+        "multi_seed_quality": multi_seed_quality,
     }
 
 
@@ -1137,6 +1363,16 @@ def _parse_arguments() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=3.0e-3)
     parser.add_argument("--calibration-batches", type=int, default=4)
     parser.add_argument("--calibration-refresh-epochs", type=int, default=1)
+    parser.add_argument(
+        "--quality-gate-seed",
+        type=int,
+        action="append",
+        dest="quality_gate_seeds",
+        help=(
+            "training seed for aggregate quality gates; repeat for multiple "
+            "seeds and include --seed"
+        ),
+    )
     parser.add_argument(
         "--quant-bitwidth",
         type=int,
@@ -1172,6 +1408,7 @@ def main() -> None:
             calibration_refresh_epochs=arguments.calibration_refresh_epochs,
             quant_bitwidths=tuple(arguments.quant_bitwidths or (8, 16)),
             seed=arguments.seed,
+            quality_gate_seeds=tuple(arguments.quality_gate_seeds or ()),
         )
     )
     encoded = json.dumps(report, indent=2, sort_keys=True) + "\n"

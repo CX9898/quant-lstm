@@ -89,6 +89,13 @@ checks:
 - a fixed-weight calibration matrix compares MinMax, Percentile, and SQNR with
   128 and 512 balanced training samples at both 8 and 16 bits; every entry
   reports per-operator range/resolution, test-set Clamp rates, and logit error;
+- a balanced real training batch drives cross-entropy gradients through the
+  classifier into CUDA QAT backward; all seven LSTM gradients are checked
+  against the independent Python checkpoint/STE oracle with a `5e-6` maximum
+  absolute-error gate;
+- three deterministic initialization and batch-order seeds must all reduce
+  training loss; aggregate gates cover worst-case test accuracy, INT8
+  prediction agreement, and the mean INT16-over-INT8 accuracy advantage;
 - every initial and refreshed calibration uses 32 samples from each label;
 - neither calibration safety report contains a non-finite unsafe entry.
 
@@ -119,6 +126,13 @@ from `0.07073` to `0.07783` and logit MAE from `0.01290` to `0.01735`.
 Percentile with 512 samples narrows that step to `0.06407` and reduces MAE to
 `0.00950`. Every INT16 matrix case remains below `0.00006` MAE, so this is an
 INT8 range-versus-resolution effect rather than an 8/16-bit path mix-up.
+
+On the real-batch backward check, the largest CUDA-versus-oracle absolute error
+is `1.12e-8` (`weight_ih`, INT16). Across seeds `20260921`, `20260922`, and
+`20260923`, minimum test accuracies are `59.38%` for PyTorch, `48.44%` for INT8,
+and `51.56%` for INT16. Mean INT8/INT16 test accuracies are `57.29%` and
+`60.16%`; INT8 prediction agreement remains at least `95.31%`, while INT16 is
+`100%` for all three seeds.
 
 The thresholds leave several samples of accuracy headroom while rejecting
 stale calibration, a broken QAT backward path, and an INT16 path that does not
