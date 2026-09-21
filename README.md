@@ -94,9 +94,10 @@ tests/real_network/run_speech_commands_lstm_test.sh \
 ```
 
 该测试保持 MFCC、样本、初始化、batch 顺序和优化器一致，只把
-`torch.nn.LSTM` 替换为 8-bit `QuantLSTM` QAT，并输出完整训练曲线、validation/test
-准确率、参数更新范数和 native QAT checkpoint 证据。测试设计、阈值与官方来源见
-`tests/real_network/README.md` 和 `docs/research/speech-commands-lstm-baseline.md`。
+`torch.nn.LSTM` 分别替换为 8-bit 和 16-bit `QuantLSTM` QAT，并输出完整训练曲线、
+validation/test 准确率、参数更新范数和 native QAT checkpoint 证据。测试设计、阈值与
+官方来源见 `tests/real_network/README.md` 和
+`docs/research/speech-commands-lstm-baseline.md`。
 
 典型流程是先以 `calibrating=True` 在 CUDA 上运行一个或多个校准 batch，随后调用
 `finalize_calibration()`，再设置 `use_quantization=True`。完全浮点、量化和 QAT

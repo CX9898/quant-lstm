@@ -145,7 +145,8 @@ MFCC[batch, 49, 20]
 | 分支 | recurrent layer | 用途 |
 |---|---|---|
 | baseline | `torch.nn.LSTM` | 原始 PyTorch 训练基线 |
-| replacement | `QuantLSTM(use_quantization=True)` | 用户要求的 QAT 替换效果 |
+| replacement-8 | `QuantLSTM(use_quantization=True)`, 8-bit | 8-bit QAT 替换效果 |
+| replacement-16 | `QuantLSTM(use_quantization=True)`, 16-bit | 16-bit QAT 替换效果及 FP32 integer-carrier 风险 |
 | native-float diagnostic | `QuantLSTM(use_quantization=False)` | 区分 native CUDA 算子差异与量化/STE 差异 |
 
 公平性约束：

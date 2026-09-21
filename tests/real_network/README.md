@@ -19,13 +19,13 @@ current `QuantLSTM` replacement exposes Google's projected peephole cell.
 
 ## Comparison contract
 
-The two branches share selected examples, precomputed MFCC tensors, initial
+The three branches share selected examples, precomputed MFCC tensors, initial
 parameters, batch order, optimizer, learning rate, epochs, loss, and gradient
 clipping. Only the recurrent module changes:
 
 - baseline: `torch.nn.LSTM` on CUDA;
-- replacement: 8-bit `QuantLSTM` QAT on CUDA, calibrated only with training
-  examples.
+- replacements: 8-bit and 16-bit `QuantLSTM` QAT on CUDA, each calibrated only
+  with the same training examples.
 
 The deterministic subset contains `yes`, `no`, `up`, and `down`, with 128
 training, 32 validation, and 32 testing examples per label. Selection happens
@@ -57,22 +57,33 @@ the external dataset is large. The complete JSON report is written to
 
 ## Acceptance thresholds
 
-The test requires both branches to reduce training loss and update parameters,
-requires the replacement to expose native QAT checkpoints, and checks:
+The test requires all three branches to reduce training loss and update
+parameters, requires both replacements to expose native QAT checkpoints, and
+checks:
 
 - baseline best validation accuracy >= 40%;
-- QAT best validation accuracy >= 35%;
-- QAT no more than 20 percentage points below baseline.
+- each QAT best validation accuracy >= 35%;
+- each QAT result no more than 20 percentage points below baseline;
+- neither calibration safety report contains a non-finite unsafe entry.
 
 These conservative thresholds were frozen after three identical runs on
 2026-09-21 with an NVIDIA RTX 6000D, PyTorch 2.13.0+cu130, and seed 20260921:
 
-| Metric | `torch.nn.LSTM` | 8-bit `QuantLSTM` QAT |
-|---|---:|---:|
-| Initial train loss | 1.38985 | 1.38986 |
-| Final train loss | 0.90363 | 0.98312 |
-| Best validation accuracy | 59.38% | 51.56% |
-| Final test accuracy | 64.06% | 51.56% |
+| Metric | `torch.nn.LSTM` | 8-bit QAT | 16-bit QAT |
+|---|---:|---:|---:|
+| Initial train loss | 1.38985 | 1.38986 | 1.38984 |
+| Final train loss | 0.90363 | 0.98312 | 0.97134 |
+| Best validation accuracy | 59.38% | 51.56% | 51.56% |
+| Final test accuracy | 64.06% | 51.56% | 50.00% |
+| Parameter update norm | 7.82258 | 8.22504 | 8.23538 |
 
 The thresholds deliberately leave room for library and GPU variation while
 still rejecting chance-level training or a broken QAT backward path.
+
+The 8-bit calibration has 518 `exact_integer_range` entries and no precision
+risk. The 16-bit calibration has 5 exact entries, 513 `precision_risk` entries,
+and no non-finite unsafe entries. This is expected for the FP32 integer carrier:
+16-bit products and accumulations can exceed FP32's exact integer range of
+`2^24`. The warning is retained in the JSON safety report as required by the
+quantized execution specification; it does not select a CPU or floating-point
+LSTM fallback.

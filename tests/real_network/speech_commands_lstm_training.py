@@ -1,4 +1,4 @@
-"""Speech Commands v0.02 training comparison for torch LSTM and QuantLSTM.
+"""Speech Commands v0.02 training comparison for torch LSTM and QuantLSTM QAT.
 
 The model follows the small Google Research kws_streaming LSTM topology:
 MFCC features, one LSTM, dropout, and a dense classifier. Peepholes and
@@ -49,7 +49,7 @@ class ExperimentConfig:
     epochs: int = 10
     learning_rate: float = 3.0e-3
     calibration_batches: int = 4
-    quant_bitwidth: int = 8
+    quant_bitwidths: tuple[int, ...] = (8, 16)
     seed: int = 20260921
     device: str = "cuda"
 
@@ -69,8 +69,12 @@ class ExperimentConfig:
                 raise ValueError(f"{name} must be positive")
         if self.learning_rate <= 0.0:
             raise ValueError("learning_rate must be positive")
-        if self.quant_bitwidth not in (8, 16):
-            raise ValueError("quant_bitwidth must be 8 or 16")
+        if not self.quant_bitwidths:
+            raise ValueError("quant_bitwidths must be non-empty")
+        if len(set(self.quant_bitwidths)) != len(self.quant_bitwidths):
+            raise ValueError("quant_bitwidths must be unique")
+        if any(bitwidth not in (8, 16) for bitwidth in self.quant_bitwidths):
+            raise ValueError("quant_bitwidths may only contain 8 or 16")
 
 
 class SpeechCommandsLstmClassifier(nn.Module):
@@ -348,9 +352,10 @@ def _calibrate_quant_lstm(
     training: tuple[Tensor, Tensor],
     config: ExperimentConfig,
     device: torch.device,
+    bitwidth: int,
 ) -> dict:
     model.eval()
-    model.lstm.set_all_bitwidth(config.quant_bitwidth)
+    model.lstm.set_all_bitwidth(bitwidth)
     model.lstm.calibrating = True
     with torch.no_grad():
         for batch_index, (features, _) in enumerate(
@@ -477,25 +482,32 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
         quantized_lstm=False,
         device=device,
     )
-    quantized = SpeechCommandsLstmClassifier(
-        config.hidden_size,
-        len(config.labels),
-        quantized_lstm=True,
-        device=device,
-    )
-    initial_difference = _copy_shared_initial_state(baseline, quantized)
-    calibration = _calibrate_quant_lstm(
-        quantized, feature_sets["training"], config, device
-    )
+    quantized_variants = {}
+    initial_differences = {}
+    calibrations = {}
+    for bitwidth in config.quant_bitwidths:
+        name = f"quant_lstm_qat_{bitwidth}bit"
+        quantized = SpeechCommandsLstmClassifier(
+            config.hidden_size,
+            len(config.labels),
+            quantized_lstm=True,
+            device=device,
+        )
+        initial_differences[name] = _copy_shared_initial_state(baseline, quantized)
+        calibrations[name] = _calibrate_quant_lstm(
+            quantized, feature_sets["training"], config, device, bitwidth
+        )
+        quantized_variants[name] = quantized
 
     baseline_result = _train(
         "torch_lstm", baseline, feature_sets, config, device
     )
-    quantized_result = _train(
-        "quant_lstm_qat", quantized, feature_sets, config, device
-    )
+    quantized_results = {
+        name: _train(name, model, feature_sets, config, device)
+        for name, model in quantized_variants.items()
+    }
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "validation_scope": "real_network_training",
         "dataset": {
             "name": "speech_commands_v0.02",
@@ -519,13 +531,13 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
             "changed_module": "lstm",
             "baseline": "torch.nn.LSTM",
             "candidate": "quant_lstm.QuantLSTM",
-            "initial_shared_state_max_abs_diff": initial_difference,
+            "initial_shared_state_max_abs_diff": initial_differences,
         },
         "quantization": {
             "mode": "qat",
-            "bitwidth": config.quant_bitwidth,
+            "bitwidths": list(config.quant_bitwidths),
             "calibration_batches": config.calibration_batches,
-            "calibration": calibration,
+            "calibration": calibrations,
         },
         "environment": {
             "torch": torch.__version__,
@@ -540,7 +552,7 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
         },
         "training": {
             "torch_lstm": baseline_result,
-            "quant_lstm_qat": quantized_result,
+            **quantized_results,
         },
     }
 
@@ -565,7 +577,14 @@ def _parse_arguments() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--learning-rate", type=float, default=3.0e-3)
     parser.add_argument("--calibration-batches", type=int, default=4)
-    parser.add_argument("--quant-bitwidth", type=int, choices=(8, 16), default=8)
+    parser.add_argument(
+        "--quant-bitwidth",
+        type=int,
+        choices=(8, 16),
+        action="append",
+        dest="quant_bitwidths",
+        help="QAT bitwidth to test; repeat to test both (default: 8 and 16)",
+    )
     parser.add_argument("--seed", type=int, default=20260921)
     return parser.parse_args()
 
@@ -590,7 +609,7 @@ def main() -> None:
             epochs=arguments.epochs,
             learning_rate=arguments.learning_rate,
             calibration_batches=arguments.calibration_batches,
-            quant_bitwidth=arguments.quant_bitwidth,
+            quant_bitwidths=tuple(arguments.quant_bitwidths or (8, 16)),
             seed=arguments.seed,
         )
     )

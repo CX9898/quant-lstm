@@ -43,7 +43,7 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
                 epochs=10,
                 learning_rate=3.0e-3,
                 calibration_batches=4,
-                quant_bitwidth=8,
+                quant_bitwidths=(8, 16),
                 seed=20260921,
             )
         )
@@ -54,20 +54,36 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
         )
 
         baseline = report["training"]["torch_lstm"]
-        quantized = report["training"]["quant_lstm_qat"]
+        quantized_variants = {
+            bitwidth: report["training"][f"quant_lstm_qat_{bitwidth}bit"]
+            for bitwidth in (8, 16)
+        }
+        self.assertEqual(report["schema_version"], 2)
         self.assertEqual(report["replacement"]["changed_module"], "lstm")
-        self.assertEqual(report["replacement"]["initial_shared_state_max_abs_diff"], 0.0)
-        self.assertLess(baseline["final_train_loss"], baseline["initial_train_loss"])
-        self.assertLess(quantized["final_train_loss"], quantized["initial_train_loss"])
-        self.assertGreater(baseline["parameter_update_norm"], 0.0)
-        self.assertGreater(quantized["parameter_update_norm"], 0.0)
-        self.assertTrue(quantized["native_qat_checkpoint_observed"])
-        self.assertGreaterEqual(baseline["best_validation_accuracy"], 0.40)
-        self.assertGreaterEqual(quantized["best_validation_accuracy"], 0.35)
-        self.assertGreaterEqual(
-            quantized["best_validation_accuracy"],
-            baseline["best_validation_accuracy"] - 0.20,
+        self.assertEqual(report["quantization"]["bitwidths"], [8, 16])
+        self.assertEqual(
+            report["replacement"]["initial_shared_state_max_abs_diff"],
+            {"quant_lstm_qat_8bit": 0.0, "quant_lstm_qat_16bit": 0.0},
         )
+        self.assertLess(baseline["final_train_loss"], baseline["initial_train_loss"])
+        self.assertGreater(baseline["parameter_update_norm"], 0.0)
+        self.assertGreaterEqual(baseline["best_validation_accuracy"], 0.40)
+        for bitwidth, quantized in quantized_variants.items():
+            with self.subTest(bitwidth=bitwidth):
+                safety = report["quantization"]["calibration"][
+                    f"quant_lstm_qat_{bitwidth}bit"
+                ]["safety"]
+                self.assertEqual(safety["unsafe_non_finite_count"], 0)
+                self.assertLess(
+                    quantized["final_train_loss"], quantized["initial_train_loss"]
+                )
+                self.assertGreater(quantized["parameter_update_norm"], 0.0)
+                self.assertTrue(quantized["native_qat_checkpoint_observed"])
+                self.assertGreaterEqual(quantized["best_validation_accuracy"], 0.35)
+                self.assertGreaterEqual(
+                    quantized["best_validation_accuracy"],
+                    baseline["best_validation_accuracy"] - 0.20,
+                )
 
 
 if __name__ == "__main__":
