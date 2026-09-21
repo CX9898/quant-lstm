@@ -37,15 +37,55 @@ CLIP_SAMPLES = SAMPLE_RATE
 MEL_BINS = 40
 MFCC_BINS = 20
 QAT_CALIBRATION_METHODS = {8: "sqnr", 16: "minmax"}
+FULL_SPEECH_COMMAND_LABELS = (
+    "backward",
+    "bed",
+    "bird",
+    "cat",
+    "dog",
+    "down",
+    "eight",
+    "five",
+    "follow",
+    "forward",
+    "four",
+    "go",
+    "happy",
+    "house",
+    "learn",
+    "left",
+    "marvin",
+    "nine",
+    "no",
+    "off",
+    "on",
+    "one",
+    "right",
+    "seven",
+    "sheila",
+    "six",
+    "stop",
+    "three",
+    "tree",
+    "two",
+    "up",
+    "visual",
+    "wow",
+    "yes",
+    "zero",
+)
 
 
 @dataclass(frozen=True)
 class ExperimentConfig:
     dataset_root: Path
     labels: tuple[str, ...] = ("yes", "no", "up", "down")
-    train_samples_per_label: int = 128
-    validation_samples_per_label: int = 32
-    test_samples_per_label: int = 32
+    train_samples_per_label: int | None = 128
+    validation_samples_per_label: int | None = 32
+    test_samples_per_label: int | None = 32
+    dataset_profile: str = "subset"
+    feature_chunk_size: int = 512
+    feature_cache: Path | None = None
     hidden_size: int = 64
     batch_size: int = 32
     epochs: int = 10
@@ -56,19 +96,37 @@ class ExperimentConfig:
     seed: int = 20260921
     quality_gate_seeds: tuple[int, ...] = ()
     device: str = "cuda"
+    extended_diagnostics: bool = True
 
     def validate(self) -> None:
         if not self.labels or len(set(self.labels)) != len(self.labels):
             raise ValueError("labels must be non-empty and unique")
+        if self.dataset_profile not in ("subset", "full"):
+            raise ValueError("dataset_profile must be subset or full")
         for name in (
             "train_samples_per_label",
             "validation_samples_per_label",
             "test_samples_per_label",
+        ):
+            value = getattr(self, name)
+            if value is not None and value <= 0:
+                raise ValueError(f"{name} must be positive or None")
+        if self.dataset_profile == "full" and any(
+            getattr(self, name) is not None
+            for name in (
+                "train_samples_per_label",
+                "validation_samples_per_label",
+                "test_samples_per_label",
+            )
+        ):
+            raise ValueError("full dataset_profile requires all sample limits to be None")
+        for name in (
             "hidden_size",
             "batch_size",
             "epochs",
             "calibration_batches",
             "calibration_refresh_epochs",
+            "feature_chunk_size",
         ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")
@@ -84,6 +142,20 @@ class ExperimentConfig:
             raise ValueError("quality_gate_seeds must be unique")
         if self.quality_gate_seeds and self.seed not in self.quality_gate_seeds:
             raise ValueError("quality_gate_seeds must include the primary seed")
+
+
+@dataclass(frozen=True)
+class SpeechCommandsSample:
+    path: Path
+    label: int
+    source_label: str
+
+
+@dataclass(frozen=True)
+class SpeechCommandsDatasetManifest:
+    labels: tuple[str, ...]
+    samples: dict[str, tuple[SpeechCommandsSample, ...]]
+    audit: dict[str, object]
 
 
 class SpeechCommandsLstmClassifier(nn.Module):
@@ -180,48 +252,125 @@ def _listed_paths(dataset_root: Path, filename: str) -> set[str]:
     }
 
 
+def build_dataset_manifest(config: ExperimentConfig) -> SpeechCommandsDatasetManifest:
+    """Resolve configured labels against the official, disjoint dataset splits."""
+    config.validate()
+    dataset_root = Path(config.dataset_root)
+    validation = _listed_paths(dataset_root, "validation_list.txt")
+    testing = _listed_paths(dataset_root, "testing_list.txt")
+    official_overlap = validation & testing
+    if official_overlap:
+        raise RuntimeError("validation_list.txt and testing_list.txt overlap")
+
+    discovered_labels = tuple(
+        sorted(
+            path.name
+            for path in dataset_root.iterdir()
+            if path.is_dir() and not path.name.startswith("_")
+        )
+    )
+    missing_labels = sorted(set(config.labels) - set(discovered_labels))
+    if missing_labels:
+        raise RuntimeError(f"dataset label directories not found: {missing_labels}")
+    if config.dataset_profile == "full" and set(config.labels) != set(discovered_labels):
+        raise RuntimeError(
+            "full dataset_profile labels must exactly match all word directories"
+        )
+
+    limits = {
+        "training": config.train_samples_per_label,
+        "validation": config.validation_samples_per_label,
+        "testing": config.test_samples_per_label,
+    }
+    split_offsets = {"training": 0, "validation": 100_000, "testing": 200_000}
+    split_samples: dict[str, list[SpeechCommandsSample]] = {
+        split: [] for split in limits
+    }
+    all_configured_paths: set[str] = set()
+    selected_paths: set[str] = set()
+    per_label_counts = {
+        split: {label: 0 for label in config.labels} for split in limits
+    }
+
+    for label_index, label in enumerate(config.labels):
+        relative_paths = sorted(
+            f"{label}/{path.name}" for path in (dataset_root / label).glob("*.wav")
+        )
+        all_configured_paths.update(relative_paths)
+        candidates_by_split = {
+            "training": [
+                path for path in relative_paths if path not in validation and path not in testing
+            ],
+            "validation": [path for path in relative_paths if path in validation],
+            "testing": [path for path in relative_paths if path in testing],
+        }
+        for split, candidates in candidates_by_split.items():
+            limit = limits[split]
+            if limit is not None:
+                random.Random(
+                    config.seed + split_offsets[split] + 1009 * label_index
+                ).shuffle(candidates)
+                if len(candidates) < limit:
+                    raise RuntimeError(
+                        f"{split} label {label!r} has {len(candidates)} samples, "
+                        f"needs {limit}"
+                    )
+                candidates = candidates[:limit]
+            per_label_counts[split][label] = len(candidates)
+            selected_paths.update(candidates)
+            split_samples[split].extend(
+                SpeechCommandsSample(dataset_root / relative_path, label_index, label)
+                for relative_path in candidates
+            )
+
+    split_path_sets = {
+        split: {sample.path for sample in samples}
+        for split, samples in split_samples.items()
+    }
+    split_overlap_count = sum(
+        len(split_path_sets[left] & split_path_sets[right])
+        for left, right in (
+            ("training", "validation"),
+            ("training", "testing"),
+            ("validation", "testing"),
+        )
+    )
+    background_noise = dataset_root / "_background_noise_"
+    background_noise_file_count = (
+        len(tuple(background_noise.glob("*.wav"))) if background_noise.is_dir() else 0
+    )
+    audit = {
+        "dataset_profile": config.dataset_profile,
+        "discovered_word_labels": list(discovered_labels),
+        "selected_labels": list(config.labels),
+        "available_word_sample_count": len(all_configured_paths),
+        "selected_word_sample_count": len(selected_paths),
+        "omitted_word_sample_count": len(all_configured_paths - selected_paths),
+        "split_sample_counts": {
+            split: len(samples) for split, samples in split_samples.items()
+        },
+        "per_label_split_counts": per_label_counts,
+        "split_overlap_count": split_overlap_count,
+        "official_validation_count": len(validation),
+        "official_testing_count": len(testing),
+        "background_noise_file_count": background_noise_file_count,
+    }
+    return SpeechCommandsDatasetManifest(
+        labels=config.labels,
+        samples={split: tuple(samples) for split, samples in split_samples.items()},
+        audit=audit,
+    )
+
+
 def _select_audio_paths(
     config: ExperimentConfig, split: str
 ) -> list[tuple[Path, int]]:
-    validation = _listed_paths(config.dataset_root, "validation_list.txt")
-    testing = _listed_paths(config.dataset_root, "testing_list.txt")
-    if split == "training":
-        count = config.train_samples_per_label
-        excluded = validation | testing
-    elif split == "validation":
-        count = config.validation_samples_per_label
-        excluded = set()
-    elif split == "testing":
-        count = config.test_samples_per_label
-        excluded = set()
-    else:
+    if split not in ("training", "validation", "testing"):
         raise ValueError(f"unsupported split: {split}")
-
-    selected: list[tuple[Path, int]] = []
-    split_offsets = {"training": 0, "validation": 100_000, "testing": 200_000}
-    split_offset = split_offsets[split]
-    for label_index, label in enumerate(config.labels):
-        label_dir = config.dataset_root / label
-        if not label_dir.is_dir():
-            raise RuntimeError(f"dataset label directory not found: {label_dir}")
-        relative_paths = [f"{label}/{path.name}" for path in label_dir.glob("*.wav")]
-        if split == "training":
-            candidates = [path for path in relative_paths if path not in excluded]
-        elif split == "validation":
-            candidates = [path for path in relative_paths if path in validation]
-        else:
-            candidates = [path for path in relative_paths if path in testing]
-        candidates.sort()
-        random.Random(config.seed + split_offset + 1009 * label_index).shuffle(candidates)
-        if len(candidates) < count:
-            raise RuntimeError(
-                f"{split} label {label!r} has {len(candidates)} samples, needs {count}"
-            )
-        selected.extend(
-            (config.dataset_root / relative_path, label_index)
-            for relative_path in candidates[:count]
-        )
-    return selected
+    return [
+        (sample.path, sample.label)
+        for sample in build_dataset_manifest(config).samples[split]
+    ]
 
 
 def _load_waveforms(samples: Sequence[tuple[Path, int]]) -> tuple[Tensor, Tensor]:
@@ -269,18 +418,65 @@ def _mfcc(waveforms: Tensor) -> Tensor:
         return transform(waveforms).transpose(1, 2).contiguous()
 
 
-def _load_feature_sets(
+def _load_feature_split(
+    samples: Sequence[SpeechCommandsSample], chunk_size: int
+) -> tuple[Tensor, Tensor]:
+    feature_chunks = []
+    label_chunks = []
+    for offset in range(0, len(samples), chunk_size):
+        chunk = samples[offset : offset + chunk_size]
+        waveforms, labels = _load_waveforms(
+            [(sample.path, sample.label) for sample in chunk]
+        )
+        feature_chunks.append(_mfcc(waveforms))
+        label_chunks.append(labels)
+    if not feature_chunks:
+        raise RuntimeError("dataset split contains no samples")
+    return torch.cat(feature_chunks), torch.cat(label_chunks)
+
+
+def load_feature_sets(
     config: ExperimentConfig,
-) -> tuple[dict[str, tuple[Tensor, Tensor]], dict[str, str]]:
-    train_samples = _select_audio_paths(config, "training")
-    validation_samples = _select_audio_paths(config, "validation")
-    test_samples = _select_audio_paths(config, "testing")
-    train_waveforms, train_labels = _load_waveforms(train_samples)
-    validation_waveforms, validation_labels = _load_waveforms(validation_samples)
-    test_waveforms, test_labels = _load_waveforms(test_samples)
-    train_features = _mfcc(train_waveforms)
-    validation_features = _mfcc(validation_waveforms)
-    test_features = _mfcc(test_waveforms)
+) -> tuple[
+    dict[str, tuple[Tensor, Tensor]], SpeechCommandsDatasetManifest, dict[str, str]
+]:
+    """Load manifest samples and compute MFCCs without materializing all waveforms."""
+    manifest = build_dataset_manifest(config)
+    example_digests = {}
+    for split, samples in manifest.samples.items():
+        relative_paths = "\n".join(
+            sample.path.relative_to(config.dataset_root).as_posix() for sample in samples
+        )
+        example_digests[split] = hashlib.sha256(relative_paths.encode()).hexdigest()
+    cache_fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "contract": "speech_commands_mfcc_v1",
+                "sample_rate": SAMPLE_RATE,
+                "clip_samples": CLIP_SAMPLES,
+                "mel_bins": MEL_BINS,
+                "mfcc_bins": MFCC_BINS,
+                "example_id_sha256": example_digests,
+            },
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    if config.feature_cache is not None and Path(config.feature_cache).is_file():
+        cached = torch.load(
+            Path(config.feature_cache), map_location="cpu", weights_only=True
+        )
+        if cached.get("fingerprint") == cache_fingerprint:
+            return cached["feature_sets"], manifest, example_digests
+
+    train_features, train_labels = _load_feature_split(
+        manifest.samples["training"], config.feature_chunk_size
+    )
+    validation_features, validation_labels = _load_feature_split(
+        manifest.samples["validation"], config.feature_chunk_size
+    )
+    test_features, test_labels = _load_feature_split(
+        manifest.samples["testing"], config.feature_chunk_size
+    )
     mean = train_features.mean()
     standard_deviation = train_features.std().clamp_min(1.0e-6)
     feature_sets = {
@@ -291,16 +487,21 @@ def _load_feature_sets(
         ),
         "testing": ((test_features - mean) / standard_deviation, test_labels),
     }
-    example_digests = {}
-    for split, samples in (
-        ("training", train_samples),
-        ("validation", validation_samples),
-        ("testing", test_samples),
-    ):
-        relative_paths = "\n".join(
-            str(path.relative_to(config.dataset_root)) for path, _ in samples
+    if config.feature_cache is not None:
+        cache_path = Path(config.feature_cache)
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = cache_path.with_suffix(cache_path.suffix + ".tmp")
+        torch.save(
+            {"fingerprint": cache_fingerprint, "feature_sets": feature_sets}, temporary
         )
-        example_digests[split] = hashlib.sha256(relative_paths.encode()).hexdigest()
+        temporary.replace(cache_path)
+    return feature_sets, manifest, example_digests
+
+
+def _load_feature_sets(
+    config: ExperimentConfig,
+) -> tuple[dict[str, tuple[Tensor, Tensor]], dict[str, str]]:
+    feature_sets, _, example_digests = load_feature_sets(config)
     return feature_sets, example_digests
 
 
@@ -357,28 +558,88 @@ def _balanced_calibration_indices(labels: Tensor, sample_count: int) -> Tensor:
     return torch.stack(selected)
 
 
+def classification_metrics(confusion: Tensor, labels: Sequence[str]) -> dict[str, object]:
+    """Compute complete multiclass metrics from a row=true, column=predicted matrix."""
+    confusion = confusion.detach().to(dtype=torch.int64, device="cpu")
+    if confusion.shape != (len(labels), len(labels)):
+        raise ValueError("confusion matrix shape does not match labels")
+    sample_count = int(confusion.sum().item())
+    if sample_count == 0:
+        raise ValueError("confusion matrix must contain at least one sample")
+    per_class = {}
+    precisions = []
+    recalls = []
+    f1_scores = []
+    for index, label in enumerate(labels):
+        true_positive = int(confusion[index, index].item())
+        support = int(confusion[index].sum().item())
+        predicted = int(confusion[:, index].sum().item())
+        precision = true_positive / predicted if predicted else 0.0
+        recall = true_positive / support if support else 0.0
+        f1 = (
+            2.0 * precision * recall / (precision + recall)
+            if precision + recall
+            else 0.0
+        )
+        per_class[label] = {
+            "support": support,
+            "correct": true_positive,
+            "accuracy": recall,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+        }
+        precisions.append(precision)
+        recalls.append(recall)
+        f1_scores.append(f1)
+    correct_count = int(confusion.diagonal().sum().item())
+    return {
+        "sample_count": sample_count,
+        "correct_count": correct_count,
+        "accuracy": correct_count / sample_count,
+        "macro_precision": sum(precisions) / len(precisions),
+        "macro_recall": sum(recalls) / len(recalls),
+        "macro_f1": sum(f1_scores) / len(f1_scores),
+        "per_class": per_class,
+        "confusion_matrix": confusion.tolist(),
+    }
+
+
 def _evaluate(
     model: nn.Module,
     data: tuple[Tensor, Tensor],
     batch_size: int,
     device: torch.device,
-) -> dict[str, float]:
+    label_names: Sequence[str] | None = None,
+) -> dict[str, object]:
     model.eval()
     total_loss = 0.0
-    total_correct = 0
     total_samples = 0
+    confusion = None
     with torch.no_grad():
         for features, labels in _batches(*data, batch_size):
             features = features.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
             logits = model(features)
             total_loss += F.cross_entropy(logits, labels, reduction="sum").item()
-            total_correct += (logits.argmax(dim=1) == labels).sum().item()
+            predictions = logits.argmax(dim=1)
+            if confusion is None:
+                confusion = torch.zeros(
+                    (logits.size(1), logits.size(1)), dtype=torch.int64
+                )
+            confusion += torch.bincount(
+                (labels * logits.size(1) + predictions).detach().cpu(),
+                minlength=logits.size(1) * logits.size(1),
+            ).reshape(logits.size(1), logits.size(1))
             total_samples += labels.numel()
-    return {
-        "loss": total_loss / total_samples,
-        "accuracy": total_correct / total_samples,
-    }
+    names = (
+        tuple(label_names)
+        if label_names is not None
+        else tuple(str(index) for index in range(confusion.size(0)))
+    )
+    result = classification_metrics(confusion, names)
+    result["loss"] = total_loss / total_samples
+    return result
 
 
 def _calibrate_quant_lstm(
@@ -884,10 +1145,10 @@ def _train(
         for name, parameter in model.named_parameters()
     }
     initial_training = _evaluate(
-        model, feature_sets["training"], config.batch_size, device
+        model, feature_sets["training"], config.batch_size, device, config.labels
     )
     initial_validation = _evaluate(
-        model, feature_sets["validation"], config.batch_size, device
+        model, feature_sets["validation"], config.batch_size, device, config.labels
     )
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
     history = []
@@ -974,7 +1235,7 @@ def _train(
                 _calibration_summary(refreshed, epoch + 1)
             )
         validation = _evaluate(
-            model, feature_sets["validation"], config.batch_size, device
+            model, feature_sets["validation"], config.batch_size, device, config.labels
         )
         epoch_result = {
             "epoch": epoch + 1,
@@ -1021,7 +1282,7 @@ def _train(
         )
     torch.cuda.synchronize(device)
     final_testing = _evaluate(
-        model, feature_sets["testing"], config.batch_size, device
+        model, feature_sets["testing"], config.batch_size, device, config.labels
     )
     quantization_error = (
         _quantization_error(
@@ -1054,6 +1315,7 @@ def _train(
         ),
         "final_test_loss": final_testing["loss"],
         "final_test_accuracy": final_testing["accuracy"],
+        "final_test_classification": final_testing,
         "parameter_update_norm": update_squared_norm**0.5,
         "native_qat_checkpoint_observed": native_qat_checkpoint_observed,
         "calibration_refreshes": calibration_refreshes,
@@ -1207,7 +1469,7 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
     torch.manual_seed(config.seed)
     torch.cuda.manual_seed_all(config.seed)
 
-    feature_sets, example_digests = _load_feature_sets(config)
+    feature_sets, manifest, example_digests = load_feature_sets(config)
     baseline = SpeechCommandsLstmClassifier(
         config.hidden_size,
         len(config.labels),
@@ -1264,6 +1526,7 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
             config,
             device,
             qat_bitwidth=int(name.removesuffix("bit").rsplit("_", 1)[1]),
+            extended_diagnostics=config.extended_diagnostics,
         )
         for name, model in quantized_variants.items()
     }
@@ -1272,12 +1535,16 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
         if "quant_lstm_qat_8bit" in quantized_variants
         else next(iter(quantized_variants))
     )
-    calibration_strategy_matrix = _calibration_strategy_matrix(
-        quantized_variants[matrix_source],
-        matrix_source,
-        feature_sets,
-        config,
-        device,
+    calibration_strategy_matrix = (
+        _calibration_strategy_matrix(
+            quantized_variants[matrix_source],
+            matrix_source,
+            feature_sets,
+            config,
+            device,
+        )
+        if config.extended_diagnostics
+        else {"enabled": False, "reason": "disabled for full-dataset training"}
     )
     primary_results = {
         "torch_lstm": baseline_result,
@@ -1292,6 +1559,7 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
         "dataset": {
             "name": "speech_commands_v0.02",
             "root": str(config.dataset_root),
+            "profile": config.dataset_profile,
             "split_source": "validation_list.txt and testing_list.txt",
             "labels": list(config.labels),
             "training_samples": feature_sets["training"][0].size(0),
@@ -1299,6 +1567,7 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
             "test_samples": feature_sets["testing"][0].size(0),
             "feature_shape": list(feature_sets["training"][0].shape[1:]),
             "example_id_sha256": example_digests,
+            "audit": manifest.audit,
         },
         "model": {
             "source": "google-research/kws_streaming/models/lstm.py",
@@ -1339,6 +1608,9 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
         "config": {
             **asdict(config),
             "dataset_root": str(config.dataset_root),
+            "feature_cache": (
+                None if config.feature_cache is None else str(config.feature_cache)
+            ),
             "labels": list(config.labels),
         },
         "training": {
@@ -1362,6 +1634,11 @@ def _parse_arguments() -> argparse.Namespace:
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--report", type=Path)
     parser.add_argument("--labels", default="yes,no,up,down")
+    parser.add_argument(
+        "--full-dataset",
+        action="store_true",
+        help="train all 35 word classes using every official split sample",
+    )
     parser.add_argument("--train-samples-per-label", type=int, default=128)
     parser.add_argument("--validation-samples-per-label", type=int, default=32)
     parser.add_argument("--test-samples-per-label", type=int, default=32)
@@ -1390,6 +1667,9 @@ def _parse_arguments() -> argparse.Namespace:
         help="QAT bitwidth to test; repeat to test both (default: 8 and 16)",
     )
     parser.add_argument("--seed", type=int, default=20260921)
+    parser.add_argument("--feature-chunk-size", type=int, default=512)
+    parser.add_argument("--feature-cache", type=Path)
+    parser.add_argument("--no-extended-diagnostics", action="store_true")
     return parser.parse_args()
 
 
@@ -1401,13 +1681,29 @@ def main() -> None:
     if arguments.prepare_only:
         print(dataset_root)
         return
+    labels = (
+        FULL_SPEECH_COMMAND_LABELS
+        if arguments.full_dataset
+        else tuple(label.strip() for label in arguments.labels.split(","))
+    )
     report = run_training_comparison(
         ExperimentConfig(
             dataset_root=dataset_root,
-            labels=tuple(label.strip() for label in arguments.labels.split(",")),
-            train_samples_per_label=arguments.train_samples_per_label,
-            validation_samples_per_label=arguments.validation_samples_per_label,
-            test_samples_per_label=arguments.test_samples_per_label,
+            labels=labels,
+            train_samples_per_label=(
+                None if arguments.full_dataset else arguments.train_samples_per_label
+            ),
+            validation_samples_per_label=(
+                None
+                if arguments.full_dataset
+                else arguments.validation_samples_per_label
+            ),
+            test_samples_per_label=(
+                None if arguments.full_dataset else arguments.test_samples_per_label
+            ),
+            dataset_profile="full" if arguments.full_dataset else "subset",
+            feature_chunk_size=arguments.feature_chunk_size,
+            feature_cache=arguments.feature_cache,
             hidden_size=arguments.hidden_size,
             batch_size=arguments.batch_size,
             epochs=arguments.epochs,
@@ -1417,6 +1713,7 @@ def main() -> None:
             quant_bitwidths=tuple(arguments.quant_bitwidths or (8, 16)),
             seed=arguments.seed,
             quality_gate_seeds=tuple(arguments.quality_gate_seeds or ()),
+            extended_diagnostics=not arguments.no_extended_diagnostics,
         )
     )
     encoded = json.dumps(report, indent=2, sort_keys=True) + "\n"
