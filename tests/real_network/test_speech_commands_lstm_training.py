@@ -9,11 +9,51 @@ from pathlib import Path
 
 import torch
 
-from speech_commands_lstm_training import ExperimentConfig, run_training_comparison
+from speech_commands_lstm_training import (
+    ExperimentConfig,
+    _tensor_error_metrics,
+    run_training_comparison,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
 REPORT_PATH = ROOT / "tests/results/speech_commands_lstm_training.json"
+QUANT_OPERATORS = {
+    "input",
+    "output",
+    "cell_state",
+    "weight_ih",
+    "weight_hh",
+    "bias_ih",
+    "bias_hh",
+    "weight_ih_linear",
+    "weight_hh_linear",
+    "input_gate_input",
+    "forget_gate_input",
+    "cell_gate_input",
+    "output_gate_input",
+    "input_gate_output",
+    "forget_gate_output",
+    "cell_gate_output",
+    "output_gate_output",
+    "cell_tanh_output",
+}
+
+
+class SpeechCommandsDiagnosticsTest(unittest.TestCase):
+    def test_tensor_error_metrics_report_tail_and_normalized_errors(self) -> None:
+        reference = torch.tensor([[1.0, -1.0], [2.0, -2.0]])
+        actual = torch.tensor([[1.5, -1.5], [1.0, -1.0]])
+
+        result = _tensor_error_metrics(actual, reference)
+
+        self.assertAlmostEqual(result["mae"], 0.75)
+        self.assertAlmostEqual(result["mse"], 0.625)
+        self.assertAlmostEqual(result["rmse"], 0.625**0.5)
+        self.assertAlmostEqual(result["normalized_mae"], 0.5)
+        self.assertAlmostEqual(result["normalized_rmse"], (0.625 / 2.5) ** 0.5)
+        self.assertAlmostEqual(result["p99_absolute_error"], 1.0)
+        self.assertAlmostEqual(result["max_absolute_error"], 1.0)
 
 
 class SpeechCommandsLstmTrainingTest(unittest.TestCase):
@@ -60,7 +100,7 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
             bitwidth: report["training"][f"quant_lstm_qat_{bitwidth}bit"]
             for bitwidth in (8, 16)
         }
-        self.assertEqual(report["schema_version"], 5)
+        self.assertEqual(report["schema_version"], 6)
         self.assertEqual(report["replacement"]["changed_module"], "lstm")
         self.assertEqual(report["quantization"]["bitwidths"], [8, 16])
         self.assertEqual(
@@ -183,6 +223,37 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
 
         quantized_8 = quantized_variants[8]
         quantized_16 = quantized_variants[16]
+        trace = quantized_8["final_quantization_error"]["time_step_trace"]
+        self.assertEqual(len(trace["steps"]), 49)
+        self.assertEqual(trace["steps"][0]["time_step"], 0)
+        self.assertEqual(trace["steps"][-1]["time_step"], 48)
+        self.assertEqual(trace["tail"]["start_time_step"], 36)
+        self.assertIn(
+            trace["peak_mae_time_step"], range(len(trace["steps"]))
+        )
+        self.assertEqual(
+            quantized_8["final_quantization_error"]["sample_count"], 128
+        )
+        self.assertGreaterEqual(
+            quantized_8["final_quantization_error"]["prediction_agreement"],
+            0.90,
+        )
+        ablation = quantized_8["operator_bitwidth_ablation"]
+        self.assertEqual(set(ablation["operators"]), QUANT_OPERATORS)
+        self.assertEqual(
+            set(ablation["ranked_by_mae_improvement"]), QUANT_OPERATORS
+        )
+        self.assertEqual(ablation["base_bitwidth"], 8)
+        self.assertEqual(ablation["promoted_bitwidth"], 16)
+        self.assertTrue(
+            all(
+                result["calibration_unsafe_non_finite_count"] == 0
+                for result in ablation["operators"].values()
+            )
+        )
+        self.assertLess(
+            ablation["all_promoted"]["mae"], ablation["baseline"]["mae"]
+        )
         self.assertGreaterEqual(
             quantized_16["best_validation_accuracy"],
             quantized_8["best_validation_accuracy"] + 0.05,

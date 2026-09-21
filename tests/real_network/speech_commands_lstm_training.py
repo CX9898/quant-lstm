@@ -15,6 +15,7 @@ import sys
 import tarfile
 import time
 import urllib.request
+import warnings
 import wave
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -382,12 +383,17 @@ def _calibrate_quant_lstm(
     bitwidth: int,
     *,
     refresh: bool = False,
+    operator_bitwidths: dict[str, int] | None = None,
 ) -> dict:
     model.eval()
     if refresh:
         model.lstm.reset_calibration()
     else:
         model.lstm.set_all_bitwidth(bitwidth)
+        for operator, operator_bitwidth in (operator_bitwidths or {}).items():
+            model.lstm.adjust_quant_config(
+                operator, bitwidth=operator_bitwidth
+            )
     calibration_indices = _balanced_calibration_indices(
         training[1], config.calibration_batches * config.batch_size
     )
@@ -480,36 +486,163 @@ def _bias_range_diagnostics(lstm: nn.Module) -> dict[str, dict]:
     return diagnostics
 
 
+def _tensor_error_metrics(actual: Tensor, reference: Tensor) -> dict[str, float]:
+    actual = actual.detach().double().reshape(-1)
+    reference = reference.detach().double().reshape(-1)
+    difference = actual - reference
+    absolute = difference.abs()
+    mse = difference.square().mean()
+    rmse = mse.sqrt()
+    reference_mae = reference.abs().mean().clamp_min(1.0e-12)
+    reference_rms = reference.square().mean().sqrt().clamp_min(1.0e-12)
+    denominator = torch.linalg.vector_norm(
+        actual
+    ) * torch.linalg.vector_norm(reference)
+    cosine = 1.0 if denominator.item() <= 1.0e-12 else (
+        torch.dot(actual, reference) / denominator
+    ).item()
+    return {
+        "mae": absolute.mean().item(),
+        "mse": mse.item(),
+        "rmse": rmse.item(),
+        "normalized_mae": (absolute.mean() / reference_mae).item(),
+        "normalized_rmse": (rmse / reference_rms).item(),
+        "cosine": cosine,
+        "p99_absolute_error": torch.quantile(absolute, 0.99).item(),
+        "max_absolute_error": absolute.max().item(),
+    }
+
+
 def _quantization_error(
     model: SpeechCommandsLstmClassifier,
     data: tuple[Tensor, Tensor],
     batch_size: int,
     device: torch.device,
-) -> dict[str, float]:
+    *,
+    include_time_step_trace: bool = True,
+) -> dict:
     model.eval()
     quantized_logits = []
     float_logits = []
+    quantized_sequences = []
+    float_sequences = []
     with torch.no_grad():
         for features, _ in _batches(*data, batch_size):
             features = features.to(device, non_blocking=True)
             model.lstm.use_quantization = True
-            quantized_logits.append(model(features))
+            quantized_sequence, (quantized_hidden, _) = model.lstm(features)
+            quantized_logits.append(
+                model.classifier(model.dropout(quantized_hidden[-1]))
+            )
             model.lstm.use_quantization = False
-            float_logits.append(model(features))
+            float_sequence, (float_hidden, _) = model.lstm(features)
+            float_logits.append(model.classifier(model.dropout(float_hidden[-1])))
+            if include_time_step_trace:
+                quantized_sequences.append(quantized_sequence)
+                float_sequences.append(float_sequence)
     model.lstm.use_quantization = True
-    quantized = torch.cat(quantized_logits).double()
-    reference = torch.cat(float_logits).double()
-    difference = quantized - reference
-    denominator = torch.linalg.vector_norm(
-        quantized
-    ) * torch.linalg.vector_norm(reference)
-    cosine = 1.0 if denominator.item() <= 1.0e-12 else (
-        torch.dot(quantized.flatten(), reference.flatten()) / denominator
-    ).item()
+    quantized = torch.cat(quantized_logits)
+    reference = torch.cat(float_logits)
+    result = {
+        **_tensor_error_metrics(quantized, reference),
+        "sample_count": quantized.size(0),
+        "prediction_agreement": (
+            quantized.argmax(dim=1) == reference.argmax(dim=1)
+        )
+        .double()
+        .mean()
+        .item(),
+        "prediction_mismatch_count": int(
+            (quantized.argmax(dim=1) != reference.argmax(dim=1)).sum().item()
+        ),
+    }
+    if include_time_step_trace:
+        quantized_sequence = torch.cat(quantized_sequences)
+        float_sequence = torch.cat(float_sequences)
+        steps = [
+            {
+                "time_step": time_step,
+                **_tensor_error_metrics(
+                    quantized_sequence[:, time_step],
+                    float_sequence[:, time_step],
+                ),
+            }
+            for time_step in range(quantized_sequence.size(1))
+        ]
+        tail_start = (3 * quantized_sequence.size(1)) // 4
+        result["time_step_trace"] = {
+            "steps": steps,
+            "peak_mae_time_step": max(
+                range(len(steps)), key=lambda index: steps[index]["mae"]
+            ),
+            "tail": {
+                "start_time_step": tail_start,
+                **_tensor_error_metrics(
+                    quantized_sequence[:, tail_start:],
+                    float_sequence[:, tail_start:],
+                ),
+            },
+        }
+    return result
+
+
+def _operator_bitwidth_ablation(
+    model: SpeechCommandsLstmClassifier,
+    feature_sets: dict[str, tuple[Tensor, Tensor]],
+    config: ExperimentConfig,
+    device: torch.device,
+    baseline: dict,
+) -> dict:
+    diagnostic_model = SpeechCommandsLstmClassifier(
+        config.hidden_size,
+        len(config.labels),
+        use_quant_lstm=True,
+        device=device,
+    )
+    _copy_shared_initial_state(model, diagnostic_model)
+    operators = tuple(diagnostic_model.lstm.get_quant_config()["operators"])
+
+    def evaluate(
+        bitwidth: int, operator_bitwidths: dict[str, int] | None = None
+    ) -> dict:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            calibration = _calibrate_quant_lstm(
+                diagnostic_model,
+                feature_sets["training"],
+                config,
+                device,
+                bitwidth,
+                operator_bitwidths=operator_bitwidths,
+            )
+        error = _quantization_error(
+            diagnostic_model,
+            feature_sets["testing"],
+            config.batch_size,
+            device,
+            include_time_step_trace=False,
+        )
+        error["mae_delta"] = error["mae"] - baseline["mae"]
+        error["calibration_unsafe_non_finite_count"] = calibration["safety"][
+            "unsafe_non_finite_count"
+        ]
+        return error
+
+    promoted = {
+        operator: evaluate(8, {operator: 16}) for operator in operators
+    }
+    baseline_metrics = {
+        key: value for key, value in baseline.items() if key != "time_step_trace"
+    }
     return {
-        "mae": difference.abs().mean().item(),
-        "mse": difference.square().mean().item(),
-        "cosine": cosine,
+        "base_bitwidth": 8,
+        "promoted_bitwidth": 16,
+        "baseline": baseline_metrics,
+        "operators": promoted,
+        "all_promoted": evaluate(16),
+        "ranked_by_mae_improvement": sorted(
+            operators, key=lambda name: promoted[name]["mae_delta"]
+        ),
     }
 
 
@@ -674,6 +807,17 @@ def _train(
         if qat_bitwidth is not None
         else None
     )
+    operator_bitwidth_ablation = (
+        _operator_bitwidth_ablation(
+            model,
+            feature_sets,
+            config,
+            device,
+            quantization_error,
+        )
+        if qat_bitwidth == 8
+        else None
+    )
     update_squared_norm = sum(
         (parameter.detach() - initial_parameters[name]).square().sum().item()
         for name, parameter in model.named_parameters()
@@ -691,6 +835,7 @@ def _train(
         "native_qat_checkpoint_observed": native_qat_checkpoint_observed,
         "calibration_refreshes": calibration_refreshes,
         "final_quantization_error": quantization_error,
+        "operator_bitwidth_ablation": operator_bitwidth_ablation,
         "duration_seconds": time.perf_counter() - started,
         "epochs": history,
     }
@@ -762,7 +907,7 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
         for name, model in quantized_variants.items()
     }
     return {
-        "schema_version": 5,
+        "schema_version": 6,
         "validation_scope": "real_network_training",
         "dataset": {
             "name": "speech_commands_v0.02",

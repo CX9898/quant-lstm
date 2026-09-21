@@ -81,6 +81,11 @@ checks:
 - each QAT epoch reports bias Clamp rates before and after optimizer updates,
   plus per-channel parameter values, representable ranges, quantization steps,
   and Clamp decisions before and after calibration refresh;
+- final quantization error includes all 49 recurrent time steps, tail-quarter
+  metrics, P99/max error, normalized errors, and prediction agreement;
+- the trained INT8 model is evaluated with each of the 18 quantization points
+  promoted to INT16 in isolation, using fresh balanced calibration and the same
+  fixed model weights, then ranked by logit MAE improvement;
 - every initial and refreshed calibration uses 32 samples from each label;
 - neither calibration safety report contains a non-finite unsafe entry.
 
@@ -96,6 +101,14 @@ runs on 2026-09-21 with an NVIDIA RTX 6000D, PyTorch 2.13.0+cu130, and seed
 | Final test accuracy | 64.06% | 67.97% | 55.47% | 64.84% |
 | Parameter update norm | 7.82258 | 7.93028 | 7.85768 | 8.38498 |
 | Logit MAE vs own native-float path | N/A | N/A | 0.012899 | 0.000338 |
+
+The fixed-weight INT8-to-INT16 ablation identifies `cell_state`, `input`, and
+`weight_ih_linear` as the three largest individual logit-MAE contributors.
+Promoting all points reduces MAE to `0.000043`. The recurrent sequence MAE
+peaks at time step 16 rather than at the tail; the first, last, and final-quarter
+MAEs are `0.009251`, `0.009131`, and `0.009800`, respectively. These diagnostics
+separate the high bias Clamp rate observed during training from the dominant
+forward quantization-error sources.
 
 The thresholds leave several samples of accuracy headroom while rejecting
 stale calibration, a broken QAT backward path, and an INT16 path that does not
