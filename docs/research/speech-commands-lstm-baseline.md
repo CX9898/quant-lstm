@@ -155,8 +155,9 @@ MFCC[batch, 49, 20]
    replacement，不能分别随机初始化。
 2. 四个分支使用完全相同的 example IDs、预计算 feature、batch 顺序、loss、optimizer、
    learning rate、epoch 数和 gradient clipping。
-3. QAT 分支在训练前用固定的 training calibration subset 完成 calibration/finalize；
-   validation/testing 数据绝不能参与 calibration。
+3. QAT 分支使用固定、类别均衡的 training calibration subset 完成初始
+   calibration/finalize；每个训练 epoch 后用同一 subset 刷新 MinMax，再执行 validation
+   并作为下一 epoch 的冻结参数。validation/testing 数据绝不能参与 calibration。
 4. 不允许 PyTorch runtime 的 CPU LSTM 或 CPU reference fallback。CPU 只负责文件读取和
    feature preprocessing；模型 tensor 进入 recurrent layer 前必须已经是 CUDA FP32。
 5. 分支逐个训练，训练结束后清理 CUDA cache；不要并行训练导致显存或调度差异。
@@ -194,6 +195,7 @@ MFCC[batch, 49, 20]
 - 先执行官方 split，再执行固定 seed 的 per-class 抽样。
 - 同一模型类只通过构造参数切换 `nn.LSTM` / `QuantLSTM`，其余代码路径相同。
 - 对 baseline 和 replacement 复制相同初始化，并验证 copy 后张量逐值相等。
-- QuantLSTM 训练前只用 training subset 校准；forward/backward tensor 均为 CUDA FP32。
+- QuantLSTM 只用类别均衡的 training subset 做初始和逐 epoch 刷新校准；
+  forward/backward tensor 均为 CUDA FP32。
 - 报告训练曲线、validation/test top-1、相对 baseline 差值、参数更新范数和时间。
 - 失败时保留 report，便于判断是数据、native backward、STE 还是数值精度问题。

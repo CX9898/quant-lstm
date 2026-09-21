@@ -43,6 +43,7 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
                 epochs=10,
                 learning_rate=3.0e-3,
                 calibration_batches=4,
+                calibration_refresh_epochs=1,
                 quant_bitwidths=(8, 16),
                 seed=20260921,
             )
@@ -59,9 +60,17 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
             bitwidth: report["training"][f"quant_lstm_qat_{bitwidth}bit"]
             for bitwidth in (8, 16)
         }
-        self.assertEqual(report["schema_version"], 3)
+        self.assertEqual(report["schema_version"], 4)
         self.assertEqual(report["replacement"]["changed_module"], "lstm")
         self.assertEqual(report["quantization"]["bitwidths"], [8, 16])
+        self.assertEqual(
+            report["quantization"]["calibration_strategy"],
+            {
+                "selection": "balanced_round_robin",
+                "refresh_interval_epochs": 1,
+                "refresh_timing": "after_training_before_validation",
+            },
+        )
         self.assertEqual(
             report["replacement"]["initial_shared_state_max_abs_diff"],
             {
@@ -72,33 +81,97 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
         )
         self.assertLess(baseline["final_train_loss"], baseline["initial_train_loss"])
         self.assertGreater(baseline["parameter_update_norm"], 0.0)
-        self.assertGreaterEqual(baseline["best_validation_accuracy"], 0.40)
+        self.assertGreaterEqual(baseline["best_validation_accuracy"], 0.55)
+        self.assertGreaterEqual(baseline["final_test_accuracy"], 0.60)
         self.assertLess(
             native_float["final_train_loss"], native_float["initial_train_loss"]
         )
         self.assertGreater(native_float["parameter_update_norm"], 0.0)
         self.assertFalse(native_float["native_qat_checkpoint_observed"])
-        self.assertGreaterEqual(native_float["best_validation_accuracy"], 0.40)
+        self.assertGreaterEqual(native_float["best_validation_accuracy"], 0.55)
+        self.assertGreaterEqual(native_float["final_test_accuracy"], 0.60)
         self.assertGreaterEqual(
             native_float["best_validation_accuracy"],
             baseline["best_validation_accuracy"] - 0.05,
         )
+        quality_thresholds = {
+            8: {
+                "validation": 0.50,
+                "testing": 0.50,
+                "maximum_baseline_gap": 0.10,
+            },
+            16: {
+                "validation": 0.60,
+                "testing": 0.60,
+                "maximum_baseline_gap": 0.05,
+            },
+        }
         for bitwidth, quantized in quantized_variants.items():
             with self.subTest(bitwidth=bitwidth):
-                safety = report["quantization"]["calibration"][
+                calibration = report["quantization"]["calibration"][
                     f"quant_lstm_qat_{bitwidth}bit"
-                ]["safety"]
+                ]
+                safety = calibration["safety"]
                 self.assertEqual(safety["unsafe_non_finite_count"], 0)
+                self.assertEqual(calibration["selection"], "balanced_round_robin")
+                self.assertEqual(calibration["sample_count"], 128)
+                self.assertEqual(calibration["label_counts"], [32, 32, 32, 32])
                 self.assertLess(
                     quantized["final_train_loss"], quantized["initial_train_loss"]
                 )
                 self.assertGreater(quantized["parameter_update_norm"], 0.0)
                 self.assertTrue(quantized["native_qat_checkpoint_observed"])
-                self.assertGreaterEqual(quantized["best_validation_accuracy"], 0.35)
                 self.assertGreaterEqual(
                     quantized["best_validation_accuracy"],
-                    baseline["best_validation_accuracy"] - 0.20,
+                    quality_thresholds[bitwidth]["validation"],
                 )
+                self.assertGreaterEqual(
+                    quantized["final_test_accuracy"],
+                    quality_thresholds[bitwidth]["testing"],
+                )
+                self.assertGreaterEqual(
+                    quantized["best_validation_accuracy"],
+                    baseline["best_validation_accuracy"]
+                    - quality_thresholds[bitwidth]["maximum_baseline_gap"],
+                )
+                self.assertGreaterEqual(
+                    quantized["final_test_accuracy"],
+                    baseline["final_test_accuracy"]
+                    - quality_thresholds[bitwidth]["maximum_baseline_gap"],
+                )
+                self.assertEqual(len(quantized["calibration_refreshes"]), 10)
+                self.assertTrue(
+                    all(
+                        refresh["label_counts"] == [32, 32, 32, 32]
+                        for refresh in quantized["calibration_refreshes"]
+                    )
+                )
+                for epoch in quantized["epochs"]:
+                    rates = epoch["qat_clamp_rates"]
+                    self.assertLess(
+                        rates["master_clamp_masks.weight_ih"], 0.10
+                    )
+                    self.assertLess(
+                        rates["master_clamp_masks.weight_hh"], 0.10
+                    )
+
+        quantized_8 = quantized_variants[8]
+        quantized_16 = quantized_variants[16]
+        self.assertGreaterEqual(
+            quantized_16["best_validation_accuracy"],
+            quantized_8["best_validation_accuracy"] + 0.05,
+        )
+        self.assertGreaterEqual(
+            quantized_16["final_test_accuracy"],
+            quantized_8["final_test_accuracy"] + 0.05,
+        )
+        self.assertLess(
+            quantized_16["final_quantization_error"]["mae"],
+            quantized_8["final_quantization_error"]["mae"] * 0.10,
+        )
+        self.assertGreaterEqual(
+            quantized_16["final_quantization_error"]["cosine"], 0.9999
+        )
 
 
 if __name__ == "__main__":

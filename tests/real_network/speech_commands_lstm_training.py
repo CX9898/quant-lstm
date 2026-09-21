@@ -49,6 +49,7 @@ class ExperimentConfig:
     epochs: int = 10
     learning_rate: float = 3.0e-3
     calibration_batches: int = 4
+    calibration_refresh_epochs: int = 1
     quant_bitwidths: tuple[int, ...] = (8, 16)
     seed: int = 20260921
     device: str = "cuda"
@@ -64,6 +65,7 @@ class ExperimentConfig:
             "batch_size",
             "epochs",
             "calibration_batches",
+            "calibration_refresh_epochs",
         ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")
@@ -324,6 +326,30 @@ def _batches(
         yield features[batch_indices], labels[batch_indices]
 
 
+def _balanced_calibration_indices(labels: Tensor, sample_count: int) -> Tensor:
+    if sample_count <= 0 or sample_count > labels.numel():
+        raise ValueError("calibration sample count is out of range")
+    label_values = torch.unique(labels, sorted=True)
+    positions = [
+        torch.nonzero(labels == value, as_tuple=False).flatten()
+        for value in label_values
+    ]
+    selected = []
+    offset = 0
+    while len(selected) < sample_count:
+        added = False
+        for group in positions:
+            if offset < group.numel():
+                selected.append(group[offset])
+                added = True
+                if len(selected) == sample_count:
+                    break
+        if not added:
+            raise ValueError("not enough labeled samples for calibration")
+        offset += 1
+    return torch.stack(selected)
+
+
 def _evaluate(
     model: nn.Module,
     data: tuple[Tensor, Tensor],
@@ -354,21 +380,85 @@ def _calibrate_quant_lstm(
     config: ExperimentConfig,
     device: torch.device,
     bitwidth: int,
+    *,
+    refresh: bool = False,
 ) -> dict:
     model.eval()
-    model.lstm.set_all_bitwidth(bitwidth)
+    if refresh:
+        model.lstm.reset_calibration()
+    else:
+        model.lstm.set_all_bitwidth(bitwidth)
+    calibration_indices = _balanced_calibration_indices(
+        training[1], config.calibration_batches * config.batch_size
+    )
     model.lstm.calibrating = True
     with torch.no_grad():
-        for batch_index, (features, _) in enumerate(
-            _batches(*training, config.batch_size)
+        for features, _ in _batches(
+            *training, config.batch_size, indices=calibration_indices
         ):
-            if batch_index >= config.calibration_batches:
-                break
             model(features.to(device, non_blocking=True))
     model.lstm.calibrating = False
     calibration = model.lstm.finalize_calibration()
     model.lstm.use_quantization = True
+    calibration["selection"] = "balanced_round_robin"
+    calibration["sample_count"] = calibration_indices.numel()
+    calibration["label_counts"] = torch.bincount(
+        training[1][calibration_indices], minlength=len(config.labels)
+    ).tolist()
     return calibration
+
+
+def _calibration_summary(calibration: dict, epoch: int) -> dict:
+    safety = calibration["safety"]
+    return {
+        "epoch": epoch,
+        "batch_count": calibration["batch_count"],
+        "method": calibration["method"],
+        "selection": calibration["selection"],
+        "sample_count": calibration["sample_count"],
+        "label_counts": calibration["label_counts"],
+        "safety": {
+            name: safety[name]
+            for name in (
+                "exact_integer_range_count",
+                "precision_risk_count",
+                "unsafe_non_finite_count",
+            )
+        },
+    }
+
+
+def _quantization_error(
+    model: SpeechCommandsLstmClassifier,
+    data: tuple[Tensor, Tensor],
+    batch_size: int,
+    device: torch.device,
+) -> dict[str, float]:
+    model.eval()
+    quantized_logits = []
+    float_logits = []
+    with torch.no_grad():
+        for features, _ in _batches(*data, batch_size):
+            features = features.to(device, non_blocking=True)
+            model.lstm.use_quantization = True
+            quantized_logits.append(model(features))
+            model.lstm.use_quantization = False
+            float_logits.append(model(features))
+    model.lstm.use_quantization = True
+    quantized = torch.cat(quantized_logits).double()
+    reference = torch.cat(float_logits).double()
+    difference = quantized - reference
+    denominator = torch.linalg.vector_norm(
+        quantized
+    ) * torch.linalg.vector_norm(reference)
+    cosine = 1.0 if denominator.item() <= 1.0e-12 else (
+        torch.dot(quantized.flatten(), reference.flatten()) / denominator
+    ).item()
+    return {
+        "mae": difference.abs().mean().item(),
+        "mse": difference.square().mean().item(),
+        "cosine": cosine,
+    }
 
 
 def _train(
@@ -377,6 +467,7 @@ def _train(
     feature_sets: dict[str, tuple[Tensor, Tensor]],
     config: ExperimentConfig,
     device: torch.device,
+    qat_bitwidth: int | None = None,
 ) -> dict:
     torch.manual_seed(config.seed)
     torch.cuda.manual_seed_all(config.seed)
@@ -392,6 +483,7 @@ def _train(
     )
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
     history = []
+    calibration_refreshes = []
     native_qat_checkpoint_observed = False
     started = time.perf_counter()
     for epoch in range(config.epochs):
@@ -402,6 +494,8 @@ def _train(
         )
         loss_sum = 0.0
         sample_count = 0
+        clamp_counts: dict[str, int] = {}
+        clamp_elements: dict[str, int] = {}
         for features, labels in _batches(
             *feature_sets["training"], config.batch_size, indices=order
         ):
@@ -419,12 +513,42 @@ def _train(
                 and qat_state.get("quantized_master")
                 and qat_state.get("checkpoint_clamp_masks")
             )
+            if qat_state:
+                for family in (
+                    "master_clamp_masks",
+                    "checkpoint_clamp_masks",
+                ):
+                    for tensor_name, mask in qat_state[family].items():
+                        mask_name = f"{family}.{tensor_name}"
+                        clamp_counts[mask_name] = clamp_counts.get(
+                            mask_name, 0
+                        ) + int(
+                            mask.sum().item()
+                        )
+                        clamp_elements[mask_name] = clamp_elements.get(
+                            mask_name, 0
+                        ) + mask.numel()
             loss = F.cross_entropy(logits, labels)
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
             loss_sum += loss.item() * labels.numel()
             sample_count += labels.numel()
+        if (
+            qat_bitwidth is not None
+            and (epoch + 1) % config.calibration_refresh_epochs == 0
+        ):
+            refreshed = _calibrate_quant_lstm(
+                model,
+                feature_sets["training"],
+                config,
+                device,
+                qat_bitwidth,
+                refresh=True,
+            )
+            calibration_refreshes.append(
+                _calibration_summary(refreshed, epoch + 1)
+            )
         validation = _evaluate(
             model, feature_sets["validation"], config.batch_size, device
         )
@@ -434,11 +558,37 @@ def _train(
             "validation_loss": validation["loss"],
             "validation_accuracy": validation["accuracy"],
         }
+        if clamp_counts:
+            epoch_result["qat_clamp_rates"] = {
+                name: clamp_counts[name] / clamp_elements[name]
+                for name in sorted(clamp_counts)
+            }
         history.append(epoch_result)
-        print(json.dumps({"model": name, **epoch_result}, sort_keys=True), flush=True)
+        print(
+            json.dumps(
+                {
+                    "model": name,
+                    "epoch": epoch_result["epoch"],
+                    "train_loss": epoch_result["train_loss"],
+                    "validation_loss": epoch_result["validation_loss"],
+                    "validation_accuracy": epoch_result[
+                        "validation_accuracy"
+                    ],
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
     torch.cuda.synchronize(device)
     final_testing = _evaluate(
         model, feature_sets["testing"], config.batch_size, device
+    )
+    quantization_error = (
+        _quantization_error(
+            model, feature_sets["testing"], config.batch_size, device
+        )
+        if qat_bitwidth is not None
+        else None
     )
     update_squared_norm = sum(
         (parameter.detach() - initial_parameters[name]).square().sum().item()
@@ -455,6 +605,8 @@ def _train(
         "final_test_accuracy": final_testing["accuracy"],
         "parameter_update_norm": update_squared_norm**0.5,
         "native_qat_checkpoint_observed": native_qat_checkpoint_observed,
+        "calibration_refreshes": calibration_refreshes,
+        "final_quantization_error": quantization_error,
         "duration_seconds": time.perf_counter() - started,
         "epochs": history,
     }
@@ -515,11 +667,18 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
         "quant_lstm_float", native_float, feature_sets, config, device
     )
     quantized_results = {
-        name: _train(name, model, feature_sets, config, device)
+        name: _train(
+            name,
+            model,
+            feature_sets,
+            config,
+            device,
+            qat_bitwidth=int(name.removesuffix("bit").rsplit("_", 1)[1]),
+        )
         for name, model in quantized_variants.items()
     }
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "validation_scope": "real_network_training",
         "dataset": {
             "name": "speech_commands_v0.02",
@@ -549,6 +708,11 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
             "mode": "qat",
             "bitwidths": list(config.quant_bitwidths),
             "calibration_batches": config.calibration_batches,
+            "calibration_strategy": {
+                "selection": "balanced_round_robin",
+                "refresh_interval_epochs": config.calibration_refresh_epochs,
+                "refresh_timing": "after_training_before_validation",
+            },
             "calibration": calibrations,
         },
         "environment": {
@@ -590,6 +754,7 @@ def _parse_arguments() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--learning-rate", type=float, default=3.0e-3)
     parser.add_argument("--calibration-batches", type=int, default=4)
+    parser.add_argument("--calibration-refresh-epochs", type=int, default=1)
     parser.add_argument(
         "--quant-bitwidth",
         type=int,
@@ -622,6 +787,7 @@ def main() -> None:
             epochs=arguments.epochs,
             learning_rate=arguments.learning_rate,
             calibration_batches=arguments.calibration_batches,
+            calibration_refresh_epochs=arguments.calibration_refresh_epochs,
             quant_bitwidths=tuple(arguments.quant_bitwidths or (8, 16)),
             seed=arguments.seed,
         )

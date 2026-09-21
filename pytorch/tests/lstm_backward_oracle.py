@@ -52,8 +52,9 @@ def quantize_tensor(
     qmin, qmax = _quant_range(operator)
     scales, zero_points = _operator_tensors(operator, value, per_channel)
     translated = value.detach().double() / scales + zero_points
-    clamped = (translated < qmin) | (translated > qmax)
-    return torch.round(translated).clamp(qmin, qmax).float(), clamped
+    rounded = torch.round(translated)
+    clamped = (rounded < qmin) | (rounded > qmax)
+    return rounded.clamp(qmin, qmax).float(), clamped
 
 
 def dequantize_tensor(

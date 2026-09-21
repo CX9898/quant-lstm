@@ -450,6 +450,74 @@ class BackwardTest(unittest.TestCase):
                     self.assertIn("checkpoint_clamp_masks", saved)
 
     @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
+    def test_qat_calibrated_parameter_endpoints_keep_ste_gradients(self):
+        device = torch.device("cuda")
+        input_value = deterministic_tensor(
+            (4, 2, 3), -0.20, 0.25, device=device
+        )
+        hidden = deterministic_tensor(
+            (1, 2, 4), -0.05, 0.06, device=device
+        )
+        cell = deterministic_tensor(
+            (1, 2, 4), -0.10, 0.09, device=device
+        )
+
+        forward_mae = {}
+        for bitwidth in (8, 16):
+            with self.subTest(bitwidth=bitwidth):
+                qat = QuantLSTM(3, 4, device=device)
+                initialize_parameters(qat)
+                qat.set_all_bitwidth(bitwidth)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)
+                    calibrate(qat, input_value, (hidden, cell))
+                qat.use_quantization = True
+                qat.train()
+
+                reference = QuantLSTM(3, 4, device=device)
+                copy_parameters(qat, reference)
+                reference.train()
+
+                qat_input = input_value.clone().requires_grad_()
+                reference_input = input_value.clone().requires_grad_()
+                qat_state = (
+                    hidden.clone().requires_grad_(),
+                    cell.clone().requires_grad_(),
+                )
+                reference_state = (
+                    hidden.clone().requires_grad_(),
+                    cell.clone().requires_grad_(),
+                )
+                qat_result = qat(qat_input, qat_state)
+                reference_result = reference(reference_input, reference_state)
+                forward_mae[bitwidth] = metrics(
+                    qat_result[0], reference_result[0]
+                )[0]
+                objective(qat_result).backward()
+                objective(reference_result).backward()
+
+                saved = qat.qat_saved_state()
+                for name in (
+                    "weight_ih",
+                    "weight_hh",
+                    "bias_ih",
+                    "bias_hh",
+                ):
+                    self.assertFalse(
+                        saved["master_clamp_masks"][name].any(), name
+                    )
+
+                for name in ("bias_ih_l0", "bias_hh_l0"):
+                    actual = getattr(qat, name).grad
+                    expected = getattr(reference, name).grad
+                    _, _, cosine = metrics(actual, expected)
+                    self.assertGreaterEqual(
+                        cosine, 0.98, f"{name}: cosine={cosine}"
+                    )
+
+        self.assertLess(forward_mae[16], forward_mae[8] * 0.1)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_qat_native_backward_matches_python_ste_oracle(self):
         device = torch.device("cuda")
         module = QuantLSTM(3, 4, batch_first=True, device=device)

@@ -26,8 +26,10 @@ clipping. Only the recurrent module changes:
 - baseline: `torch.nn.LSTM` on CUDA;
 - native-float diagnostic: `QuantLSTM(use_quantization=False)` on CUDA, with no
   calibration, quantization, or STE;
-- replacements: 8-bit and 16-bit `QuantLSTM` QAT on CUDA, each calibrated only
-  with the same training examples.
+- replacements: 8-bit and 16-bit `QuantLSTM` QAT on CUDA. Calibration uses a
+  deterministic class-balanced training subset. MinMax ranges are refreshed
+  after every training epoch, before validation, and then reused by the next
+  epoch. Validation and testing examples never participate in calibration.
 
 The deterministic subset contains `yes`, `no`, `up`, and `down`, with 128
 training, 32 validation, and 32 testing examples per label. Selection happens
@@ -63,26 +65,38 @@ The test requires all four branches to reduce training loss and update
 parameters, requires both QAT replacements to expose native checkpoints, and
 checks:
 
-- baseline best validation accuracy >= 40%;
-- native-float best validation accuracy >= 40% and no more than 5 percentage
-  points below baseline;
-- each QAT best validation accuracy >= 35%;
-- each QAT result no more than 20 percentage points below baseline;
+- baseline and native-float best validation accuracy >= 55% and final test
+  accuracy >= 60%;
+- native-float best validation accuracy no more than 5 percentage points below
+  baseline;
+- 8-bit QAT best validation and final test accuracy >= 50%, each no more than
+  10 percentage points below baseline;
+- 16-bit QAT best validation and final test accuracy >= 60%, each no more than
+  5 percentage points below baseline;
+- 16-bit QAT validation and test accuracy exceed 8-bit by at least 5 percentage
+  points;
+- final 16-bit logit MAE against the same trained model's native-float path is
+  less than 10% of the corresponding 8-bit MAE, with cosine >= 0.9999;
+- per-epoch `weight_ih` and `weight_hh` Clamp rates remain below 10%;
+- every initial and refreshed calibration uses 32 samples from each label;
 - neither calibration safety report contains a non-finite unsafe entry.
 
-These conservative thresholds were frozen after three identical runs on
-2026-09-21 with an NVIDIA RTX 6000D, PyTorch 2.13.0+cu130, and seed 20260921:
+These thresholds were frozen after the STE Clamp fix and repeated deterministic
+runs on 2026-09-21 with an NVIDIA RTX 6000D, PyTorch 2.13.0+cu130, and seed
+20260921:
 
 | Metric | `torch.nn.LSTM` | Native FP32 | 8-bit QAT | 16-bit QAT |
 |---|---:|---:|---:|---:|
 | Initial train loss | 1.38985 | 1.38985 | 1.38986 | 1.38984 |
-| Final train loss | 0.90363 | 0.93811 | 0.98312 | 0.97134 |
-| Best validation accuracy | 59.38% | 59.38% | 51.56% | 51.56% |
-| Final test accuracy | 64.06% | 67.97% | 51.56% | 50.00% |
-| Parameter update norm | 7.82258 | 7.93028 | 8.22504 | 8.23538 |
+| Final train loss | 0.90363 | 0.93811 | 0.97098 | 0.83593 |
+| Best validation accuracy | 59.38% | 59.38% | 53.13% | 67.19% |
+| Final test accuracy | 64.06% | 67.97% | 55.47% | 64.84% |
+| Parameter update norm | 7.82258 | 7.93028 | 7.85768 | 8.38498 |
+| Logit MAE vs own native-float path | N/A | N/A | 0.012899 | 0.000338 |
 
-The thresholds deliberately leave room for library and GPU variation while
-still rejecting chance-level training or a broken QAT backward path.
+The thresholds leave several samples of accuracy headroom while rejecting
+stale calibration, a broken QAT backward path, and an INT16 path that does not
+provide a measurable advantage over INT8.
 
 The 8-bit calibration has 518 `exact_integer_range` entries and no precision
 risk. The 16-bit calibration has 5 exact entries, 513 `precision_risk` entries,
