@@ -36,6 +36,7 @@ SAMPLE_RATE = 16_000
 CLIP_SAMPLES = SAMPLE_RATE
 MEL_BINS = 40
 MFCC_BINS = 20
+QAT_CALIBRATION_METHODS = {8: "sqnr", 16: "minmax"}
 
 
 @dataclass(frozen=True)
@@ -711,6 +712,7 @@ def _operator_bitwidth_ablation(
         device=device,
     )
     _copy_shared_initial_state(model, diagnostic_model)
+    diagnostic_model.lstm.calibration_method = model.lstm.calibration_method
     operators = tuple(diagnostic_model.lstm.get_quant_config()["operators"])
 
     def evaluate(
@@ -1103,6 +1105,7 @@ def _run_additional_quality_seed(
             device=device,
         )
         _copy_shared_initial_state(baseline, model)
+        model.lstm.calibration_method = QAT_CALIBRATION_METHODS[bitwidth]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
             _calibrate_quant_lstm(
@@ -1231,6 +1234,7 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
             device=device,
         )
         initial_differences[name] = _copy_shared_initial_state(baseline, quantized)
+        quantized.lstm.calibration_method = QAT_CALIBRATION_METHODS[bitwidth]
         calibrations[name] = _calibrate_quant_lstm(
             quantized, feature_sets["training"], config, device, bitwidth
         )
@@ -1317,6 +1321,10 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
                 "selection": "balanced_round_robin",
                 "refresh_interval_epochs": config.calibration_refresh_epochs,
                 "refresh_timing": "after_training_before_validation",
+                "methods_by_bitwidth": {
+                    str(bitwidth): QAT_CALIBRATION_METHODS[bitwidth]
+                    for bitwidth in config.quant_bitwidths
+                },
             },
             "calibration": calibrations,
             "calibration_strategy_matrix": calibration_strategy_matrix,

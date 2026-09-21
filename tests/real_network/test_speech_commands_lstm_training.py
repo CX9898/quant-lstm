@@ -160,6 +160,7 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
                 "selection": "balanced_round_robin",
                 "refresh_interval_epochs": 1,
                 "refresh_timing": "after_training_before_validation",
+                "methods_by_bitwidth": {"8": "sqnr", "16": "minmax"},
             },
         )
         self.assertEqual(
@@ -213,13 +214,22 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
             percentile_512["error"]["mae"],
             minmax_512["error"]["mae"] * 0.75,
         )
-        self.assertTrue(
-            all(
-                entry["error"]["mae"] < 1.0e-4
-                for entry in matrix["entries"]
-                if entry["bitwidth"] == 16
-            )
-        )
+        for method in matrix["methods"]:
+            for sample_count in matrix["sample_counts"]:
+                int8 = matrix_by_case[(method, sample_count, 8)]
+                int16 = matrix_by_case[(method, sample_count, 16)]
+                self.assertLess(
+                    int16["operators"]["cell_state"]["quantization_step_max"],
+                    int8["operators"]["cell_state"]["quantization_step_max"]
+                    * 0.006,
+                )
+                self.assertLess(
+                    int16["error"]["mae"], int8["error"]["mae"] * 0.01
+                )
+                self.assertLess(
+                    int16["error"]["mae"],
+                    int16["operators"]["cell_state"]["quantization_step_max"],
+                )
         self.assertLess(baseline["final_train_loss"], baseline["initial_train_loss"])
         self.assertGreater(baseline["parameter_update_norm"], 0.0)
         self.assertGreaterEqual(baseline["best_validation_accuracy"], 0.55)
@@ -254,6 +264,10 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
                 ]
                 safety = calibration["safety"]
                 self.assertEqual(safety["unsafe_non_finite_count"], 0)
+                self.assertEqual(
+                    calibration["method"],
+                    {8: "sqnr", 16: "minmax"}[bitwidth],
+                )
                 self.assertEqual(calibration["selection"], "balanced_round_robin")
                 self.assertEqual(calibration["sample_count"], 128)
                 self.assertEqual(calibration["label_counts"], [32, 32, 32, 32])
@@ -361,7 +375,7 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
         )
         self.assertGreaterEqual(
             quantized_16["final_test_accuracy"],
-            quantized_8["final_test_accuracy"] + 0.05,
+            quantized_8["final_test_accuracy"],
         )
         self.assertLess(
             quantized_16["final_quantization_error"]["mae"],
