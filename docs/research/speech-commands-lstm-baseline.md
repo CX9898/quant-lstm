@@ -140,7 +140,7 @@ MFCC[batch, 49, 20]
 
 ## 5. 公平的训练比较
 
-至少报告以下两个训练分支，推荐增加第三个诊断分支：
+测试报告以下四个训练分支：
 
 | 分支 | recurrent layer | 用途 |
 |---|---|---|
@@ -153,7 +153,7 @@ MFCC[batch, 49, 20]
 
 1. 同一个固定 seed 生成模型初始参数；将 baseline 的 LSTM 与 classifier 权重复制给
    replacement，不能分别随机初始化。
-2. 三个分支使用完全相同的 example IDs、预计算 feature、batch 顺序、loss、optimizer、
+2. 四个分支使用完全相同的 example IDs、预计算 feature、batch 顺序、loss、optimizer、
    learning rate、epoch 数和 gradient clipping。
 3. QAT 分支在训练前用固定的 training calibration subset 完成 calibration/finalize；
    validation/testing 数据绝不能参与 calibration。

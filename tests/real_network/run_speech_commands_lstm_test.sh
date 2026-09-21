@@ -11,8 +11,8 @@ usage() {
   cat <<'EOF'
 Usage: tests/real_network/run_speech_commands_lstm_test.sh [options]
 
-Run matched torch.nn.LSTM, 8-bit QuantLSTM QAT, and 16-bit QuantLSTM QAT
-training on a deterministic subset of Google's Speech Commands v0.02 dataset.
+Run matched torch.nn.LSTM, native-float QuantLSTM, 8-bit QuantLSTM QAT, and
+16-bit QuantLSTM QAT training on a deterministic Speech Commands v0.02 subset.
 
 Options:
   --dataset-root PATH  Extracted dataset containing validation_list.txt

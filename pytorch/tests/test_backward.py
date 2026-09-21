@@ -300,6 +300,83 @@ class BackwardTest(unittest.TestCase):
         self.assertGreater(input_value.grad.abs().max().item(), 0.0)
 
     @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
+    def test_float_training_tracks_pytorch_for_100_steps(self):
+        device = torch.device("cuda")
+        custom = QuantLSTM(2, 3, device=device, use_quantization=False)
+        native = nn.LSTM(2, 3, device=device)
+        initialize_parameters(custom)
+        copy_to_native(custom, native)
+        custom.train()
+        native.train()
+
+        input_value = deterministic_tensor(
+            (5, 2, 2), -0.31, 0.29, device=device
+        )
+        target = deterministic_tensor(
+            (5, 2, 3), -0.17, 0.23, device=device
+        )
+        custom_optimizer = torch.optim.SGD(custom.parameters(), lr=0.4)
+        native_optimizer = torch.optim.SGD(native.parameters(), lr=0.4)
+        initial_parameters = {
+            name: parameter.detach().clone()
+            for name, parameter in custom.named_parameters()
+        }
+        custom_losses = []
+        max_loss_difference = 0.0
+        minimum_output_cosine = 1.0
+
+        for _ in range(100):
+            custom_optimizer.zero_grad(set_to_none=True)
+            native_optimizer.zero_grad(set_to_none=True)
+            custom_output, _ = custom(input_value)
+            native_output, _ = native(input_value)
+            custom_loss = torch.nn.functional.mse_loss(custom_output, target)
+            native_loss = torch.nn.functional.mse_loss(native_output, target)
+            custom_losses.append(custom_loss.item())
+            max_loss_difference = max(
+                max_loss_difference,
+                abs(custom_loss.item() - native_loss.item()),
+            )
+            minimum_output_cosine = min(
+                minimum_output_cosine,
+                metrics(custom_output, native_output)[2],
+            )
+            custom_loss.backward()
+            native_loss.backward()
+            custom_optimizer.step()
+            native_optimizer.step()
+
+        parameter_mse = {
+            name: torch.mean(
+                (parameter.detach() - getattr(native, name).detach()).square()
+            ).item()
+            for name, parameter in custom.named_parameters()
+        }
+        parameter_update_norm = sum(
+            (parameter.detach() - initial_parameters[name]).square().sum().item()
+            for name, parameter in custom.named_parameters()
+        ) ** 0.5
+
+        self.assertLess(custom_losses[-1], custom_losses[0] * 0.8)
+        self.assertGreater(parameter_update_norm, 0.0)
+        self.assertGreaterEqual(minimum_output_cosine, 0.9999)
+        self.assertLess(max(parameter_mse.values()), 1.0e-5)
+        self.assertLess(max_loss_difference, 1.0e-4)
+        self.records.append(
+            {
+                "path": "float_optimization_100_steps",
+                "tensor": "training",
+                "initial_loss": custom_losses[0],
+                "final_loss": custom_losses[-1],
+                "max_loss_difference": max_loss_difference,
+                "minimum_output_cosine": minimum_output_cosine,
+                "max_parameter_mse": max(parameter_mse.values()),
+                "parameter_update_norm": parameter_update_norm,
+                "steps": len(custom_losses),
+            }
+        )
+
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_qat_gradients_match_float_surrogate(self):
         device = torch.device("cuda")
         for bidirectional, bias in ((False, True), (True, False)):

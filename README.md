@@ -85,6 +85,10 @@ PYTHONPATH=. python3 -m unittest -v tests.test_backward
 PYTHONPATH=. python3 -m unittest -v tests.test_onnx_export
 ```
 
+`tests.test_backward` 包含与 GRU 对齐的 100 步完全浮点训练回归：自研
+`QuantLSTM(use_quantization=False)` 与 `torch.nn.LSTM` 共享初始化、输入、目标和 SGD
+配置，并门禁 loss 下降、参数更新、最小输出余弦、最大参数 MSE 和最大 loss 差异。
+
 基于 Google Research `kws_streaming` LSTM 与 Speech Commands v0.02 的真实网络
 训练对照是显式运行的慢测试，不进入默认 CI：
 
@@ -94,9 +98,9 @@ tests/real_network/run_speech_commands_lstm_test.sh \
 ```
 
 该测试保持 MFCC、样本、初始化、batch 顺序和优化器一致，只把
-`torch.nn.LSTM` 分别替换为 8-bit 和 16-bit `QuantLSTM` QAT，并输出完整训练曲线、
-validation/test 准确率、参数更新范数和 native QAT checkpoint 证据。测试设计、阈值与
-官方来源见 `tests/real_network/README.md` 和
+`torch.nn.LSTM` 分别替换为完全浮点、8-bit QAT 和 16-bit QAT `QuantLSTM`，并输出
+完整训练曲线、validation/test 准确率、参数更新范数和 native QAT checkpoint 证据。
+测试设计、阈值与官方来源见 `tests/real_network/README.md` 和
 `docs/research/speech-commands-lstm-baseline.md`。
 
 典型流程是先以 `calibrating=True` 在 CUDA 上运行一个或多个校准 batch，随后调用

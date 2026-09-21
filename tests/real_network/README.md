@@ -19,11 +19,13 @@ current `QuantLSTM` replacement exposes Google's projected peephole cell.
 
 ## Comparison contract
 
-The three branches share selected examples, precomputed MFCC tensors, initial
+The four branches share selected examples, precomputed MFCC tensors, initial
 parameters, batch order, optimizer, learning rate, epochs, loss, and gradient
 clipping. Only the recurrent module changes:
 
 - baseline: `torch.nn.LSTM` on CUDA;
+- native-float diagnostic: `QuantLSTM(use_quantization=False)` on CUDA, with no
+  calibration, quantization, or STE;
 - replacements: 8-bit and 16-bit `QuantLSTM` QAT on CUDA, each calibrated only
   with the same training examples.
 
@@ -57,11 +59,13 @@ the external dataset is large. The complete JSON report is written to
 
 ## Acceptance thresholds
 
-The test requires all three branches to reduce training loss and update
-parameters, requires both replacements to expose native QAT checkpoints, and
+The test requires all four branches to reduce training loss and update
+parameters, requires both QAT replacements to expose native checkpoints, and
 checks:
 
 - baseline best validation accuracy >= 40%;
+- native-float best validation accuracy >= 40% and no more than 5 percentage
+  points below baseline;
 - each QAT best validation accuracy >= 35%;
 - each QAT result no more than 20 percentage points below baseline;
 - neither calibration safety report contains a non-finite unsafe entry.
@@ -69,13 +73,13 @@ checks:
 These conservative thresholds were frozen after three identical runs on
 2026-09-21 with an NVIDIA RTX 6000D, PyTorch 2.13.0+cu130, and seed 20260921:
 
-| Metric | `torch.nn.LSTM` | 8-bit QAT | 16-bit QAT |
-|---|---:|---:|---:|
-| Initial train loss | 1.38985 | 1.38986 | 1.38984 |
-| Final train loss | 0.90363 | 0.98312 | 0.97134 |
-| Best validation accuracy | 59.38% | 51.56% | 51.56% |
-| Final test accuracy | 64.06% | 51.56% | 50.00% |
-| Parameter update norm | 7.82258 | 8.22504 | 8.23538 |
+| Metric | `torch.nn.LSTM` | Native FP32 | 8-bit QAT | 16-bit QAT |
+|---|---:|---:|---:|---:|
+| Initial train loss | 1.38985 | 1.38985 | 1.38986 | 1.38984 |
+| Final train loss | 0.90363 | 0.93811 | 0.98312 | 0.97134 |
+| Best validation accuracy | 59.38% | 59.38% | 51.56% | 51.56% |
+| Final test accuracy | 64.06% | 67.97% | 51.56% | 50.00% |
+| Parameter update norm | 7.82258 | 7.93028 | 8.22504 | 8.23538 |
 
 The thresholds deliberately leave room for library and GPU variation while
 still rejecting chance-level training or a broken QAT backward path.

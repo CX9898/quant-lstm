@@ -54,20 +54,35 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
         )
 
         baseline = report["training"]["torch_lstm"]
+        native_float = report["training"]["quant_lstm_float"]
         quantized_variants = {
             bitwidth: report["training"][f"quant_lstm_qat_{bitwidth}bit"]
             for bitwidth in (8, 16)
         }
-        self.assertEqual(report["schema_version"], 2)
+        self.assertEqual(report["schema_version"], 3)
         self.assertEqual(report["replacement"]["changed_module"], "lstm")
         self.assertEqual(report["quantization"]["bitwidths"], [8, 16])
         self.assertEqual(
             report["replacement"]["initial_shared_state_max_abs_diff"],
-            {"quant_lstm_qat_8bit": 0.0, "quant_lstm_qat_16bit": 0.0},
+            {
+                "quant_lstm_float": 0.0,
+                "quant_lstm_qat_8bit": 0.0,
+                "quant_lstm_qat_16bit": 0.0,
+            },
         )
         self.assertLess(baseline["final_train_loss"], baseline["initial_train_loss"])
         self.assertGreater(baseline["parameter_update_norm"], 0.0)
         self.assertGreaterEqual(baseline["best_validation_accuracy"], 0.40)
+        self.assertLess(
+            native_float["final_train_loss"], native_float["initial_train_loss"]
+        )
+        self.assertGreater(native_float["parameter_update_norm"], 0.0)
+        self.assertFalse(native_float["native_qat_checkpoint_observed"])
+        self.assertGreaterEqual(native_float["best_validation_accuracy"], 0.40)
+        self.assertGreaterEqual(
+            native_float["best_validation_accuracy"],
+            baseline["best_validation_accuracy"] - 0.05,
+        )
         for bitwidth, quantized in quantized_variants.items():
             with self.subTest(bitwidth=bitwidth):
                 safety = report["quantization"]["calibration"][

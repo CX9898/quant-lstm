@@ -85,11 +85,11 @@ class SpeechCommandsLstmClassifier(nn.Module):
         hidden_size: int,
         label_count: int,
         *,
-        quantized_lstm: bool,
+        use_quant_lstm: bool,
         device: torch.device,
     ) -> None:
         super().__init__()
-        if quantized_lstm:
+        if use_quant_lstm:
             from quant_lstm import QuantLSTM
 
             self.lstm = QuantLSTM(
@@ -97,6 +97,7 @@ class SpeechCommandsLstmClassifier(nn.Module):
                 hidden_size,
                 batch_first=True,
                 device=device,
+                use_quantization=False,
             )
         else:
             self.lstm = nn.LSTM(
@@ -479,18 +480,26 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
     baseline = SpeechCommandsLstmClassifier(
         config.hidden_size,
         len(config.labels),
-        quantized_lstm=False,
+        use_quant_lstm=False,
+        device=device,
+    )
+    native_float = SpeechCommandsLstmClassifier(
+        config.hidden_size,
+        len(config.labels),
+        use_quant_lstm=True,
         device=device,
     )
     quantized_variants = {}
-    initial_differences = {}
+    initial_differences = {
+        "quant_lstm_float": _copy_shared_initial_state(baseline, native_float)
+    }
     calibrations = {}
     for bitwidth in config.quant_bitwidths:
         name = f"quant_lstm_qat_{bitwidth}bit"
         quantized = SpeechCommandsLstmClassifier(
             config.hidden_size,
             len(config.labels),
-            quantized_lstm=True,
+            use_quant_lstm=True,
             device=device,
         )
         initial_differences[name] = _copy_shared_initial_state(baseline, quantized)
@@ -502,12 +511,15 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
     baseline_result = _train(
         "torch_lstm", baseline, feature_sets, config, device
     )
+    native_float_result = _train(
+        "quant_lstm_float", native_float, feature_sets, config, device
+    )
     quantized_results = {
         name: _train(name, model, feature_sets, config, device)
         for name, model in quantized_variants.items()
     }
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "validation_scope": "real_network_training",
         "dataset": {
             "name": "speech_commands_v0.02",
@@ -552,6 +564,7 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
         },
         "training": {
             "torch_lstm": baseline_result,
+            "quant_lstm_float": native_float_result,
             **quantized_results,
         },
     }
