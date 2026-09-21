@@ -86,6 +86,9 @@ checks:
 - the trained INT8 model is evaluated with each of the 18 quantization points
   promoted to INT16 in isolation, using fresh balanced calibration and the same
   fixed model weights, then ranked by logit MAE improvement;
+- a fixed-weight calibration matrix compares MinMax, Percentile, and SQNR with
+  128 and 512 balanced training samples at both 8 and 16 bits; every entry
+  reports per-operator range/resolution, test-set Clamp rates, and logit error;
 - every initial and refreshed calibration uses 32 samples from each label;
 - neither calibration safety report contains a non-finite unsafe entry.
 
@@ -109,6 +112,13 @@ peaks at time step 16 rather than at the tail; the first, last, and final-quarte
 MAEs are `0.009251`, `0.009131`, and `0.009800`, respectively. These diagnostics
 separate the high bias Clamp rate observed during training from the dominant
 forward quantization-error sources.
+
+The calibration matrix confirms that additional MinMax samples can hurt INT8
+resolution. Expanding from 128 to 512 samples increases the `cell_state` step
+from `0.07073` to `0.07783` and logit MAE from `0.01290` to `0.01735`.
+Percentile with 512 samples narrows that step to `0.06407` and reduces MAE to
+`0.00950`. Every INT16 matrix case remains below `0.00006` MAE, so this is an
+INT8 range-versus-resolution effect rather than an 8/16-bit path mix-up.
 
 The thresholds leave several samples of accuracy headroom while rejecting
 stale calibration, a broken QAT backward path, and an INT16 path that does not

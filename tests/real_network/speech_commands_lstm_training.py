@@ -384,6 +384,7 @@ def _calibrate_quant_lstm(
     *,
     refresh: bool = False,
     operator_bitwidths: dict[str, int] | None = None,
+    calibration_sample_count: int | None = None,
 ) -> dict:
     model.eval()
     if refresh:
@@ -394,9 +395,12 @@ def _calibrate_quant_lstm(
             model.lstm.adjust_quant_config(
                 operator, bitwidth=operator_bitwidth
             )
-    calibration_indices = _balanced_calibration_indices(
-        training[1], config.calibration_batches * config.batch_size
+    sample_count = (
+        config.calibration_batches * config.batch_size
+        if calibration_sample_count is None
+        else calibration_sample_count
     )
+    calibration_indices = _balanced_calibration_indices(training[1], sample_count)
     model.lstm.calibrating = True
     with torch.no_grad():
         for features, _ in _batches(
@@ -442,6 +446,34 @@ def _quant_range(operator: dict) -> tuple[int, int]:
         maximum = (1 << (bitwidth - 1)) - 1
         return -maximum, maximum
     return -(1 << (bitwidth - 1)), (1 << (bitwidth - 1)) - 1
+
+
+def _quant_param_range_summary(bundle: dict) -> dict[str, dict]:
+    summaries = {}
+    for name, operator in bundle["operators"].items():
+        qmin, qmax = _quant_range(operator)
+        scales = torch.tensor(
+            [float(value) for value in operator["scales"]], dtype=torch.float64
+        )
+        zero_points = torch.tensor(operator["zero_points"], dtype=torch.float64)
+        lower = (qmin - zero_points) * scales
+        upper = (qmax - zero_points) * scales
+        spans = upper - lower
+        summaries[name] = {
+            "bitwidth": operator["bitwidth"],
+            "granularity": operator["granularity"],
+            "group_count": scales.numel(),
+            "quantized_levels": qmax - qmin,
+            "quantization_step_min": scales.min().item(),
+            "quantization_step_median": scales.median().item(),
+            "quantization_step_max": scales.max().item(),
+            "representable_min": lower.min().item(),
+            "representable_max": upper.max().item(),
+            "representable_span_min": spans.min().item(),
+            "representable_span_median": spans.median().item(),
+            "representable_span_max": spans.max().item(),
+        }
+    return summaries
 
 
 def _bias_range_diagnostics(lstm: nn.Module) -> dict[str, dict]:
@@ -643,6 +675,114 @@ def _operator_bitwidth_ablation(
         "ranked_by_mae_improvement": sorted(
             operators, key=lambda name: promoted[name]["mae_delta"]
         ),
+    }
+
+
+def _quantized_clamp_rates(
+    model: SpeechCommandsLstmClassifier,
+    data: tuple[Tensor, Tensor],
+    batch_size: int,
+    device: torch.device,
+) -> dict[str, float]:
+    was_training = model.training
+    was_quantized = model.lstm.use_quantization
+    model.train()
+    model.lstm.use_quantization = True
+    clamp_counts: dict[str, int] = {}
+    clamp_elements: dict[str, int] = {}
+    with torch.no_grad():
+        for features, _ in _batches(*data, batch_size):
+            model(features.to(device, non_blocking=True))
+            state = model.lstm.qat_saved_state()
+            for family in ("master_clamp_masks", "checkpoint_clamp_masks"):
+                for name, mask in state[family].items():
+                    key = f"{family}.{name}"
+                    clamp_counts[key] = clamp_counts.get(key, 0) + int(
+                        mask.sum().item()
+                    )
+                    clamp_elements[key] = clamp_elements.get(key, 0) + mask.numel()
+    model.train(was_training)
+    model.lstm.use_quantization = was_quantized
+    return {
+        name: clamp_counts[name] / clamp_elements[name]
+        for name in sorted(clamp_counts)
+    }
+
+
+def _calibration_strategy_matrix(
+    model: SpeechCommandsLstmClassifier,
+    source_model: str,
+    feature_sets: dict[str, tuple[Tensor, Tensor]],
+    config: ExperimentConfig,
+    device: torch.device,
+) -> dict:
+    diagnostic_model = SpeechCommandsLstmClassifier(
+        config.hidden_size,
+        len(config.labels),
+        use_quant_lstm=True,
+        device=device,
+    )
+    _copy_shared_initial_state(model, diagnostic_model)
+    methods = ("minmax", "percentile", "sqnr")
+    sample_counts = tuple(
+        dict.fromkeys(
+            (
+                config.calibration_batches * config.batch_size,
+                feature_sets["training"][0].size(0),
+            )
+        )
+    )
+    bitwidths = (8, 16)
+    entries = []
+    for method in methods:
+        diagnostic_model.lstm.calibration_method = method
+        for sample_count in sample_counts:
+            for bitwidth in bitwidths:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)
+                    calibration = _calibrate_quant_lstm(
+                        diagnostic_model,
+                        feature_sets["training"],
+                        config,
+                        device,
+                        bitwidth,
+                        calibration_sample_count=sample_count,
+                    )
+                bundle = json.loads(
+                    diagnostic_model.lstm._quant_params_bundle_json
+                )
+                entries.append(
+                    {
+                        "method": method,
+                        "sample_count": sample_count,
+                        "label_counts": calibration["label_counts"],
+                        "bitwidth": bitwidth,
+                        "unsafe_non_finite_count": calibration["safety"][
+                            "unsafe_non_finite_count"
+                        ],
+                        "operators": _quant_param_range_summary(bundle),
+                        "clamp_rates": _quantized_clamp_rates(
+                            diagnostic_model,
+                            feature_sets["testing"],
+                            config.batch_size,
+                            device,
+                        ),
+                        "error": _quantization_error(
+                            diagnostic_model,
+                            feature_sets["testing"],
+                            config.batch_size,
+                            device,
+                            include_time_step_trace=False,
+                        ),
+                    }
+                )
+    return {
+        "source_model": source_model,
+        "fixed_weights": True,
+        "methods": list(methods),
+        "sample_counts": list(sample_counts),
+        "bitwidths": list(bitwidths),
+        "entries": entries,
     }
 
 
@@ -906,8 +1046,20 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
         )
         for name, model in quantized_variants.items()
     }
+    matrix_source = (
+        "quant_lstm_qat_8bit"
+        if "quant_lstm_qat_8bit" in quantized_variants
+        else next(iter(quantized_variants))
+    )
+    calibration_strategy_matrix = _calibration_strategy_matrix(
+        quantized_variants[matrix_source],
+        matrix_source,
+        feature_sets,
+        config,
+        device,
+    )
     return {
-        "schema_version": 6,
+        "schema_version": 7,
         "validation_scope": "real_network_training",
         "dataset": {
             "name": "speech_commands_v0.02",
@@ -943,6 +1095,7 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
                 "refresh_timing": "after_training_before_validation",
             },
             "calibration": calibrations,
+            "calibration_strategy_matrix": calibration_strategy_matrix,
         },
         "environment": {
             "torch": torch.__version__,

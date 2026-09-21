@@ -11,6 +11,7 @@ import torch
 
 from speech_commands_lstm_training import (
     ExperimentConfig,
+    _quant_param_range_summary,
     _tensor_error_metrics,
     run_training_comparison,
 )
@@ -54,6 +55,30 @@ class SpeechCommandsDiagnosticsTest(unittest.TestCase):
         self.assertAlmostEqual(result["normalized_rmse"], (0.625 / 2.5) ** 0.5)
         self.assertAlmostEqual(result["p99_absolute_error"], 1.0)
         self.assertAlmostEqual(result["max_absolute_error"], 1.0)
+
+    def test_quant_param_range_summary_reports_resolution(self) -> None:
+        summary = _quant_param_range_summary(
+            {
+                "operators": {
+                    "input": {
+                        "bitwidth": 8,
+                        "is_unsigned": False,
+                        "is_symmetric": True,
+                        "granularity": "per_tensor",
+                        "scales": ["0.1"],
+                        "zero_points": [0],
+                    }
+                }
+            }
+        )["input"]
+
+        self.assertEqual(summary["quantized_levels"], 254)
+        self.assertAlmostEqual(summary["quantization_step_min"], 0.1)
+        self.assertAlmostEqual(summary["quantization_step_max"], 0.1)
+        self.assertAlmostEqual(summary["representable_min"], -12.7)
+        self.assertAlmostEqual(summary["representable_max"], 12.7)
+        self.assertAlmostEqual(summary["representable_span_min"], 25.4)
+        self.assertAlmostEqual(summary["representable_span_max"], 25.4)
 
 
 class SpeechCommandsLstmTrainingTest(unittest.TestCase):
@@ -100,7 +125,7 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
             bitwidth: report["training"][f"quant_lstm_qat_{bitwidth}bit"]
             for bitwidth in (8, 16)
         }
-        self.assertEqual(report["schema_version"], 6)
+        self.assertEqual(report["schema_version"], 7)
         self.assertEqual(report["replacement"]["changed_module"], "lstm")
         self.assertEqual(report["quantization"]["bitwidths"], [8, 16])
         self.assertEqual(
@@ -118,6 +143,56 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
                 "quant_lstm_qat_8bit": 0.0,
                 "quant_lstm_qat_16bit": 0.0,
             },
+        )
+        matrix = report["quantization"]["calibration_strategy_matrix"]
+        self.assertEqual(matrix["source_model"], "quant_lstm_qat_8bit")
+        self.assertTrue(matrix["fixed_weights"])
+        self.assertEqual(set(matrix["methods"]), {"minmax", "percentile", "sqnr"})
+        self.assertEqual(matrix["sample_counts"], [128, 512])
+        self.assertEqual(matrix["bitwidths"], [8, 16])
+        self.assertEqual(len(matrix["entries"]), 12)
+        self.assertEqual(
+            {
+                (entry["method"], entry["sample_count"], entry["bitwidth"])
+                for entry in matrix["entries"]
+            },
+            {
+                (method, sample_count, bitwidth)
+                for method in matrix["methods"]
+                for sample_count in matrix["sample_counts"]
+                for bitwidth in matrix["bitwidths"]
+            },
+        )
+        for entry in matrix["entries"]:
+            self.assertEqual(set(entry["operators"]), QUANT_OPERATORS)
+            self.assertEqual(entry["unsafe_non_finite_count"], 0)
+            self.assertIn("checkpoint_clamp_masks.cell_states", entry["clamp_rates"])
+            self.assertGreaterEqual(entry["error"]["prediction_agreement"], 0.0)
+            self.assertLessEqual(entry["error"]["prediction_agreement"], 1.0)
+        matrix_by_case = {
+            (entry["method"], entry["sample_count"], entry["bitwidth"]): entry
+            for entry in matrix["entries"]
+        }
+        minmax_128 = matrix_by_case[("minmax", 128, 8)]
+        minmax_512 = matrix_by_case[("minmax", 512, 8)]
+        percentile_512 = matrix_by_case[("percentile", 512, 8)]
+        self.assertGreater(
+            minmax_512["operators"]["cell_state"]["quantization_step_max"],
+            minmax_128["operators"]["cell_state"]["quantization_step_max"],
+        )
+        self.assertGreater(
+            minmax_512["error"]["mae"], minmax_128["error"]["mae"]
+        )
+        self.assertLess(
+            percentile_512["error"]["mae"],
+            minmax_512["error"]["mae"] * 0.75,
+        )
+        self.assertTrue(
+            all(
+                entry["error"]["mae"] < 1.0e-4
+                for entry in matrix["entries"]
+                if entry["bitwidth"] == 16
+            )
         )
         self.assertLess(baseline["final_train_loss"], baseline["initial_train_loss"])
         self.assertGreater(baseline["parameter_update_norm"], 0.0)
