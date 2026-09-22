@@ -17,11 +17,6 @@ ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_SCHEMA = json.loads(
     (ROOT / "config/schema/lstm_pytorch_quant_params.schema.json").read_text()
 )
-BUNDLE_SCHEMA = json.loads(
-    (ROOT / "config/schema/lstm_quant_params_bundle.schema.json").read_text()
-)
-
-
 def deterministic_tensor(shape, start=-0.35, stop=0.35, *, device="cpu"):
     count = 1
     for extent in shape:
@@ -163,9 +158,32 @@ class QuantizedInterfaceTest(unittest.TestCase):
                 jsonschema.Draft202012Validator(
                     MANIFEST_SCHEMA
                 ).validate(manifest)
-                jsonschema.Draft202012Validator(
-                    BUNDLE_SCHEMA
-                ).validate(manifest["quant_params"])
+                self.assertEqual(
+                    set(manifest),
+                    {
+                        "schema_version",
+                        "model_info",
+                        "execution_metadata",
+                        "operators",
+                    },
+                )
+                self.assertEqual(
+                    manifest["model_info"],
+                    {
+                        "input_size": 3,
+                        "hidden_size": 4,
+                        "bias": True,
+                        "batch_first": False,
+                        "bidirectional": False,
+                        "use_pot2_scale": False,
+                    },
+                )
+                input_params = manifest["operators"]["input"]
+                self.assertEqual(input_params["enc_type"], "PER_TENSOR")
+                self.assertIsInstance(input_params["scale"], float)
+                self.assertIsInstance(input_params["zero_point"], int)
+                self.assertIsInstance(input_params["real_min"], float)
+                self.assertIsInstance(input_params["real_max"], float)
                 metadata = manifest["execution_metadata"]
                 self.assertEqual(
                     metadata["carrier"], "cuda_fp32_qcarrier"
@@ -179,10 +197,37 @@ class QuantizedInterfaceTest(unittest.TestCase):
                     "bias_ih",
                     "bias_hh",
                 ):
-                    params = manifest["quant_params"]["operators"][name]
-                    self.assertEqual(len(params["scales"]), 16)
-                    self.assertEqual(len(params["zero_points"]), 16)
+                    params = manifest["operators"][name]
+                    self.assertEqual(
+                        set(params),
+                        {
+                            "dtype",
+                            "symmetric",
+                            "scale",
+                            "zero_point",
+                            "enc_type",
+                            "real_min",
+                            "real_max",
+                        },
+                    )
+                    self.assertEqual(len(params["scale"]), 16)
+                    self.assertEqual(len(params["zero_point"]), 16)
+                    self.assertTrue(
+                        all(isinstance(value, float) for value in params["scale"])
+                    )
+                    self.assertTrue(
+                        all(isinstance(value, int) for value in params["zero_point"])
+                    )
+                    self.assertEqual(params["dtype"], "INT8")
+                    self.assertTrue(params["symmetric"])
+                    self.assertIn(
+                        params["enc_type"],
+                        {"PER_TENSOR", "PER_GATE", "PER_CHANNEL"},
+                    )
                 encoded = json.dumps(manifest)
+                self.assertNotIn('"quant_params"', encoded)
+                self.assertNotIn('"bitwidth"', encoded)
+                self.assertNotIn('"scales"', encoded)
                 self.assertNotIn("multiplier", encoded)
                 self.assertNotIn("raw_ratio", encoded)
 
@@ -236,15 +281,78 @@ class QuantizedInterfaceTest(unittest.TestCase):
             )
 
     @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
+    def test_gru_compatible_dtype_and_granularity_fields_roundtrip(self):
+        module = QuantLSTM(2, 3, device="cuda")
+        module.adjust_quant_config(
+            "input", bitwidth=16, is_unsigned=True, is_symmetric=False
+        )
+        module.adjust_quant_config("weight_ih", granularity="per_gate")
+        module.adjust_quant_config("weight_hh", granularity="per_tensor")
+        initialize_module(module)
+        calibrate(module, deterministic_tensor((2, 1, 2), device="cuda"), None)
+
+        document = module.export_quant_params()
+        self.assertEqual(document["operators"]["input"]["dtype"], "UINT16")
+        self.assertFalse(document["operators"]["input"]["symmetric"])
+        self.assertEqual(
+            document["operators"]["weight_ih"]["enc_type"], "PER_GATE"
+        )
+        self.assertEqual(
+            document["operators"]["weight_hh"]["enc_type"], "PER_TENSOR"
+        )
+        self.assertEqual(len(document["operators"]["weight_ih"]["scale"]), 12)
+        self.assertEqual(len(document["operators"]["weight_hh"]["scale"]), 12)
+
+        imported = QuantLSTM(2, 3)
+        imported.load_quant_params(document)
+        self.assertEqual(imported.get_quant_config(), module.get_quant_config())
+
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
+    def test_gru_compatible_pot2_metadata_roundtrip(self):
+        module = QuantLSTM(2, 3, device="cuda")
+        initialize_module(module)
+        calibrate(module, deterministic_tensor((2, 1, 2), device="cuda"), None)
+        document = module.export_quant_params()
+        document["model_info"]["use_pot2_scale"] = True
+        document["execution_metadata"]["standard_scale_mode"] = "pot2"
+
+        for operator in document["operators"].values():
+            count = len(operator["scale"]) if isinstance(operator["scale"], list) else 1
+            is_unsigned = operator["dtype"].startswith("UINT")
+            minimum = 0 if is_unsigned else -127
+            maximum = 255 if is_unsigned else 127
+            scales = [0.125] * count
+            zero_points = [0] * count
+            real_minimums = [minimum * 0.125] * count
+            real_maximums = [maximum * 0.125] * count
+            if count == 1:
+                operator["scale"] = scales[0]
+                operator["zero_point"] = zero_points[0]
+                operator["real_min"] = real_minimums[0]
+                operator["real_max"] = real_maximums[0]
+            else:
+                operator["scale"] = scales
+                operator["zero_point"] = zero_points
+                operator["real_min"] = real_minimums
+                operator["real_max"] = real_maximums
+
+        imported = QuantLSTM(2, 3)
+        imported.load_quant_params(document)
+        self.assertEqual(imported.get_quant_config()["scale_mode"], "pot2")
+        self.assertEqual(imported.export_quant_params(), document)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_bias_disabled_bundle_omits_bias_operators(self):
         module = QuantLSTM(2, 3, bias=False, device="cuda")
         initialize_module(module)
         input_tensor = deterministic_tensor((2, 1, 2), device="cuda")
         calibrate(module, input_tensor, None)
-        operators = module.export_quant_params()["quant_params"]["operators"]
+        document = module.export_quant_params()
+        jsonschema.Draft202012Validator(MANIFEST_SCHEMA).validate(document)
+        operators = document["operators"]
         self.assertNotIn("bias_ih", operators)
         self.assertNotIn("bias_hh", operators)
-        self.assertEqual(len(operators["weight_ih"]["scales"]), 12)
+        self.assertEqual(len(operators["weight_ih"]["scale"]), 12)
 
     @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_cuda_layout_direct_binding_roundtrip_and_qat_state(self):
@@ -267,10 +375,11 @@ class QuantizedInterfaceTest(unittest.TestCase):
         )
         calibrate(time_module, input_time, state)
         calibrate(batch_module, input_batch, state)
-        self.assertEqual(
-            time_module.export_quant_params()["quant_params"],
-            batch_module.export_quant_params()["quant_params"],
-        )
+        time_document = time_module.export_quant_params()
+        batch_document = batch_module.export_quant_params()
+        self.assertFalse(time_document["model_info"]["batch_first"])
+        self.assertTrue(batch_document["model_info"]["batch_first"])
+        self.assertEqual(time_document["operators"], batch_document["operators"])
 
         time_module.use_quantization = True
         batch_module.use_quantization = True
@@ -429,10 +538,15 @@ class QuantizedInterfaceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             QuantLSTM(2, 3).load_quant_params(invalid_metadata)
 
+        invalid_version = json.loads(json.dumps(manifest))
+        invalid_version["schema_version"] = 3.0
+        with self.assertRaises(ValueError):
+            QuantLSTM(2, 3).load_quant_params(invalid_version)
+
         compact = json.loads(json.dumps(manifest))
-        compact_weight = compact["quant_params"]["operators"]["weight_ih"]
-        compact_weight["scales"] = compact_weight["scales"][:1]
-        compact_weight["zero_points"] = compact_weight["zero_points"][:1]
+        compact_weight = compact["operators"]["weight_ih"]
+        for field in ("scale", "zero_point", "real_min", "real_max"):
+            compact_weight[field] = compact_weight[field][:1]
         with self.assertRaises(ValueError):
             QuantLSTM(2, 3).load_quant_params(compact)
 

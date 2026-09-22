@@ -88,6 +88,24 @@ Python、CPU、CUDA、Golden 和报告只消费 resolved config，不得各自�
 
 Kernel 不得根据 granularity 动态广播。参数导入导出也只使用完整 `4H` 向量；compact/expanded 双表示非法。`bias=False` 时 bias 参数、量化参数和导入导出字段都必须缺失。
 
+### 4.4 公共参数交换格式
+
+PyTorch 公共导入导出使用 GRU-compatible v3 文档。与 GRU 共有的模型字段放在
+`model_info`，量化点放在 `operators`，双向反向量化点放在
+`operators_reverse`。LSTM 可额外携带 `schema_version` 和
+`execution_metadata`，但共有信息不得改名或改变 JSON 类型。
+
+每个 operator 固定使用 `dtype`、`symmetric`、`scale`、`zero_point`、
+`enc_type`、`real_min` 和 `real_max`。单组值使用 JSON number/integer，多组值使用
+同类型数组；参数算子的多组值仍按 4.3 节完整展开为 `4H`。`dtype` 为
+`INT8|UINT8|INT16|UINT16`，`enc_type` 为
+`PER_TENSOR|PER_GATE|PER_CHANNEL`。
+
+公共 `scale/real_min/real_max` 是 JSON number。Python 边界 adapter 仅负责将公共
+表示转换为私有 canonical C++ bundle；bundle 中 scale 的最短可往返 FP32 字符串
+继续用于位模式稳定审计。执行配置解析、参数合法性判断和执行编码派生仍由 C++
+完成。私有 bundle 不构成另一种公共交换格式。
+
 ## 5. 量化范围与校准
 
 统一表示：

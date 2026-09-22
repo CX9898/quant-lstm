@@ -11,7 +11,6 @@ from torch import nn
 import _quant_lstm
 from quant_lstm import QuantLSTM
 from tests.test_quantized_interface import (
-    BUNDLE_SCHEMA,
     calibrate,
     copy_parameters,
     deterministic_tensor,
@@ -172,25 +171,32 @@ class BidirectionalInterfaceTest(unittest.TestCase):
         jsonschema.Draft202012Validator(
             BIDIRECTIONAL_SCHEMA
         ).validate(document)
-        jsonschema.Draft202012Validator(BUNDLE_SCHEMA).validate(
-            document["quant_params"]
-        )
-        jsonschema.Draft202012Validator(BUNDLE_SCHEMA).validate(
-            document["quant_params_reverse"]
-        )
         self.assertEqual(
-            document["quant_params"]["operators"]["input"],
-            document["quant_params_reverse"]["operators"]["input"],
+            set(document),
+            {
+                "schema_version",
+                "model_info",
+                "execution_metadata",
+                "operators",
+                "operators_reverse",
+            },
+        )
+        self.assertTrue(document["model_info"]["bidirectional"])
+        self.assertEqual(
+            document["operators"]["input"],
+            document["operators_reverse"]["input"],
         )
         self.assertNotEqual(
-            document["quant_params"]["operators"]["weight_ih"]["scales"],
-            document["quant_params_reverse"]["operators"]["weight_ih"][
-                "scales"
-            ],
+            document["operators"]["weight_ih"]["scale"],
+            document["operators_reverse"]["weight_ih"]["scale"],
         )
+        batch_document = batch_module.export_quant_params()
+        self.assertFalse(document["model_info"]["batch_first"])
+        self.assertTrue(batch_document["model_info"]["batch_first"])
+        self.assertEqual(document["operators"], batch_document["operators"])
         self.assertEqual(
-            document,
-            batch_module.export_quant_params(),
+            document["operators_reverse"],
+            batch_document["operators_reverse"],
         )
 
         time_module.use_quantization = True
@@ -270,6 +276,29 @@ class BidirectionalInterfaceTest(unittest.TestCase):
             self.assertTrue(torch.equal(expected, actual))
 
     @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
+    def test_bias_disabled_document_omits_both_direction_biases(self):
+        module = QuantLSTM(
+            2, 3, bias=False, bidirectional=True, device="cuda"
+        )
+        initialize_bidirectional(module)
+        input_tensor = deterministic_tensor((3, 2, 2), device="cuda")
+        state = (
+            deterministic_tensor((2, 2, 3), -0.1, 0.1, device="cuda"),
+            deterministic_tensor((2, 2, 3), -0.2, 0.2, device="cuda"),
+        )
+        calibrate(module, input_tensor, state)
+
+        document = module.export_quant_params()
+        jsonschema.Draft202012Validator(BIDIRECTIONAL_SCHEMA).validate(document)
+        for field in ("operators", "operators_reverse"):
+            self.assertNotIn("bias_ih", document[field])
+            self.assertNotIn("bias_hh", document[field])
+
+        imported = QuantLSTM(2, 3, bias=False, bidirectional=True)
+        imported.load_quant_params(document)
+        self.assertTrue(imported.is_calibrated())
+
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_bidirectional_contract_errors(self):
         module = QuantLSTM(3, 4, bidirectional=True, device="cuda")
         input_tensor = torch.zeros((3, 2, 3), device="cuda")
@@ -295,9 +324,7 @@ class BidirectionalInterfaceTest(unittest.TestCase):
             unidirectional.load_quant_params(document)
 
         tampered = json.loads(json.dumps(document))
-        tampered["quant_params_reverse"]["operators"]["input"]["scales"][0] = (
-            "0.5"
-        )
+        tampered["operators_reverse"]["input"]["scale"] = 0.5
         with self.assertRaises(ValueError):
             QuantLSTM(3, 4, bidirectional=True).load_quant_params(tampered)
 

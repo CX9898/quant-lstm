@@ -1,19 +1,43 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://quant-lstm.local/schema/lstm_pytorch_bidirectional_quant_params.schema.json",
-  "title": "Bidirectional QuantLSTM PyTorch parameter document v2",
+  "title": "Bidirectional QuantLSTM GRU-compatible parameter document v3",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version",
+    "model_info",
     "execution_metadata",
-    "quant_params",
-    "quant_params_reverse"
+    "operators",
+    "operators_reverse"
   ],
   "properties": {
-    "schema_version": {
-      "type": "integer",
-      "const": 2
+    "schema_version": {"type": "integer", "const": 3},
+    "model_info": {"$ref": "#/$defs/model_info"},
+    "execution_metadata": {"$ref": "#/$defs/execution_metadata"},
+    "operators": {"$ref": "#/$defs/operators"},
+    "operators_reverse": {"$ref": "#/$defs/operators"}
+  },
+  "$defs": {
+    "model_info": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_size",
+        "hidden_size",
+        "bias",
+        "batch_first",
+        "bidirectional",
+        "use_pot2_scale"
+      ],
+      "properties": {
+        "input_size": {"type": "integer", "minimum": 1},
+        "hidden_size": {"type": "integer", "minimum": 1},
+        "bias": {"type": "boolean"},
+        "batch_first": {"type": "boolean"},
+        "bidirectional": {"const": true},
+        "use_pot2_scale": {"type": "boolean"}
+      }
     },
     "execution_metadata": {
       "type": "object",
@@ -22,34 +46,107 @@
         "carrier",
         "activation_mode",
         "cublas_math_mode",
-        "standard_scale_mode",
-        "bidirectional"
+        "standard_scale_mode"
       ],
       "properties": {
-        "carrier": {
-          "const": "cuda_fp32_qcarrier"
-        },
-        "activation_mode": {
-          "const": "real_sigmoid_tanh"
-        },
-        "cublas_math_mode": {
-          "enum": ["pedantic", "tf32"]
-        },
-        "standard_scale_mode": {
-          "enum": ["affine", "pot2"]
-        },
-        "bidirectional": {
-          "const": true
-        }
+        "carrier": {"const": "cuda_fp32_qcarrier"},
+        "activation_mode": {"const": "real_sigmoid_tanh"},
+        "cublas_math_mode": {"enum": ["pedantic", "tf32"]},
+        "standard_scale_mode": {"enum": ["affine", "pot2"]}
       }
     },
-    "quant_params": {
-      "type": "object",
-      "description": "Forward canonical lstm_quant_params_bundle payload"
+    "number_or_array": {
+      "oneOf": [
+        {"type": "number"},
+        {"type": "array", "minItems": 1, "items": {"type": "number"}}
+      ]
     },
-    "quant_params_reverse": {
+    "integer_or_array": {
+      "oneOf": [
+        {"type": "integer"},
+        {"type": "array", "minItems": 1, "items": {"type": "integer"}}
+      ]
+    },
+    "operator": {
       "type": "object",
-      "description": "Reverse canonical lstm_quant_params_bundle payload"
+      "additionalProperties": false,
+      "required": [
+        "dtype",
+        "symmetric",
+        "scale",
+        "zero_point",
+        "enc_type",
+        "real_min",
+        "real_max"
+      ],
+      "properties": {
+        "dtype": {"enum": ["INT8", "UINT8", "INT16", "UINT16"]},
+        "symmetric": {"type": "boolean"},
+        "scale": {"$ref": "#/$defs/number_or_array"},
+        "zero_point": {"$ref": "#/$defs/integer_or_array"},
+        "enc_type": {"enum": ["PER_TENSOR", "PER_GATE", "PER_CHANNEL"]},
+        "real_min": {"$ref": "#/$defs/number_or_array"},
+        "real_max": {"$ref": "#/$defs/number_or_array"}
+      }
+    },
+    "operators": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input",
+        "output",
+        "cell_state",
+        "weight_ih",
+        "weight_hh",
+        "weight_ih_linear",
+        "weight_hh_linear",
+        "input_gate_input",
+        "forget_gate_input",
+        "cell_gate_input",
+        "output_gate_input",
+        "input_gate_output",
+        "forget_gate_output",
+        "cell_gate_output",
+        "output_gate_output",
+        "cell_tanh_output"
+      ],
+      "properties": {
+        "input": {"$ref": "#/$defs/operator"},
+        "output": {"$ref": "#/$defs/operator"},
+        "cell_state": {"$ref": "#/$defs/operator"},
+        "weight_ih": {"$ref": "#/$defs/operator"},
+        "weight_hh": {"$ref": "#/$defs/operator"},
+        "bias_ih": {"$ref": "#/$defs/operator"},
+        "bias_hh": {"$ref": "#/$defs/operator"},
+        "weight_ih_linear": {"$ref": "#/$defs/operator"},
+        "weight_hh_linear": {"$ref": "#/$defs/operator"},
+        "input_gate_input": {"$ref": "#/$defs/operator"},
+        "forget_gate_input": {"$ref": "#/$defs/operator"},
+        "cell_gate_input": {"$ref": "#/$defs/operator"},
+        "output_gate_input": {"$ref": "#/$defs/operator"},
+        "input_gate_output": {"$ref": "#/$defs/operator"},
+        "forget_gate_output": {"$ref": "#/$defs/operator"},
+        "cell_gate_output": {"$ref": "#/$defs/operator"},
+        "output_gate_output": {"$ref": "#/$defs/operator"},
+        "cell_tanh_output": {"$ref": "#/$defs/operator"}
+      }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"model_info": {"properties": {"bias": {"const": true}}}}},
+      "then": {
+        "properties": {
+          "operators": {"required": ["bias_ih", "bias_hh"]},
+          "operators_reverse": {"required": ["bias_ih", "bias_hh"]}
+        }
+      },
+      "else": {
+        "properties": {
+          "operators": {"properties": {"bias_ih": false, "bias_hh": false}},
+          "operators_reverse": {"properties": {"bias_ih": false, "bias_hh": false}}
+        }
+      }
+    }
+  ]
 }

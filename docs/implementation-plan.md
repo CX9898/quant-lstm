@@ -604,7 +604,8 @@ quant-lstm/
 - 配置加载、`set_all_bitwidth`、`adjust/get_quant_config`、calibration finalize 和参数导入导出只枚举真实量化点；Python 的稀疏配置必须先经 C++ resolver，`get_quant_config` 返回完整 canonical resolved config。
 - QAT 前向保存 FP32 载体的 W/R/bias/x、状态、中间值和真实 clamp mask。
 - 参数导出中标记执行载体、activation mode、cuBLAS math mode 和 standard scale 模式；内部 M+shift/POT2 参数只进入调试/编译报告，不成为第二套外部 scale。
-- 四组 weight/bias 的外部量化参数始终使用完整 `4H` standard scale/zp 向量并携带各自 granularity；不导出 1/4 元素 compact 副本。导入时验证长度、粒度重复模式和 float32 位模式后直接使用，不再次广播。
+- 公共参数文档与 GRU 对齐为 `model_info`、`operators` 和可选 `operators_reverse`；共有 operator 信息使用相同的 `dtype/symmetric/scale/zero_point/enc_type/real_min/real_max` 字段与 JSON 类型，LSTM 专属 schema 和执行元数据可额外保留。
+- 四组 weight/bias 的外部量化参数始终使用完整 `4H` standard `scale/zero_point` 数组并携带各自 `enc_type`；不导出 1/4 元素 compact 副本。导入时验证长度、粒度重复模式和 float32 位模式后直接使用，不再次广播。
 
 验收：
 
@@ -846,7 +847,7 @@ Bias 固定为两个 profile：`enabled_random` 对应 `bias=True`，使用两�
 
 无论原始 granularity 为何，finalize 后每个启用参数都只保留一个长度为 `4H` 的执行向量：per-tensor 的同一 scale/zp 复制到全部 channel，per-gate 的四组 scale/zp 按 `(i,f,g,o)` 各复制 `H` 次，per-channel 逐 channel 填充。执行后端不得读取 granularity 做动态广播，只按输出 channel 索引该向量。不同 gate/channel 的校准结果允许数值相同，测试验证来源和映射规则，不通过“数值必须不同”判断粒度是否生效。激活和 recurrent state 始终为 per-tensor。`bias_profile=disabled` 时两组 bias granularity 均为 `not_applicable`，且不创建 `4H` bias 参数向量。
 
-导入导出同样只使用完整 `4H` 向量，该向量是 standard scale/zp 的唯一外部数值来源：per-tensor 文件中 `4H` 个 scale 元素必须位级相同；per-gate 文件中每个长度 `H` 的 scale 门段必须位级相同；per-channel scale 只校验长度和逐元素合法性，不要求数值互异。四组 weight/bias 的 `4H` zero-point 元素无条件全部为 0。Granularity 元数据保留用于审计来源和执行导入校验，不允许出现 `compact_values`、1/4 元素数组或同时保存 compact/expanded 两份数值。校准可以内部统计 1/4/`4H` 组 range，但必须在 finalize 时一次性展开并只导出完整向量。`bias_profile=disabled` 时 bias 字段必须缺失，空数组或占位参数均视为 schema 错误。
+GRU-compatible 公共导入导出同样只使用完整 `4H` `scale/zero_point` 数组，该数组是 standard scale/zp 的唯一外部数值来源：per-tensor 文件中 `4H` 个 scale 元素必须位级相同；per-gate 文件中每个长度 `H` 的 scale 门段必须位级相同；per-channel scale 只校验长度和逐元素合法性，不要求数值互异。四组 weight/bias 的 `4H` zero-point 元素无条件全部为 0。`enc_type` 保留用于审计来源和执行导入校验，不允许出现 `compact_values`、1/4 元素数组或同时保存 compact/expanded 两份数值。校准可以内部统计 1/4/`4H` 组 range，但必须在 finalize 时一次性展开并只导出完整数组。`bias_profile=disabled` 时 bias 字段必须缺失，空数组或占位参数均视为 schema 错误。
 
 布局固定为两个 `layout_profile`：`time_major` 对应 `batch_first=False` 和外部 `[T,B,I]`，`batch_major` 对应 `batch_first=True` 和外部 `[B,T,I]`。数据生成器只产生一次规范 `[T,B,I]` 逻辑输入，batch-major case 由确定性转置得到，不能重新消费 RNG。C++ 核心内部统一使用 time-major；两种 profile 必须生成相同的校准统计、standard scale/zp 和归一化 checkpoints。公开 output 分别为 `[T,B,H]` 与 `[B,T,H]`，统一转置为 time-major 后逐值/指标比较；`h_n/c_n` 的 `[1,B,H]` 布局不受 `batch_first` 影响。
 
@@ -1036,7 +1037,7 @@ GRU 的位宽遍历 shell 测试另外采用 `MSE<=1e-4`、余弦相似度 `>=0.
 39. `bias=True` 与 `bias=False` 都必须测试：分别使用 `bias_profile=enabled_random|disabled`，进入 CPU/CUDA 基础测试并在严格矩阵中覆盖两种位宽和 scale 模式；disabled 路径不得创建、量化或读取 bias。
 40. `batch_first=False/True` 都进入基础和严格正确性测试；使用同一逻辑数据，内部统一 time-major，归一化后的量化参数/checkpoints 和 `h_n/c_n` 必须一致，公开 output shape 按 PyTorch 语义变化。
 41. 四组 weight/bias granularity 独立配置；基础测试四者均为 `per_channel`，严格测试用成对组合覆盖三种粒度及分支/weight-bias 混合配置。每个启用参数在 finalize 后都物化为 `4H` channel 向量，kernel 不做运行时广播；激活/状态保持 per-tensor，bias disabled 时粒度为 `not_applicable`。
-42. Weight/bias 量化参数导入导出始终使用完整 `4H` standard scale/zp 向量和 granularity 元数据；禁止 compact 或双表示。导入验证 per-tensor/per-gate 重复模式，bias disabled 时字段必须缺失。
+42. 公共参数文档与 GRU 共享 `model_info`、`operators`、可选 `operators_reverse` 和 operator 字段/JSON 类型；weight/bias 始终使用完整 `4H` standard `scale/zero_point` 数组及 `enc_type`，禁止 compact 或双表示。导入验证 per-tensor/per-gate 重复模式，bias disabled 时字段必须缺失。
 43. 四组 weight/bias 强制 signed symmetric，所有 `4H` zero-point 元素为 0；`is_symmetric=false`、`is_unsigned=true` 或非零 zp 均直接报错。激活、Linear 和状态的对称性仍独立配置。
 44. 所有 signed symmetric 量化点采用严格对称范围：`qmax=2^(bitwidth-1)-1`、`qmin=-qmax`，非退化校准范围使用 `scale=max(abs(r_min),abs(r_max))/qmax` 和 `zero_point=0`。二进制补码最小负值保持未使用，schema、参数导入、Clamp 和边界测试均执行该约束。
 45. 基础 profile 使用域感知默认值：`i/f/o` 三个 sigmoid gate output 为 unsigned symmetric，其他非参数量化点为 signed symmetric。除强制规则固定的 weight/bias 外，所有真实量化点仍像 GRU 一样通过 JSON 独立配置 `bitwidth/is_unsigned/is_symmetric`；JSON 显式值覆盖默认值并必须被 forward 真实消费。

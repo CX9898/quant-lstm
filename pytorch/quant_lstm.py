@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import struct
 import warnings
 from pathlib import Path
 from typing import Any, Optional
@@ -35,6 +36,24 @@ _DEFAULT_CONFIG_PATH = (
 _PARAMETER_OPERATORS = {"weight_ih", "weight_hh", "bias_ih", "bias_hh"}
 _CALIBRATION_METHODS = {"minmax", "sqnr", "percentile"}
 _MATH_MODES = {"pedantic", "tf32"}
+_EXTERNAL_QUANT_PARAMS_SCHEMA_VERSION = 3
+_EXTERNAL_OPERATOR_FIELDS = {
+    "dtype",
+    "symmetric",
+    "scale",
+    "zero_point",
+    "enc_type",
+    "real_min",
+    "real_max",
+}
+_GRANULARITY_TO_EXTERNAL = {
+    "per_tensor": "PER_TENSOR",
+    "per_gate": "PER_GATE",
+    "per_channel": "PER_CHANNEL",
+}
+_GRANULARITY_FROM_EXTERNAL = {
+    value: key for key, value in _GRANULARITY_TO_EXTERNAL.items()
+}
 
 
 def _strict_json_loads(text: str) -> dict[str, Any]:
@@ -81,6 +100,263 @@ def _resolved_override(resolved: dict[str, Any]) -> dict[str, Any]:
         "scale_mode": resolved["scale_mode"],
         "operators": operators,
     }
+
+
+def _scalar_or_list(values: list[Any]) -> Any:
+    return values[0] if len(values) == 1 else values
+
+
+def _float32_value(value: float) -> float:
+    try:
+        return struct.unpack("!f", struct.pack("!f", value))[0]
+    except (OverflowError, struct.error) as error:
+        raise ValueError("scale 超出 FP32 范围") from error
+
+
+def _quantized_range(
+    bitwidth: int, is_unsigned: bool, is_symmetric: bool
+) -> tuple[int, int]:
+    if is_unsigned:
+        return 0, (1 << bitwidth) - 1
+    maximum = (1 << (bitwidth - 1)) - 1
+    return (-maximum if is_symmetric else -(1 << (bitwidth - 1))), maximum
+
+
+def _external_operator(internal: dict[str, Any]) -> dict[str, Any]:
+    bitwidth = internal["bitwidth"]
+    is_unsigned = internal["is_unsigned"]
+    is_symmetric = internal["is_symmetric"]
+    scales = [_float32_value(float(value)) for value in internal["scales"]]
+    zero_points = [int(value) for value in internal["zero_points"]]
+    minimum, maximum = _quantized_range(
+        bitwidth, is_unsigned, is_symmetric
+    )
+    real_minimums = [
+        scale * (minimum - zero_point)
+        for scale, zero_point in zip(scales, zero_points)
+    ]
+    real_maximums = [
+        scale * (maximum - zero_point)
+        for scale, zero_point in zip(scales, zero_points)
+    ]
+    return {
+        "dtype": f"{'U' if is_unsigned else ''}INT{bitwidth}",
+        "symmetric": is_symmetric,
+        "scale": _scalar_or_list(scales),
+        "zero_point": _scalar_or_list(zero_points),
+        "enc_type": _GRANULARITY_TO_EXTERNAL[internal["granularity"]],
+        "real_min": _scalar_or_list(real_minimums),
+        "real_max": _scalar_or_list(real_maximums),
+    }
+
+
+def _external_operators(bundle: dict[str, Any]) -> dict[str, Any]:
+    return {
+        name: _external_operator(operator)
+        for name, operator in bundle["operators"].items()
+    }
+
+
+def _number_list(value: Any, field: str) -> tuple[list[float], bool]:
+    is_list = isinstance(value, list)
+    values = value if is_list else [value]
+    if not values:
+        raise ValueError(f"{field} 不能为空")
+    result = []
+    for item in values:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            raise ValueError(f"{field} 必须是 JSON number 或 number array")
+        numeric = float(item)
+        if not math.isfinite(numeric):
+            raise ValueError(f"{field} 必须是有限数")
+        result.append(numeric)
+    return result, is_list
+
+
+def _integer_list(value: Any, field: str) -> tuple[list[int], bool]:
+    is_list = isinstance(value, list)
+    values = value if is_list else [value]
+    if not values:
+        raise ValueError(f"{field} 不能为空")
+    if any(isinstance(item, bool) or not isinstance(item, int) for item in values):
+        raise ValueError(f"{field} 必须是 JSON integer 或 integer array")
+    return [int(item) for item in values], is_list
+
+
+def _canonical_float32(value: float) -> str:
+    rounded = _float32_value(value)
+    encoded = struct.pack("!f", rounded)
+    if not math.isfinite(rounded) or rounded <= 0.0:
+        raise ValueError("scale 必须是有限正 FP32")
+    for precision in range(1, 10):
+        candidate = format(rounded, f".{precision}g")
+        if struct.pack("!f", float(candidate)) == encoded:
+            return candidate
+    raise ValueError("scale 无法规范化为 FP32")
+
+
+def _internal_operator(name: str, external: Any) -> dict[str, Any]:
+    if not isinstance(external, dict) or set(external) != _EXTERNAL_OPERATOR_FIELDS:
+        raise ValueError(f"operator {name} 字段不完整或包含未知字段")
+    dtype = external["dtype"]
+    if dtype not in {"INT8", "UINT8", "INT16", "UINT16"}:
+        raise ValueError(f"operator {name} dtype 非法")
+    if not isinstance(external["symmetric"], bool):
+        raise ValueError(f"operator {name} symmetric 必须是 boolean")
+    enc_type = external["enc_type"]
+    if enc_type not in _GRANULARITY_FROM_EXTERNAL:
+        raise ValueError(f"operator {name} enc_type 非法")
+
+    scales, scale_is_list = _number_list(external["scale"], f"{name}.scale")
+    zero_points, zero_is_list = _integer_list(
+        external["zero_point"], f"{name}.zero_point"
+    )
+    real_minimums, minimum_is_list = _number_list(
+        external["real_min"], f"{name}.real_min"
+    )
+    real_maximums, maximum_is_list = _number_list(
+        external["real_max"], f"{name}.real_max"
+    )
+    if not (
+        scale_is_list == zero_is_list == minimum_is_list == maximum_is_list
+    ):
+        raise ValueError(f"operator {name} 的标量/数组表示不一致")
+    if not (
+        len(scales)
+        == len(zero_points)
+        == len(real_minimums)
+        == len(real_maximums)
+    ):
+        raise ValueError(f"operator {name} 的量化参数长度不一致")
+
+    bitwidth = int(dtype.removeprefix("UINT").removeprefix("INT"))
+    is_unsigned = dtype.startswith("UINT")
+    is_symmetric = external["symmetric"]
+    minimum, maximum = _quantized_range(
+        bitwidth, is_unsigned, is_symmetric
+    )
+    for index, (scale, zero_point, real_minimum, real_maximum) in enumerate(
+        zip(scales, zero_points, real_minimums, real_maximums)
+    ):
+        expected_minimum = scale * (minimum - zero_point)
+        expected_maximum = scale * (maximum - zero_point)
+        if not math.isclose(real_minimum, expected_minimum, rel_tol=1.0e-12):
+            raise ValueError(f"operator {name} real_min[{index}] 与 scale/zp 不一致")
+        if not math.isclose(real_maximum, expected_maximum, rel_tol=1.0e-12):
+            raise ValueError(f"operator {name} real_max[{index}] 与 scale/zp 不一致")
+    return {
+        "bitwidth": bitwidth,
+        "is_unsigned": is_unsigned,
+        "is_symmetric": is_symmetric,
+        "granularity": _GRANULARITY_FROM_EXTERNAL[enc_type],
+        "scales": [_canonical_float32(value) for value in scales],
+        "zero_points": zero_points,
+    }
+
+
+def _internal_bundle(
+    document: dict[str, Any], operators_field: str
+) -> dict[str, Any]:
+    model_info = document["model_info"]
+    return {
+        "schema_version": 1,
+        "input_size": model_info["input_size"],
+        "hidden_size": model_info["hidden_size"],
+        "bias_enabled": model_info["bias"],
+        "scale_mode": document["execution_metadata"]["standard_scale_mode"],
+        "operators": {
+            name: _internal_operator(name, operator)
+            for name, operator in document[operators_field].items()
+        },
+    }
+
+
+def _validate_external_document(
+    document: Any,
+    *,
+    input_size: int,
+    hidden_size: int,
+    bias: bool,
+    batch_first: bool,
+    bidirectional: bool,
+) -> None:
+    expected_fields = {
+        "schema_version",
+        "model_info",
+        "execution_metadata",
+        "operators",
+    }
+    if bidirectional:
+        expected_fields.add("operators_reverse")
+    if not isinstance(document, dict) or set(document) != expected_fields:
+        raise ValueError("量化参数文档字段不完整或包含未知字段")
+    schema_version = document["schema_version"]
+    if (
+        isinstance(schema_version, bool)
+        or not isinstance(schema_version, int)
+        or schema_version != _EXTERNAL_QUANT_PARAMS_SCHEMA_VERSION
+    ):
+        raise ValueError(
+            "只支持 GRU-compatible 量化参数文档 schema_version=3"
+        )
+
+    model_info = document["model_info"]
+    model_fields = {
+        "input_size",
+        "hidden_size",
+        "bias",
+        "batch_first",
+        "bidirectional",
+        "use_pot2_scale",
+    }
+    if not isinstance(model_info, dict) or set(model_info) != model_fields:
+        raise ValueError("model_info 字段不完整或包含未知字段")
+    for field in ("bias", "batch_first", "bidirectional", "use_pot2_scale"):
+        if not isinstance(model_info[field], bool):
+            raise ValueError(f"model_info.{field} 必须是 boolean")
+    for field in ("input_size", "hidden_size"):
+        if isinstance(model_info[field], bool) or not isinstance(
+            model_info[field], int
+        ):
+            raise ValueError(f"model_info.{field} 必须是 integer")
+    if (
+        model_info["input_size"] != input_size
+        or model_info["hidden_size"] != hidden_size
+        or model_info["bias"] != bias
+        or model_info["bidirectional"] != bidirectional
+    ):
+        raise ValueError("model_info shape、bias 或 bidirectional 与模块不匹配")
+    if model_info["batch_first"] != batch_first:
+        warnings.warn(
+            "导入文档的 batch_first 与模块不同；量化参数与布局无关",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
+    metadata = document["execution_metadata"]
+    metadata_fields = {
+        "carrier",
+        "activation_mode",
+        "cublas_math_mode",
+        "standard_scale_mode",
+    }
+    if not isinstance(metadata, dict) or set(metadata) != metadata_fields:
+        raise ValueError("execution_metadata 字段不完整或包含未知字段")
+    if metadata["carrier"] != "cuda_fp32_qcarrier":
+        raise ValueError("只支持 cuda_fp32_qcarrier")
+    if metadata["activation_mode"] != "real_sigmoid_tanh":
+        raise ValueError("只支持 real_sigmoid_tanh activation mode")
+    if metadata["cublas_math_mode"] not in _MATH_MODES:
+        raise ValueError("cublas_math_mode 非法")
+    if metadata["standard_scale_mode"] not in {"affine", "pot2"}:
+        raise ValueError("standard_scale_mode 非法")
+    if model_info["use_pot2_scale"] != (
+        metadata["standard_scale_mode"] == "pot2"
+    ):
+        raise ValueError("use_pot2_scale 与 standard_scale_mode 不一致")
+    for field in ("operators", "operators_reverse"):
+        if field in document and not isinstance(document[field], dict):
+            raise ValueError(f"{field} 必须是 object")
 
 
 class _UnidirectionalQuantLSTM(nn.Module):
@@ -408,17 +684,24 @@ class _UnidirectionalQuantLSTM(nn.Module):
         if self._quant_params_bundle_json is None:
             raise RuntimeError("模块尚未校准，不能导出量化参数")
         resolved = self.get_quant_config()
+        bundle = _strict_json_loads(self._quant_params_bundle_json)
         document = {
-            "schema_version": 1,
+            "schema_version": _EXTERNAL_QUANT_PARAMS_SCHEMA_VERSION,
+            "model_info": {
+                "input_size": self.input_size,
+                "hidden_size": self.hidden_size,
+                "bias": self.bias,
+                "batch_first": self.batch_first,
+                "bidirectional": False,
+                "use_pot2_scale": resolved["scale_mode"] == "pot2",
+            },
             "execution_metadata": {
                 "carrier": "cuda_fp32_qcarrier",
                 "activation_mode": "real_sigmoid_tanh",
                 "cublas_math_mode": self.cublas_math_mode,
                 "standard_scale_mode": resolved["scale_mode"],
             },
-            "quant_params": _strict_json_loads(
-                self._quant_params_bundle_json
-            ),
+            "operators": _external_operators(bundle),
         }
         if destination is not None:
             Path(destination).write_text(
@@ -434,42 +717,23 @@ class _UnidirectionalQuantLSTM(nn.Module):
             document = source
         else:
             document = _strict_json_loads(_json_source(source))
-        if set(document) != {
-            "schema_version",
-            "execution_metadata",
-            "quant_params",
-        }:
-            raise ValueError("PyTorch 参数文档字段不完整或包含未知字段")
-        if document["schema_version"] != 1:
-            raise ValueError("只支持 PyTorch 参数文档 schema_version=1")
+        _validate_external_document(
+            document,
+            input_size=self.input_size,
+            hidden_size=self.hidden_size,
+            bias=self.bias,
+            batch_first=self.batch_first,
+            bidirectional=False,
+        )
         metadata = document["execution_metadata"]
-        if not isinstance(metadata, dict) or set(metadata) != {
-            "carrier",
-            "activation_mode",
-            "cublas_math_mode",
-            "standard_scale_mode",
-        }:
-            raise ValueError("execution_metadata 字段不完整或非法")
-        if metadata["carrier"] != "cuda_fp32_qcarrier":
-            raise ValueError("只支持 cuda_fp32_qcarrier")
-        if metadata["activation_mode"] != "real_sigmoid_tanh":
-            raise ValueError("只支持 real_sigmoid_tanh activation mode")
-        if metadata["cublas_math_mode"] not in _MATH_MODES:
-            raise ValueError("cublas_math_mode 非法")
         bundle_text = json.dumps(
-            document["quant_params"],
+            _internal_bundle(document, "operators"),
             separators=(",", ":"),
             ensure_ascii=False,
         )
         audited = _quant_lstm.audit_quant_params_bundle(
             bundle_text, self.require_exact_accumulation
         )
-        if (
-            audited["input_size"] != self.input_size
-            or audited["hidden_size"] != self.hidden_size
-            or audited["bias_enabled"] != self.bias
-        ):
-            raise ValueError("量化参数 shape 或 bias 与模块不匹配")
         resolved = _strict_json_loads(audited["resolved_config_json"])
         if metadata["standard_scale_mode"] != resolved["scale_mode"]:
             raise ValueError("standard_scale_mode 与参数包不一致")
@@ -837,21 +1101,28 @@ class QuantLSTM(_UnidirectionalQuantLSTM):
         if not self.is_calibrated():
             raise RuntimeError("双向模块尚未完成两个方向的校准")
         resolved = self.get_quant_config()
+        forward_bundle = _strict_json_loads(self._quant_params_bundle_json)
+        reverse_bundle = _strict_json_loads(
+            self._reverse_quant_params_bundle_json
+        )
         document = {
-            "schema_version": 2,
+            "schema_version": _EXTERNAL_QUANT_PARAMS_SCHEMA_VERSION,
+            "model_info": {
+                "input_size": self.input_size,
+                "hidden_size": self.hidden_size,
+                "bias": self.bias,
+                "batch_first": self.batch_first,
+                "bidirectional": True,
+                "use_pot2_scale": resolved["scale_mode"] == "pot2",
+            },
             "execution_metadata": {
                 "carrier": "cuda_fp32_qcarrier",
                 "activation_mode": "real_sigmoid_tanh",
                 "cublas_math_mode": self.cublas_math_mode,
                 "standard_scale_mode": resolved["scale_mode"],
-                "bidirectional": True,
             },
-            "quant_params": _strict_json_loads(
-                self._quant_params_bundle_json
-            ),
-            "quant_params_reverse": _strict_json_loads(
-                self._reverse_quant_params_bundle_json
-            ),
+            "operators": _external_operators(forward_bundle),
+            "operators_reverse": _external_operators(reverse_bundle),
         }
         if destination is not None:
             Path(destination).write_text(
@@ -870,38 +1141,21 @@ class QuantLSTM(_UnidirectionalQuantLSTM):
             if isinstance(source, dict)
             else _strict_json_loads(_json_source(source))
         )
-        if set(document) != {
-            "schema_version",
-            "execution_metadata",
-            "quant_params",
-            "quant_params_reverse",
-        }:
-            raise ValueError("双向参数文档字段不完整或包含未知字段")
-        if document["schema_version"] != 2:
-            raise ValueError("双向参数文档必须使用 schema_version=2")
+        _validate_external_document(
+            document,
+            input_size=self.input_size,
+            hidden_size=self.hidden_size,
+            bias=self.bias,
+            batch_first=self.batch_first,
+            bidirectional=True,
+        )
         metadata = document["execution_metadata"]
-        if not isinstance(metadata, dict) or set(metadata) != {
-            "carrier",
-            "activation_mode",
-            "cublas_math_mode",
-            "standard_scale_mode",
-            "bidirectional",
-        }:
-            raise ValueError("双向 execution_metadata 字段不完整或非法")
-        if metadata["carrier"] != "cuda_fp32_qcarrier":
-            raise ValueError("只支持 cuda_fp32_qcarrier")
-        if metadata["activation_mode"] != "real_sigmoid_tanh":
-            raise ValueError("只支持 real_sigmoid_tanh activation mode")
-        if metadata["cublas_math_mode"] not in _MATH_MODES:
-            raise ValueError("cublas_math_mode 非法")
-        if metadata["bidirectional"] is not True:
-            raise ValueError("双向参数文档必须标记 bidirectional=true")
 
         audited = []
-        for field in ("quant_params", "quant_params_reverse"):
+        for field in ("operators", "operators_reverse"):
             result = _quant_lstm.audit_quant_params_bundle(
                 json.dumps(
-                    document[field],
+                    _internal_bundle(document, field),
                     separators=(",", ":"),
                     ensure_ascii=False,
                 ),
@@ -919,11 +1173,9 @@ class QuantLSTM(_UnidirectionalQuantLSTM):
             != audited[1]["resolved_config_json"]
         ):
             raise ValueError("双向参数包的 resolved config 不一致")
-        forward_bundle = _strict_json_loads(audited[0]["bundle_json"])
-        reverse_bundle = _strict_json_loads(audited[1]["bundle_json"])
         if (
-            forward_bundle["operators"]["input"]
-            != reverse_bundle["operators"]["input"]
+            document["operators"]["input"]
+            != document["operators_reverse"]["input"]
         ):
             raise ValueError("双向参数包没有共享 input 量化网格")
         resolved = _strict_json_loads(

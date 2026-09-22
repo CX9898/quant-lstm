@@ -51,22 +51,40 @@ CPU 标量 collector 仅作为独立 C++ reference，CUDA 校准测试会逐组�
 
 ## 3. 参数文档
 
-单向导出使用 PyTorch 参数文档 v1：
+公共导入导出统一使用 GRU-compatible PyTorch 参数文档 v3：
 
-- schema：`lstm_pytorch_quant_params.schema.json`
-- 根字段：`schema_version=1`、`execution_metadata`、`quant_params`
+- 单向 schema：`lstm_pytorch_quant_params.schema.json`。
+- 双向 schema：`lstm_pytorch_bidirectional_quant_params.schema.json`。
+- 公共根字段与 GRU 一致，使用 `model_info`、`operators`，双向另含
+  `operators_reverse`。
+- LSTM 额外保留 `schema_version=3` 和 `execution_metadata`；相同信息仍使用 GRU
+  的字段名和 JSON 类型。
 
-双向导出使用 v2：
+`model_info` 包含 `input_size`、`hidden_size`、`bias`、`batch_first`、
+`bidirectional` 和 `use_pot2_scale`。每个 operator 使用以下 GRU 字段：
 
-- schema：`lstm_pytorch_bidirectional_quant_params.schema.json`
-- 根字段另含 `quant_params_reverse`
-- `execution_metadata.bidirectional=true`
+```json
+{
+  "dtype": "INT8",
+  "symmetric": true,
+  "scale": 0.01,
+  "zero_point": 0,
+  "enc_type": "PER_TENSOR",
+  "real_min": -1.27,
+  "real_max": 1.27
+}
+```
 
-每个方向的内部参数对象都遵循
-`lstm_quant_params_bundle.schema.json`。四组 weight/bias 始终保存完整
-`4H` scale/zp 向量，并携带原始 granularity；不存在 1/4 元素 compact 副本。
-参数文档只保存 standard scale/zp，不保存 raw ratio、M+shift、POT2 shift 或 Q31
-编码。导入时 C++ 会重新审计 standard 参数并派生全部执行编码。
+单组参数使用 JSON number/integer；多组参数使用对应数组。四组 weight/bias 的
+`scale/zero_point/real_min/real_max` 始终是完整 `4H` 数组，`enc_type` 记录原始
+`PER_TENSOR|PER_GATE|PER_CHANNEL` 粒度；不存在 1/4 元素 compact 副本。
+`bias=False` 时 bias operator 必须缺失。
+
+公共文档只保存 standard scale/zp，不保存 raw ratio、M+shift、POT2 shift 或 Q31
+编码。Python 边界 adapter 将 GRU-compatible 数值字段转换成私有 canonical bundle；
+该 bundle 仍遵循 `lstm_quant_params_bundle.schema.json`，其中 scale 使用最短可往返
+FP32 字符串。随后 C++ 严格审计参数并派生全部执行编码。私有 bundle 不是第二套
+公共导入导出格式。
 
 执行元数据固定记录：
 
@@ -74,7 +92,8 @@ CPU 标量 collector 仅作为独立 C++ reference，CUDA 校准测试会逐组�
 - `activation_mode=real_sigmoid_tanh`
 - `cublas_math_mode=pedantic|tf32`
 - `standard_scale_mode=affine|pot2`
-- 双向 v2 的 `bidirectional=true`
+
+双向属性记录在 `model_info.bidirectional=true`。
 
 ## 4. 错误与告警
 

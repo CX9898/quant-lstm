@@ -60,7 +60,7 @@ Q_y(v, S_src) = Clamp(R(v, S_src -> S_y) + Z_y, BW_y)
 
 Granularity 元数据仍随参数导入导出，用于审计 `4H` 向量的来源，但不是运行时广播开关。不同 gate/channel 的 scale/zp 允许恰好相等，正确性由统计来源、索引映射和展开规则验证，不能用“数值是否不同”推断粒度。
 
-外部参数文件同样只保存完整 `4H` standard scale/zp 向量：per-tensor 的全部元素位级相同，per-gate 的每个长度 `H` 门段位级相同，per-channel 保留逐 channel 值。Granularity 元数据与完整向量共同导入导出，但不存在 1/4 元素 compact 数值副本；导入只验证映射不再广播。Bias disabled 时对应字段缺失。
+外部 GRU-compatible 参数文件同样只保存完整 `4H` standard `scale/zero_point` 数组：per-tensor 的全部元素位级相同，per-gate 的每个长度 `H` 门段位级相同，per-channel 保留逐 channel 值。`enc_type` 与完整数组共同导入导出，但不存在 1/4 元素 compact 数值副本；导入只验证映射不再广播。Bias disabled 时对应字段缺失。
 
 权重和 bias 强制使用 signed symmetric 量化：
 
@@ -961,7 +961,7 @@ input_contribution
 
 两套 schema 的所有对象都使用 `additionalProperties:false`；未知 operator、遗留 `mul_*`、不适用字段、`null`、重复 key、错误类型、越界位宽和非法枚举在 forward 前失败。Canonical writer 固定字段顺序和枚举拼写，resolved config 再次解析和序列化必须字节一致。精度报告记录完整 resolved config 及其内容摘要，保证稀疏输入最终执行了什么可以审计。
 
-Affine JSON 和参数导入导出只暴露校准得到的 standard scale；POT2 模式暴露转换后的 standard scale。M+shift/POT2 执行参数在 finalize/编译阶段从 standard scale ratio 集中派生，不能反向覆盖外部 scale。
+Affine JSON 和参数导入导出只暴露校准得到的 standard scale；POT2 模式暴露转换后的 standard scale。公共 GRU-compatible JSON 使用 number/number array；Python 边界 adapter 转换出的私有 canonical C++ bundle 使用最短可往返 FP32 字符串做位模式审计。M+shift/POT2 执行参数在 finalize/编译阶段从 standard scale ratio 集中派生，不能反向覆盖外部 scale。
 
 Golden vector 已确认采用分层核心覆盖：第一层验证公共量化原语，第二层验证单时间步 Linear、四门和 Cell/Hidden 融合，第三层以 `T=3, B=1` 小尺寸验证短递推。用例必须定向覆盖 8/16 bit、Affine/POT2、正负 half-tie、饱和、非零 zero point、悬殊 scale、贡献抵消/同号累加和非零 `h_0/c_0`，关键维度使用最小成对组合而不是全量笛卡尔积。首版 CPU FP 与 CPU int32 载体 reference 都使用原始 sigmoid/tanh，并分别产生对应载体的预期；差异来自载体累加和 rescale，而不是 LUT 近似。
 
@@ -989,7 +989,7 @@ Golden 只使用一个入库的版本化 JSON schema。根对象以 `kind=primit
 
 1. 正式 FP32 reference 输出两路 Linear、四门输入/输出、Cell、`tanh(Cell)` 与 Hidden checkpoint，18 个真实量化点跨 batch/time 取并集；`h_0/c_0` 分别并入 Output/CellState。
 2. MinMax、SQNR 和 Percentile 仅产生候选连续范围，统一经 minimum-scale 与 POT2 CoverRange 生成 standard scale/zp；恰等于 `S_min` 不 fallback、刚低于时 fallback。
-3. 外部参数包只保存完整 `4H` standard scale/zp 与 granularity/config 元数据；canonical FP32 字符串导出导入后重新派生执行编码，CUDA FP `output/h_n/c_n` 保持逐值一致。
+3. 外部 GRU-compatible 参数包只保存完整 `4H` standard `scale/zero_point` 数组与 `enc_type`/config 元数据；公共字段为 JSON number，导入时转换为私有 canonical FP32 字符串并重新派生执行编码，CUDA FP `output/h_n/c_n` 保持逐值一致。
 
 阶段 8 backward 已完成以下实现期证据：
 
