@@ -539,7 +539,7 @@ class QuantizedInterfaceTest(unittest.TestCase):
             QuantLSTM(2, 3).load_quant_params(invalid_metadata)
 
         invalid_version = json.loads(json.dumps(manifest))
-        invalid_version["schema_version"] = 3.0
+        invalid_version["schema_version"] = 1.0
         with self.assertRaises(ValueError):
             QuantLSTM(2, 3).load_quant_params(invalid_version)
 

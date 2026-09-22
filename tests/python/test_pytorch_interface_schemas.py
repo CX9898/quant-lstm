@@ -57,7 +57,7 @@ class PytorchInterfaceSchemaTest(unittest.TestCase):
         )
         operators = {name: dict(operator) for name in operator_names}
         document = {
-            "schema_version": 3,
+            "schema_version": 1,
             "model_info": {
                 "input_size": 3,
                 "hidden_size": 4,

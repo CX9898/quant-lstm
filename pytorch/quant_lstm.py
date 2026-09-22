@@ -36,7 +36,7 @@ _DEFAULT_CONFIG_PATH = (
 _PARAMETER_OPERATORS = {"weight_ih", "weight_hh", "bias_ih", "bias_hh"}
 _CALIBRATION_METHODS = {"minmax", "sqnr", "percentile"}
 _MATH_MODES = {"pedantic", "tf32"}
-_EXTERNAL_QUANT_PARAMS_SCHEMA_VERSION = 3
+_EXTERNAL_QUANT_PARAMS_SCHEMA_VERSION = 1
 _EXTERNAL_OPERATOR_FIELDS = {
     "dtype",
     "symmetric",
@@ -297,7 +297,7 @@ def _validate_external_document(
         or schema_version != _EXTERNAL_QUANT_PARAMS_SCHEMA_VERSION
     ):
         raise ValueError(
-            "只支持 GRU-compatible 量化参数文档 schema_version=3"
+            "只支持 GRU-compatible 量化参数文档 schema_version=1"
         )
 
     model_info = document["model_info"]

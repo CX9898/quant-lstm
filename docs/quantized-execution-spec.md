@@ -90,7 +90,7 @@ Kernel 不得根据 granularity 动态广播。参数导入导出也只使用完
 
 ### 4.4 公共参数交换格式
 
-PyTorch 公共导入导出使用 GRU-compatible v3 文档。与 GRU 共有的模型字段放在
+PyTorch 公共导入导出使用 GRU-compatible v1 文档。与 GRU 共有的模型字段放在
 `model_info`，量化点放在 `operators`，双向反向量化点放在
 `operators_reverse`。LSTM 可额外携带 `schema_version` 和
 `execution_metadata`，但共有信息不得改名或改变 JSON 类型。

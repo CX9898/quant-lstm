@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://quant-lstm.local/schema/lstm_pytorch_bidirectional_quant_params.schema.json",
-  "title": "Bidirectional QuantLSTM GRU-compatible parameter document v3",
+  "title": "Bidirectional QuantLSTM GRU-compatible parameter document v1",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,7 +12,7 @@
     "operators_reverse"
   ],
   "properties": {
-    "schema_version": {"type": "integer", "const": 3},
+    "schema_version": {"type": "integer", "const": 1},
     "model_info": {"$ref": "#/$defs/model_info"},
     "execution_metadata": {"$ref": "#/$defs/execution_metadata"},
     "operators": {"$ref": "#/$defs/operators"},

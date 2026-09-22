@@ -120,7 +120,7 @@ cell contribution 诊断均由 CUDA 完成，只将紧凑统计量交给 C++ fin
 
 `get_quant_config()` 返回 C++ resolver 产生的完整 canonical resolved config。
 `set_all_bitwidth()` 和 `adjust_quant_config()` 修改配置后会使旧校准参数失效。
-`export_quant_params()` 产生 GRU-compatible v3 文档：共有字段使用
+`export_quant_params()` 产生 GRU-compatible v1 文档：共有字段使用
 `model_info`、`operators`、双向 `operators_reverse` 以及 operator 级
 `dtype/symmetric/scale/zero_point/enc_type/real_min/real_max`；LSTM 额外记录
 schema、carrier、真实激活模式、cuBLAS math mode 和 standard scale mode。

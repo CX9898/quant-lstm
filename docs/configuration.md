@@ -51,13 +51,13 @@ CPU 标量 collector 仅作为独立 C++ reference，CUDA 校准测试会逐组�
 
 ## 3. 参数文档
 
-公共导入导出统一使用 GRU-compatible PyTorch 参数文档 v3：
+公共导入导出统一使用 GRU-compatible PyTorch 参数文档 v1：
 
 - 单向 schema：`lstm_pytorch_quant_params.schema.json`。
 - 双向 schema：`lstm_pytorch_bidirectional_quant_params.schema.json`。
 - 公共根字段与 GRU 一致，使用 `model_info`、`operators`，双向另含
   `operators_reverse`。
-- LSTM 额外保留 `schema_version=3` 和 `execution_metadata`；相同信息仍使用 GRU
+- LSTM 额外保留 `schema_version=1` 和 `execution_metadata`；相同信息仍使用 GRU
   的字段名和 JSON 类型。
 
 `model_info` 包含 `input_size`、`hidden_size`、`bias`、`batch_first`、
