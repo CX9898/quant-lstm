@@ -12,6 +12,10 @@ ONNX 的 time-major `Y=[T,D,B,H]`。
 
 ## 2. 使用方式
 
+导出要求当前 Python 环境已经构建 `_quant_lstm` extension，并安装 `torch`、`onnx`
+和 `onnxruntime`。以下代码从仓库根目录执行，输出文件为
+`quant_lstm.onnx`：
+
 ```python
 import torch
 from torch import nn
@@ -33,17 +37,19 @@ h_0 = torch.zeros(2, 4, 32)
 c_0 = torch.zeros(2, 4, 32)
 
 ensure_quant_lstm_onnx_registered(opset=18)
-module.export_mode = True
-torch.onnx.export(
-    wrapper,
-    (input, h_0, c_0),
-    "quant_lstm.onnx",
-    opset_version=18,
-    dynamo=False,
-    input_names=["input", "h_0", "c_0"],
-    output_names=["output", "h_n", "c_n"],
-)
-module.export_mode = False
+try:
+    module.export_mode = True
+    torch.onnx.export(
+        wrapper,
+        (input, h_0, c_0),
+        "quant_lstm.onnx",
+        opset_version=18,
+        dynamo=False,
+        input_names=["input", "h_0", "c_0"],
+        output_names=["output", "h_n", "c_n"],
+    )
+finally:
+    module.export_mode = False
 ```
 
 `ExportWrapper.forward(input, h_0, c_0)` 只需调用
@@ -52,6 +58,25 @@ module.export_mode = False
 
 `export_mode=True` 只允许在 `torch.onnx.export(..., dynamo=False)` 上下文中使用，
 普通 eager 调用会失败，避免把导出期零值 runtime stub 当成真实前向。
+
+检查生成文件：
+
+```bash
+python - <<'PY'
+import onnx
+
+model = onnx.load("quant_lstm.onnx")
+onnx.checker.check_model(model)
+lstm_nodes = [node for node in model.graph.node if node.op_type == "LSTM"]
+assert len(lstm_nodes) == 1
+assert not lstm_nodes[0].domain
+print("QuantLSTM ONNX export passed")
+PY
+```
+
+打印 `QuantLSTM ONNX export passed` 且进程退出码为 0，表示模型通过 ONNX checker
+并包含一个标准 domain 的 `LSTM` 节点。数值一致性仍需要使用 ONNX Runtime 比较
+`output/h_n/c_n`，由第 4 节测试完成。
 
 ## 3. 参数映射
 

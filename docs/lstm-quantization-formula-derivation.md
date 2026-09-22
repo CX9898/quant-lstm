@@ -1,8 +1,7 @@
 # LSTM 量化融合公式推导
 
-> 状态：阶段 9 已通过标准 ONNX 导出与 CUDA 静态参数缓存性能验收；前向量化公式和 Cell 固定 Q31 整数编码保持冻结
-> 参考实现：`/mnt/data2/chengxing.zou/projects/quant-gru`，commit `9c25d14`
-> 待完成证据：真实数据 LSTM 精度与模型级门禁；当前没有待审核的数学设计项
+本文解释 [LSTM 量化执行规格](quantized-execution-spec.md)中的公式、整数编码、STE
+和误差来源。规格文档是规范性来源；本文用于推导和实现对应，不独立修改执行契约。
 
 ## 1. 文档目的与边界
 
@@ -655,7 +654,7 @@ d_c_new = RoundShift(wide_acc, 31)
 - `__int128` 只用于 CPU reference 的 Cell 融合累加，不进入公共 JSON，也不约束未来可选 CUDA int32 后端。
 - `RoundShift` 是唯一最终量化舍入，并调用第 2.5 节的 `roundToNearestEven(wide_acc, 31)`。
 - 当比例绝对值小于 `0.5*2^-31` 而编码为 0 时，报告 contribution 消失次数及其相对目标 Cell LSB 的误差。
-- 阶段 3 已完成以下三层验证，本方案现已最终冻结。
+- 该编码需要以下三层验证保护。
 
 三层验证方法已经冻结：
 
@@ -852,7 +851,9 @@ Rescale ratio：Affine 使用 M+shift 编码，POT2 使用 shift
 
 FP32 只能连续精确表示绝对值小于 `2^24` 的整数。即使输入和权重是 8/16 bit，GEMM 累加或 Cell contribution 超过该范围后也可能丢失低位。所有配置先按第 2.6 节分类；正确性模式必须显式关闭 TF32/Tensor Core，性能模式单独评估。
 
-阶段 9 的 generation-key 缓存只复用已经按本节公式量化的 W/R/bias 和 weight sums，不新增量化点、舍入或 Clamp。key 变化后重新执行相同量化边界；cache hit 与 miss 的 checkpoint 必须逐值一致。host 签名和缓存判定属于 setup，不改变 CUDA 设备计算图。
+generation-key 缓存只复用已经按本节公式量化的 W/R/bias 和 weight sums，不新增
+量化点、舍入或 Clamp。key 变化后重新执行相同量化边界；cache hit 与 miss 的
+checkpoint 必须逐值一致。host 签名和缓存判定属于 setup，不改变 CUDA 设备计算图。
 
 ### 12.2 CPU int32 reference
 
@@ -977,63 +978,40 @@ Golden 中所有张量都使用显式 `dtype`、`shape` 和 row-major 一维 `da
 
 Golden 只使用一个入库的版本化 JSON schema。根对象以 `kind=primitive|cell|recurrent` 作为判别字段，通过 `$defs` 与 `oneOf` 约束各类 payload，并统一拒绝未知字段。生成器必须直接加载该 schema，在任何 C++ 代码生成前拒绝无效版本、缺失字段以及目录与 `kind` 不一致的用例；不能在生成器中复制另一套字段白名单。
 
-## 14. 验证状态
+## 14. 验证条件与实现对应
 
-固定 Q31 已在阶段 3 完成以下实现期证据：
+公式实现由以下证据共同保护：
 
-1. 静态边界证明和不安全配置 fail fast 已通过。
-2. 缩小整数域穷举相对独立整数公式 mismatch 为 0。
-3. 固定 seed 的 8/16 bit、极端 scale、Affine/POT2、抵消、同号、饱和及长递推随机/对抗测试已通过；报告由测试写入构建目录且不入库。
+1. 固定 Q31 通过静态边界证明、不安全配置 fail-fast、缩小整数域穷举，以及固定
+   seed 的 8/16-bit、极端 scale、Affine/POT2、抵消、同号、饱和和长递推测试。
+2. CUDA 校准输出两路 Linear、四门输入/输出、Cell、`tanh(Cell)` 与 Hidden
+   checkpoint。18 个量化点跨 batch/time 取并集，`h_0/c_0` 分别并入
+   output/cell-state。
+3. MinMax、SQNR 和 Percentile 的候选范围统一经过 minimum-scale 和 POT2
+   CoverRange。参数导入后重新派生执行编码，CUDA `output/h_n/c_n` 必须保持一致。
+4. FP32 input、h0/c0、W/R 和可选 bias 梯度在单向/双向及两种布局上对齐
+   `torch.nn.LSTM`。QAT mask-aware CUDA 梯度对齐独立 Python STE oracle。
+5. ONNX 边界显式执行 `(i,f,g,o) -> (i,o,f,c)`，ONNX Runtime 结果对齐浮点语义。
+6. 静态参数 cache miss、hit 和 generation-key 失效路径的 Golden checkpoint 逐值
+   一致，缓存不新增执行公式分支。
+7. CUDA 路径接受 compute-sanitizer、Nsight SGEMM 计数和设备专用性能阈值验证。
 
-阶段 5 校准参数生成已完成以下实现期证据：
+回归门禁不得恢复乘法临时值的独立 bitwidth/scale/zero point。严格测试需要报告逐
+量化点误差、逐时间步误差和饱和率。非退化输出 cosine 不得低于 `0.999`；L2 norm
+使用 FP64 和 `epsilon=1e-12`。双边 norm 均不超过 epsilon 时 cosine 记为 `N/A`，
+并依靠 exact、MAE 和 MSE 验收；只有一边不超过时直接失败。
 
-1. 正式 FP32 reference 输出两路 Linear、四门输入/输出、Cell、`tanh(Cell)` 与 Hidden checkpoint，18 个真实量化点跨 batch/time 取并集；`h_0/c_0` 分别并入 Output/CellState。
-2. MinMax、SQNR 和 Percentile 仅产生候选连续范围，统一经 minimum-scale 与 POT2 CoverRange 生成 standard scale/zp；恰等于 `S_min` 不 fallback、刚低于时 fallback。
-3. 外部 GRU-compatible 参数包只保存完整 `4H` standard `scale/zero_point` 数组与 `enc_type`/config 元数据；公共字段为 JSON number，导入时转换为私有 canonical FP32 字符串并重新派生执行编码，CUDA FP `output/h_n/c_n` 保持逐值一致。
+## 15. GRU 比较依据
 
-阶段 8 backward 已完成以下实现期证据：
+本文第 10 至 11 节的融合思路参考 quant-gru commit `9c25d14`，但 LSTM 的 Cell
+双比例融合和状态范围按本项目规格独立定义：
 
-1. 浮点 input、h0/c0、W/R 和可选 bias 梯度在单向/双向、两种布局上对齐 `torch.nn.LSTM`。
-2. INT16 QAT 梯度相对浮点代理满足 MAE、MSE 和余弦门禁；双向 `bias=False` 同时覆盖。
-3. 单步参数更新、12 步 loss 下降以及 master input 被 Clamp/未 Clamp 的梯度行为通过。
-4. 证据写入忽略目录 `tests/precision/results/stage8_backward_report.json`，验证范围仍为 `synthetic_numeric`。
-
-阶段 9 已完成以下不改变公式的后端与交换格式证据：
-
-1. ONNX 边界显式执行 `(i,f,g,o) -> (i,o,f,c)`，单向/双向图均只有一个标准 `LSTM` 节点，ONNX Runtime 的 `output/h_n/c_n` 与浮点语义一致。
-2. 静态参数 cache miss、hit 和 generation key 失效路径的所有 Golden checkpoint 逐值一致；优化前后精度指标完全一致。
-3. 两次稳定 CUDA benchmark、memcheck/racecheck 和 Nsight SGEMM 计数通过；版本化阈值按环境和 profile 隔离。
-4. 缓存、ONNX 重排和性能门禁均未引入新的量化点、乘法配置或执行公式分支。
-
-阶段 9 后续的全浮点与 QAT CUDA backward 补充证据：
-
-1. CUDA forward 保存 gate/cell 最少 trace；native backward 的逐时间步点算子、
-   循环梯度、input/weight 梯度和 bias reduction 均位于 CUDA/cuBLAS。
-2. 单向/双向、bias 开关、两种布局、显式和省略 h0/c0 的全部梯度对齐
-   `torch.nn.LSTM`，且路径测试禁止 CUDA 浮点训练回退到 Python backward。
-3. QAT 的 mask-aware CUDA 结果与迁移前 Python STE oracle 逐梯度一致；路径测试
-   禁止 CUDA QAT 回退到 Python 时间步循环。直接 CUDA mask 公式测试同时覆盖
-   checkpoint 与 master 边界。
-4. 训练态 CUDA forward 直接输出实际消费的 master q-carrier 与 Clamp mask，QAT
-   backward 前由 CUDA kernel 反量化；生产 Python 不再重算量化张量或执行 LSTM
-   backward 公式，Python 实现仅保留在测试 oracle 中。
-5. PyTorch 执行接口对 CPU tensor 明确失败；CPU FP/int32 实现只用于 C++
-   reference、Golden、校准和数值验证，不作为运行时 fallback。
-6. 全量 C++/Python 回归、memcheck、racecheck 和 Nsight kernel trace 通过。
-   `T=4` 的 QAT trace 包含 4 次 backward pointwise、1 次 bias reduction、7 次
-   master gradient clamp kernel 及对应 cuBLAS GEMM；master quantization mask 已融合到
-   input/weight/bias/state CUDA 量化 kernel；未修改本节公式和 STE 语义。
-
-最终冻结继续受以下回归门禁保护：
-
-- 不恢复乘法临时值的独立 bitwidth/scale/zero point。
-- 基础测试先通过 GRU 风格的 MAE、MSE、余弦相似度门禁。
-- 严格测试再比较相对本文数学基线的逐量化点误差、逐时间步误差和饱和率。
-- 非退化输出的余弦相似度不得低于 `0.999`。L2 norm 使用 FP64 计算并固定 `epsilon=1e-12`；双边 norm 均不超过 epsilon 时 cosine 记为 `N/A` 并依靠 exact/MAE/MSE 验收，仅一边不超过时直接失败。
-
-## 15. GRU 源码与历史依据
-
-- `src/gru_forward_gpu_quant_fp.cu`：FP32 载体门控、真实激活、融合 contribution 和 cuBLAS 前向。
-- `include/quantize_ops_helper.h`：GRU int32 reference 的融合门控、整数 rescale 和 LUT；LSTM 首版只迁移整数原语，LUT 作为后续待办。
-- commit `7c4b304`：删除 `r*Lh_n` 的独立中间量化层，乘积直接对齐 candidate 输入。
-- commit `4db3a3d`：先统一 GRU 两路 hidden contribution 的尺度，在宽域相加后统一 rescale。
+- [FP32 q-carrier forward](https://github.com/CX9898/quant-gru/blob/9c25d14/src/gru_forward_gpu_quant_fp.cu)
+  提供门控、真实激活、融合 contribution 和 cuBLAS 前向的比较基线。
+- [整数辅助原语](https://github.com/CX9898/quant-gru/blob/9c25d14/include/quantize_ops_helper.h)
+  提供整数 rescale 与 LUT 的比较基线；quant-lstm 只采用符合本规格的整数原语，
+  尚未采用 LUT。
+- [commit `7c4b304`](https://github.com/CX9898/quant-gru/commit/7c4b304) 删除
+  `r*Lh_n` 的独立量化边界。
+- [commit `4db3a3d`](https://github.com/CX9898/quant-gru/commit/4db3a3d) 将两路
+  hidden contribution 在宽域合并后统一 rescale。

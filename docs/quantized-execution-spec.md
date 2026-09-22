@@ -1,22 +1,25 @@
 # LSTM 量化执行规格
 
-> 状态：阶段 9 已完成标准 ONNX 导出、CUDA 静态参数缓存和版本化性能门禁；Speech Commands v0.02 全量真实网络精度门禁已接入
-> 参考基线：`/home/chengxing.zou/projects/quant-gru`，commit `9c25d14`
-> 公式推导：`docs/lstm-quantization-formula-derivation.md`
-> 分阶段计划：`docs/implementation-plan.md`
+本文是 quant-lstm 量化数学、Round/Clamp 边界、载体语义和正确性门禁的权威规格。
+详细推导见[量化公式推导](lstm-quantization-formula-derivation.md)，代码结构与制品关系
+见[系统架构](architecture.md)。
 
 ## 1. 适用范围
 
-首个生产路径是 CUDA FP32 载体量化前向：量化值经过 Round/Clamp 并位于整数网格，但用 `float` 保存，Linear 使用 cuBLAS SGEMM。
+生产路径是 CUDA FP32 载体量化前向：量化值经过 Round/Clamp 并位于整数网格，
+但用 `float` 保存，Linear 使用 cuBLAS SGEMM。
 
 同时实现两套 CPU reference：
 
 - CPU 标量 FP 载体 reference：作为 CUDA FP 主路径的数值规范。
 - CPU int32 载体 reference：GEMM、rescale 和融合状态更新使用整数算术；首版激活边界反量化后调用原始 sigmoid/tanh，再量化回 int32 网格。
 
-首版 CPU int32 reference 不是端到端纯整数实现。三个 sigmoid 和两个 tanh 的整数 PWL LUT 是阶段 10 待办，未来必须使用独立 `cpu_int32_lut` execution model、Golden 和精度门禁接入。
+CPU int32 reference 不是端到端纯整数实现。三个 sigmoid 和两个 tanh 的整数 PWL
+LUT 尚未实现；未来实现必须使用独立 `cpu_int32_lut` execution model、Golden 和
+精度门禁接入。
 
-当前支持单层单向/双向 LSTM、`bias=True/False` 和 `batch_first=True/False`。内部统一使用 time-major 和 PyTorch 门顺序 `(i,f,g,o)`。
+支持单层单向/双向 LSTM、`bias=True/False` 和 `batch_first=True/False`。内部统一
+使用 time-major 和 PyTorch 门顺序 `(i,f,g,o)`。
 
 ## 2. LSTM 数学语义
 
@@ -277,7 +280,10 @@ q_c_new = Clamp(
     RoundToNearestEven(p_forget*alpha + p_input*beta) + Z_c_new)
 ```
 
-两路乘积没有独立量化边界。CPU int32 reference 将 `alpha/beta` 编码为固定 Q31 multiplier，使用 `int64_t` multiplier 和 `__int128` 合并累加，最后只 RoundShift 一次。阶段 3 的静态 fail-fast、缩小域穷举和 8/16-bit Affine/POT2 随机/对抗验证均已通过，因此该编码现已冻结为最终 CPU reference 规格。
+两路乘积没有独立量化边界。CPU int32 reference 将 `alpha/beta` 编码为固定 Q31
+multiplier，使用 `int64_t` multiplier 和 `__int128` 合并累加，最后只 RoundShift
+一次。实现必须通过静态 fail-fast、缩小域穷举和 8/16-bit Affine/POT2 随机及对抗
+验证。
 
 ### 8.4 Hidden 融合
 
@@ -340,7 +346,8 @@ Golden 使用显式 `dtype/shape/data`、row-major 一维 data。Standard scale 
 
 基础测试先运行，随后才运行严格测试。严格测试使用入库的 `strict_matrix_v1.json`，采用约束 pairwise 和强制定向 case；覆盖检查器只验证，不生成或改写矩阵。
 
-所有阶段至少报告 `output/h_n/c_n` 的 MAE、MSE 和余弦相似度。余弦使用 FP64 L2 norm 和 `epsilon=1e-12`，非退化张量必须 `>=0.999`。初始门禁为：
+所有正确性测试至少报告 `output/h_n/c_n` 的 MAE、MSE 和余弦相似度。余弦使用
+FP64 L2 norm 和 `epsilon=1e-12`，非退化张量必须 `>=0.999`。门禁为：
 
 | 类别 | MSE | MAE | 余弦相似度 |
 |---|---:|---:|---:|
@@ -352,38 +359,34 @@ Golden 使用显式 `dtype/shape/data`、row-major 一维 data。Standard scale 
 
 ## 11. 性能验收
 
-阶段 4 不设置绝对延迟或固定加速比，但必须：
+通用性能验收不设置跨设备绝对延迟或固定加速比，但必须：
 
 - Profiler 证明 cuBLAS SGEMM 实际生效。
 - 报告 P50/P95 延迟、吞吐、workspace 和量化开销。
 - 记录 GPU、驱动、CUDA/cuBLAS、时钟/功耗模式、shape、math mode、计时范围、预热/迭代次数和同步方法。
 - 性能比较同时报告 MAE、MSE 和余弦相似度。
 
-缺少上述任一项时阶段 4 验收失败。阶段 9 已在两次独立稳定测量后，将 RTX 6000D/CUDA 13.2/cuBLAS 13.4 的四个具名 profile 冻结到 `tests/benchmarks/config/cuda_performance_thresholds_v1.json`。阈值由 `tools/check_stage9_cuda_performance.py` 只读检查；禁止自动更新，环境不匹配时禁止复用绝对数值。完整证据与命令见 `docs/cuda-performance.md`。
+缺少上述任一项时，通用性能验收失败。RTX 6000D、CUDA 13.2、cuBLAS 13.4 的四个
+具名 profile 另有版本化绝对阈值，保存在
+`tests/benchmarks/config/cuda_performance_thresholds_v1.json`。阈值由
+`tools/check_stage9_cuda_performance.py` 只读检查；禁止自动更新，环境不匹配时不得
+复用绝对数值。完整证据与命令见[CUDA 性能验收](cuda-performance.md)。
 
-## 12. 实现证据状态
+## 12. 符合性要求
 
-以下不是未决设计，而是分阶段验收证据：
+实现需要通过以下验证，才能声明符合本规格：
 
-1. 已完成：Q31 Cell 静态上界证明、缩小域穷举和全范围随机/对抗报告。
-2. 待后续真实数据阶段完成：两套 CPU reference 相对 `torch.nn.LSTM` 的实测 MAE、MSE、余弦相似度及逐时间步最差值。
-3. 已完成：CUDA FP32 `exact_integer_range/precision_risk` 逐量化点结果及每 operator/channel `NumericSafetyReport`。
-4. 已完成：compute-sanitizer memcheck/racecheck、Nsight GEMM kernel 计数和可复现 Pedantic/TF32 结构化性能基线。
-5. 已完成：正式 FP32 checkpoint 的 18 点 MinMax/直方图收集、Empty/Dirty/Locked 生命周期、逐组 fallback 报告，以及完整 `4H` 参数包 canonical round-trip。
-6. 已完成：SQNR/Percentile 独立候选范围搜索复用统一 MinMax、minimum-scale、POT2 CoverRange 和执行参数派生链；参数包导入后 CUDA FP 主路径结果逐值一致。
-7. 已完成：PyTorch 接口只通过 C++ resolver 消费 canonical resolved config；校准、完整 `4H` 参数包导入导出、CUDA 直接调用、两种布局和真实 Clamp mask 已通过阶段 6 验收。
-8. 已完成：双向 forward/reverse 分别校准并强制共享 input 网格，输出与 `h_n/c_n` 顺序对齐 PyTorch；CPU-only 构建、测试、安装、外部消费和无 CUDA 链接门禁通过。
-9. 已完成：CUDA 浮点 backward 对齐 PyTorch；训练态 CUDA forward 原生输出实际
-   消费的 master q-carrier/checkpoint/Clamp mask，QAT 通过 CUDA 反量化与
-   mask-aware backward 完成 gradient、h0/c0、bias disabled、双向、Clamp STE、
-   单步优化和多步 loss 下降验收。生产 Python 仅负责扩展调度并拒绝 CPU 执行；
-   CPU FP/int32 实现仅作为 C++ reference model。
-10. 已完成：标准 ONNX `LSTM` 单节点导出；量化静态参数缓存保持 Golden 与精度指标不变，P50/P95 获得稳定收益，memcheck/racecheck、Nsight SGEMM 计数和版本化设备阈值通过。
-11. 已完成：Google Research `kws_streaming` LSTM 拓扑的 Speech Commands
-    v0.02 全量真实网络门禁。官方 split 的 105,829 条带标签语音全部纳入
-    35 类训练/验证/测试，分别比较 `torch.nn.LSTM`、native CUDA FP32、INT8
-    QAT 和 INT16 QAT，并冻结任务准确率、macro/per-class F1、logit 误差、预测
-    一致率、真实 batch CUDA backward 和校准安全门禁。该结果验证 CUDA 生产
-    路径的模型级精度，不替代第 2 项尚待补充的 CPU reference 真实张量严格矩阵。
+1. Q31 Cell 静态上界证明、缩小域穷举和全范围随机及对抗测试。
+2. CPU FP32 q-carrier、CPU int32 carrier 和 CUDA q-carrier 的 Golden checkpoint
+   与严格数值门禁。
+3. 每个 operator/channel 的 `NumericSafetyReport`，包括
+   `exact_integer_range`、`precision_risk` 和 unsafe 分类。
+4. CUDA MinMax、SQNR、Percentile 与 CPU finalization reference 的逐组参数一致性。
+5. 完整 `4H` 参数文档 canonical round-trip 和重新导入后的 CUDA 结果一致性。
+6. PyTorch 单向/双向、bias、两种布局、h0/c0、FP32 backward 和 QAT STE 验证。
+7. compute-sanitizer、Nsight SGEMM 调用证据和结构化性能报告。
+8. 标准 ONNX `LSTM` checker 与 ONNX Runtime 浮点语义验证。
+9. Speech Commands v0.02 中 native FP32、INT8 QAT 和 INT16 QAT 的模型级门禁。
 
-上述证据文件按次生成且不提交仓库；审核通过的 schema、配置、阈值和规则变更必须入库并单独审查。
+Golden schema、配置、阈值和规则需要入库。构建产物、日志以及逐次生成的精度和性能
+报告保存在 Git 忽略目录，并在评审时提供运行路径和关键指标。

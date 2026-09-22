@@ -2,8 +2,8 @@
 
 ## 1. 验收范围
 
-阶段 9 优化 CUDA FP32 q-carrier 的稳态推理，不改变
-`docs/quantized-execution-spec.md` 冻结的量化点、门顺序、Cell Q31 融合或
+本性能验收覆盖 CUDA FP32 q-carrier 的稳态推理，不改变
+[量化执行规格](quantized-execution-spec.md)定义的量化点、门顺序、Cell Q31 融合或
 Round/Clamp 边界。benchmark 直接调用 C++ CUDA 核心，不包含 Python/binding
 转置；host 参数展开、签名和 cache hit 判定属于 setup，也不计入 CUDA event
 设备计时。
@@ -14,7 +14,7 @@ input、h0/c0 仍逐调用量化。key 为 0 时保持原有逐调用静态参�
 
 ## 2. 环境与测量方法
 
-本次人工审核环境：
+版本化阈值的审核环境：
 
 | 项目 | 值 |
 |---|---|
@@ -85,11 +85,11 @@ Pedantic case 仍满足既有门禁：
 - compute-sanitizer racecheck。
 - Nsight Systems 中 expected、benchmark 和 trace 的 SGEMM 次数均为 136。
 - benchmark result v3 schema、首次 miss/后续 hit 计数和持久 cache 容量契约。
-- ONNX Runtime 浮点语义验收，详见 `docs/onnx-export.md`。
+- ONNX Runtime 浮点语义验收，详见[ONNX 导出](onnx-export.md)。
 
 ## 5. 候选方案结论
 
-| 方案 | 阶段 9 结论 | 原因 |
+| 方案 | 结论 | 原因 |
 |---|---|---|
 | packed/cached quantized weights | 采用 | 四个 profile 均有稳定收益；generation key 提供显式失效，额外显存已报告 |
 | cuBLASLt | 不采用 | 当前 SGEMM 已由 Nsight 证明生效；冻结的 zp 修正、rescale、真实激活和 Cell/Hidden 融合不能直接映射为单一 Lt epilogue，当前 profile 没有足以抵消维护成本的证据 |

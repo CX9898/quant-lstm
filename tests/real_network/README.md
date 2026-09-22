@@ -1,7 +1,7 @@
-# Speech Commands LSTM real-network test
+# Speech Commands LSTM 真实网络测试
 
-This opt-in test adapts Google Research `kws_streaming`'s LSTM keyword-spotting
-topology to the standard LSTM interface supported by this repository:
+本测试将 Google Research `kws_streaming` 的关键词识别 LSTM 拓扑适配到本仓库支持
+的标准 LSTM 接口，并比较 `torch.nn.LSTM` 与三种 `QuantLSTM` 执行模式。
 
 ```text
 1 s / 16 kHz waveform
@@ -12,185 +12,172 @@ topology to the standard LSTM interface supported by this repository:
   -> profile-sized linear classifier
 ```
 
-The source selection and exact upstream citations are recorded in
-[`docs/research/speech-commands-lstm-baseline.md`](../../docs/research/speech-commands-lstm-baseline.md).
-Peepholes and projection are disabled because neither `torch.nn.LSTM` nor the
-current `QuantLSTM` replacement exposes Google's projected peephole cell.
+Google 的完整模型使用 peephole 和 projection。本测试禁用这两项，因为
+`torch.nn.LSTM` 与 `QuantLSTM` 的替换边界都是标准 LSTM。测试属于 Google 拓扑的
+标准-LSTM 适配，不是其模型参数或 97.3% 结果的复现。
 
-Two profiles use the same model and replacement contract. The fast regression
-uses four words and a deterministic balanced subset. The full profile
-classifies all 35 word directories and consumes every one of the 105,829
-labeled clips through the official train/validation/test split.
-`_background_noise_` is audited separately and is not presented as a word
-class.
+## 1. 第三方来源
 
-## Comparison contract
+Google Research 引用固定在 commit
+`4700efb9afa54286b0e04473ba80a13e8461e25f`：
 
-The four branches share selected examples, precomputed MFCC tensors, initial
-parameters, batch order, optimizer, learning rate, epochs, loss, and gradient
-clipping. Only the recurrent module changes:
+- [LSTM 模型拓扑](https://github.com/google-research/google-research/blob/4700efb9afa54286b0e04473ba80a13e8461e25f/kws_streaming/models/lstm.py#L80-L127)
+- [无 peephole/projection 的 toy 参数](https://github.com/google-research/google-research/blob/4700efb9afa54286b0e04473ba80a13e8461e25f/kws_streaming/models/model_params.py#L227-L239)
+- [Speech Commands URL 与特征参数](https://github.com/google-research/google-research/blob/4700efb9afa54286b0e04473ba80a13e8461e25f/kws_streaming/train/base_parser.py#L33-L39)
+- [Google Research Apache-2.0 许可证](https://github.com/google-research/google-research/blob/4700efb9afa54286b0e04473ba80a13e8461e25f/LICENSE)
 
-- baseline: `torch.nn.LSTM` on CUDA;
-- native-float diagnostic: `QuantLSTM(use_quantization=False)` on CUDA, with no
-  calibration, quantization, or STE;
-- replacements: 8-bit and 16-bit `QuantLSTM` QAT on CUDA. Calibration uses a
-  deterministic class-balanced training subset. INT8 uses SQNR calibration to
-  limit outlier-driven resolution loss; INT16 uses MinMax to preserve the full
-  dynamic range. Ranges are refreshed after every training epoch, before
-  validation, and then reused by the next epoch. Validation and testing
-  examples never participate in calibration.
+数据集统计和官方 split 语义来自
+[Speech Commands v2 论文](https://arxiv.org/abs/1804.03209)。下载文件为
+`speech_commands_v0.02.tar.gz`，大小 `2,428,923,189` bytes，SHA-256 为：
 
-The deterministic subset contains `yes`, `no`, `up`, and `down`, with 128
-training, 32 validation, and 32 testing examples per label. Selection happens
-after applying v0.02's official `validation_list.txt` and `testing_list.txt`.
-This is a short real-data regression, not Google's complete 12-label recipe,
-and its accuracy must not be compared with Google's reported 97.3% result.
-
-## Run
-
-Build the CUDA library and PyTorch extension first, then pass an existing
-extracted v0.02 directory:
-
-```bash
-tests/real_network/run_speech_commands_lstm_test.sh \
-  --dataset-root /path/to/speech_commands_v0.02
+```text
+af14739ee7dc311471de98f5f9d2c9191b18aedfe957f4a6ff791c709868ff58
 ```
 
-Run the complete 35-class dataset gate with:
+校验值来源于
+[TensorFlow Datasets checksums](https://github.com/tensorflow/datasets/blob/1401448b0c6c7aaf12bb5ee666a73fd6898650d1/tensorflow_datasets/datasets/speech_commands/checksums.tsv)。
+仓库没有复制 Google Research 源码或提交 Speech Commands 音频；测试代码只根据公开
+拓扑和数据契约实现独立 PyTorch 版本。
+
+## 2. 对照契约
+
+四个分支共享样本、预计算 MFCC、初始化参数、batch 顺序、optimizer、学习率、epoch、
+loss 和 gradient clipping。唯一变化是 recurrent module：
+
+| 分支 | Recurrent module | 校准 |
+| --- | --- | --- |
+| baseline | CUDA `torch.nn.LSTM` | 无 |
+| native FP32 | `QuantLSTM(use_quantization=False)` | 无 |
+| INT8 QAT | `QuantLSTM` 8-bit q-carrier | SQNR |
+| INT16 QAT | `QuantLSTM` 16-bit q-carrier | MinMax |
+
+QAT 初始校准使用类别平衡的 training subset。每个 epoch 训练结束后刷新 range，再执行
+validation，并把结果用于下一 epoch。Validation 和 testing 样本不参与校准。
+
+快速 profile 使用 `yes`、`no`、`up` 和 `down`，每类选择 128 条 training、32 条
+validation 和 32 条 testing 音频。完整 profile 对 35 个词目录分类，并按照官方
+split 使用全部 105,829 条带标签音频；`_background_noise_` 只单独审计，不作为词类。
+
+MFCC 参数为 16 kHz、1 s、40 ms window、20 ms hop、40 mel bins 和 20 coefficients，
+输出 shape 为 `[batch,49,20]`。特征在 CPU 分块提取和缓存，然后送入 CUDA；该预处理
+不属于 LSTM CPU fallback。
+
+## 3. 运行
+
+前置条件：
+
+- 已按[安装指南](../../docs/installation.md#2-安装-pytorch-cuda-模块)构建 CUDA 核心
+  和 `_quant_lstm` extension；
+- 当前 Python 环境可以导入 `torch`、匹配版本的 `torchaudio` 和 `_quant_lstm`；
+- 运行环境可以访问 CUDA GPU；
+- 数据集目录包含 `validation_list.txt` 和 `testing_list.txt`。
+
+以下命令从仓库根目录执行。
+
+快速 profile：
 
 ```bash
 tests/real_network/run_speech_commands_lstm_test.sh \
-  --dataset-root /path/to/speech_commands_v0.02 \
+  --dataset-root /datasets/speech_commands_v0.02
+```
+
+完整 35 类 profile：
+
+```bash
+tests/real_network/run_speech_commands_lstm_test.sh \
+  --dataset-root /datasets/speech_commands_v0.02 \
   --full-dataset
 ```
 
-The full profile uses 84,843 training, 9,981 validation, and 11,005 testing
-clips. MFCC extraction is chunked and cached in
-`tests/results/speech_commands_v0.02_full_mfcc.pt`; the cache is accepted only
-when the split path digests and feature contract match. Its JSON report is
-`tests/results/speech_commands_lstm_full_training.json` and includes the full
-35x35 confusion matrix plus per-class support, accuracy, precision, recall,
-and F1 for every branch.
-
-To use the script-managed cache and explicitly download the official 2.3 GiB
-archive:
+只有显式传入 `--download` 时，脚本才会下载官方 2.3 GiB archive：
 
 ```bash
 tests/real_network/run_speech_commands_lstm_test.sh --download
 ```
 
-The test requires `torch`, matching `torchaudio`, CUDA, and the built
-`_quant_lstm` extension. It is intentionally excluded from default CI because
-the external dataset is large. The complete JSON report is written to
-`tests/results/speech_commands_lstm_training.json`.
+也可以通过 `QUANT_LSTM_SPEECH_COMMANDS_ROOT` 指定已解压数据集，或通过
+`QUANT_LSTM_SPEECH_COMMANDS_CACHE` 指定下载和解压 cache。
 
-## Acceptance thresholds
+快速 profile 输出：
 
-The test requires all four branches to reduce training loss and update
-parameters, requires both QAT replacements to expose native checkpoints, and
-checks:
+```text
+tests/results/speech_commands_lstm_training.json
+```
 
-- baseline and native-float best validation accuracy >= 55% and final test
-  accuracy >= 60%;
-- native-float best validation accuracy no more than 5 percentage points below
-  baseline;
-- 8-bit QAT best validation and final test accuracy >= 50%, each no more than
-  10 percentage points below baseline;
-- 16-bit QAT best validation and final test accuracy >= 60%, each no more than
-  5 percentage points below baseline;
-- 16-bit QAT validation accuracy exceeds 8-bit by at least 5 percentage points,
-  its test accuracy is no lower than 8-bit, and its three-seed mean test
-  accuracy exceeds 8-bit by at least 2 percentage points;
-- final 16-bit logit MAE against the same trained model's native-float path is
-  less than 10% of the corresponding 8-bit MAE, with cosine >= 0.9999;
-- per-epoch `weight_ih` and `weight_hh` Clamp rates remain below 10%;
-- each QAT epoch reports bias Clamp rates before and after optimizer updates,
-  plus per-channel parameter values, representable ranges, quantization steps,
-  and Clamp decisions before and after calibration refresh;
-- final quantization error includes all 49 recurrent time steps, tail-quarter
-  metrics, P99/max error, normalized errors, and prediction agreement; primary
-  INT8 agreement must be at least 90%, and every quality-gate seed must remain
-  at or above 95%;
-- the trained INT8 model is evaluated with each of the 18 quantization points
-  promoted to INT16 in isolation, using fresh balanced calibration and the same
-  fixed model weights, then ranked by logit MAE improvement;
-- a fixed-weight calibration matrix compares MinMax, Percentile, and SQNR with
-  128 and 512 balanced training samples at both 8 and 16 bits; every entry
-  reports per-operator range/resolution, test-set Clamp rates, and logit error.
-  Paired INT16 cases must provide at least 166x finer cell-state resolution,
-  less than 1% of the INT8 logit MAE, and MAE below one INT16 cell-state step;
-- a balanced real training batch drives cross-entropy gradients through the
-  classifier into CUDA QAT backward; all seven LSTM gradients are checked
-  against the independent Python checkpoint/STE oracle with a `5e-6` maximum
-  absolute-error gate;
-- three deterministic initialization and batch-order seeds must all reduce
-  training loss; aggregate gates cover worst-case test accuracy, INT8
-  prediction agreement, and the mean INT16-over-INT8 accuracy advantage;
-- every initial and refreshed calibration uses 32 samples from each label;
-- neither calibration safety report contains a non-finite unsafe entry.
+完整 profile 输出：
 
-These thresholds were revalidated after moving calibration collection to CUDA
-and selecting SQNR for INT8 QAT on 2026-09-21 with an NVIDIA RTX 6000D, PyTorch
-2.13.0+cu130, and seed 20260921:
+```text
+tests/results/speech_commands_v0.02_full_mfcc.pt
+tests/results/speech_commands_lstm_full_training.json
+```
 
-| Metric | `torch.nn.LSTM` | Native FP32 | 8-bit QAT | 16-bit QAT |
-|---|---:|---:|---:|---:|
+完整 profile 的 feature cache 只有在 split path digest 和特征契约都匹配时才会复用。
+JSON report 包含训练曲线、validation/test 指标、35x35 confusion matrix、逐类指标、
+参数更新、校准诊断和 native QAT checkpoint 证据。测试进程退出码为 0 且全部断言通过
+表示验收成功。数据、cache 和报告位于 Git 忽略目录。
+
+## 4. 快速 Profile 门禁
+
+测试要求四个分支都降低训练 loss 并更新参数，两个 QAT 分支必须产生 native
+checkpoint。核心阈值为：
+
+| 指标 | 门禁 |
+| --- | --- |
+| baseline 与 native FP32 best validation | `>=55%` |
+| baseline 与 native FP32 final test | `>=60%` |
+| native FP32 相对 baseline validation 降幅 | `<=5` percentage points |
+| INT8 best validation 与 final test | `>=50%`，相对 baseline 降幅 `<=10` points |
+| INT16 best validation 与 final test | `>=60%`，相对 baseline 降幅 `<=5` points |
+| INT16 相对 INT8 | validation 至少高 `5` points，test 不低于 INT8，三 seed mean test 至少高 `2` points |
+| INT16 logit MAE | 小于 INT8 的 `10%`，cosine `>=0.9999` |
+| INT8 prediction agreement | primary `>=90%`，每个 quality seed `>=95%` |
+| weight Clamp rate | 每个 epoch 的 `weight_ih/weight_hh <10%` |
+| CUDA QAT backward | 七组梯度相对独立 oracle 最大绝对误差 `<=5e-6` |
+
+扩展诊断还要求：
+
+- 报告 49 个时间步、末四分之一、P99/max 和 normalized error；
+- 用固定 INT8 权重逐一把 18 个量化点提升为 INT16，并按 logit MAE 收益排序；
+- 使用 128/512 个平衡样本比较 MinMax、Percentile、SQNR 的 8/16-bit 校准矩阵；
+- 配对 INT16 case 的 cell-state resolution 至少细 166 倍，logit MAE 小于 INT8 的
+  `1%`，且小于一个 INT16 cell-state step；
+- 每轮校准每类使用 32 个样本，safety report 不含 non-finite unsafe entry；
+- seed `20260921`、`20260922` 和 `20260923` 均降低训练 loss。
+
+## 5. 可复现实测结果
+
+快速 profile 使用 NVIDIA RTX 6000D、PyTorch 2.13.0+cu130、10 epochs 和 primary
+seed `20260921`：
+
+| Metric | `torch.nn.LSTM` | Native FP32 | INT8 QAT | INT16 QAT |
+| --- | ---: | ---: | ---: | ---: |
 | Initial train loss | 1.38985 | 1.38985 | 1.38983 | 1.38985 |
 | Final train loss | 0.90363 | 0.93811 | 0.91254 | 0.89466 |
 | Best validation accuracy | 59.38% | 59.38% | 57.03% | 67.19% |
 | Final test accuracy | 64.06% | 67.97% | 65.63% | 67.19% |
 | Parameter update norm | 7.82258 | 7.93028 | 9.01713 | 8.09350 |
-| Logit MAE vs own native-float path | N/A | N/A | 0.017390 | 0.000098 |
+| Logit MAE vs own native path | N/A | N/A | 0.017390 | 0.000098 |
 | Prediction agreement | N/A | N/A | 99.22% | 100% |
 
-The fixed-weight INT8-to-INT16 ablation identifies `cell_state`, `bias_ih`, and
-`bias_hh` as the three largest individual logit-MAE contributors. Promoting all
-points reduces MAE to `0.000080`. The recurrent sequence MAE peaks at time step
-13 rather than at the tail; the first, last, and final-quarter MAEs are
-`0.012161`, `0.010907`, and `0.011209`, respectively.
+三个 seed 的最低 test accuracy 为 PyTorch 59.38%、INT8 54.69%、INT16 60.94%；
+INT8/INT16 mean test accuracy 为 60.68% 和 65.10%。真实 batch CUDA backward 的
+最大绝对误差为 `1.31e-8`。
 
-The calibration matrix confirms that additional MinMax samples can hurt INT8
-resolution. Expanding from 128 to 512 samples increases the `cell_state` step
-from `0.11037` to `0.14530` and logit MAE from `0.02149` to `0.03128`.
-Percentile with 512 samples narrows that step to `0.10789` and reduces MAE to
-`0.02040`. All paired INT16 cases remain below 1% of INT8 MAE and below one
-INT16 cell-state quantization step.
+完整 profile 使用相同 GPU、seed `20260921`、10 epochs、hidden size 64 和 batch
+size 256。官方 split 包含 84,843 条 training、9,981 条 validation 和 11,005 条
+testing 音频，split overlap 为 0：
 
-On the real-batch backward check, the largest CUDA-versus-oracle absolute error
-is `1.31e-8`. Across seeds `20260921`, `20260922`, and `20260923`, minimum test
-accuracies are `59.38%` for PyTorch, `54.69%` for INT8, and `60.94%` for INT16.
-Mean INT8/INT16 test accuracies are `60.68%` and `65.10%`; INT8 prediction
-agreement remains at least `96.09%`, while INT16 is `100%` for all three seeds.
-
-The thresholds leave several samples of accuracy headroom while rejecting
-stale calibration, a broken QAT backward path, and an INT16 path that does not
-provide a measurable advantage over INT8.
-
-The 8-bit calibration has 518 `exact_integer_range` entries and no precision
-risk. The 16-bit calibration has 5 exact entries, 513 `precision_risk` entries,
-and no non-finite unsafe entries. This is expected for the FP32 integer carrier:
-16-bit products and accumulations can exceed FP32's exact integer range of
-`2^24`. The warning is retained in the JSON safety report as required by the
-quantized execution specification; it does not select a CPU or floating-point
-LSTM fallback.
-
-## Full-dataset result
-
-The complete 35-class profile was run on 2026-09-21 with seed `20260921`, ten
-epochs, hidden size 64, and batch size 256. Dataset audit reported 105,829
-selected word samples, zero omitted samples, and zero split overlap.
-
-| Metric | `torch.nn.LSTM` | Native FP32 | 8-bit QAT | 16-bit QAT |
-|---|---:|---:|---:|---:|
+| Metric | `torch.nn.LSTM` | Native FP32 | INT8 QAT | INT16 QAT |
+| --- | ---: | ---: | ---: | ---: |
 | Best validation accuracy | 90.18% | 89.94% | 86.90% | 87.86% |
 | Final test accuracy | 89.09% | 89.13% | 85.16% | 86.96% |
 | Test macro F1 | 0.8815 | 0.8813 | 0.8390 | 0.8628 |
 | Logit MAE vs own native path | N/A | N/A | 0.562870 | 0.003233 |
 | Prediction agreement | N/A | N/A | 92.24% | 99.94% |
 
-All branches reduced training loss. The 256-sample balanced real-batch CUDA
-backward check had a maximum absolute gradient error of `3.73e-9`. INT16 logit
-MAE was 0.58% of INT8 MAE, so the full-data result independently distinguishes
-the two bitwidth paths. Extended 18-operator ablation and the 12-case
-calibration matrix remain in the fast regression instead of multiplying those
-diagnostics across the full test split.
+完整 profile 的真实 batch backward 最大绝对误差为 `3.73e-9`。INT16 logit MAE
+为 INT8 的 0.58%，因此完整数据结果可以区分两个位宽路径。上述结果只适用于列出的
+数据、训练参数、软件和 GPU 环境，不构成其他模型或硬件上的精度保证。
+
+INT16 q-carrier 的部分乘积和累加可能超过 FP32 精确整数范围 `2^24`。报告保留
+`precision_risk`，但没有 non-finite unsafe entry，也不会选择 CPU 或浮点 fallback。

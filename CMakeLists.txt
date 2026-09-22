@@ -436,10 +436,24 @@ install(
 install(
     FILES
         README.md
-        docs/configuration.md
-        docs/dual-carrier-execution.md
-        docs/quantized-execution-spec.md
+        CHANGELOG.md
+        CONTRIBUTING.md
     DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/quant-lstm
+)
+install(
+    DIRECTORY docs/
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/quant-lstm/docs
+    FILES_MATCHING PATTERN "*.md"
+)
+install(
+    FILES
+        tests/README.md
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/quant-lstm/tests
+)
+install(
+    FILES
+        tests/real_network/README.md
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/quant-lstm/tests/real_network
 )
 
 
