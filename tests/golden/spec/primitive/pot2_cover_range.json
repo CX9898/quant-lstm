@@ -36,7 +36,7 @@
         "data": [
           "0.0078125",
           "0.0078125",
-          "0.015625",
+          "0.0078125",
           "1.1920929e-07",
           "0.015625"
         ]
@@ -44,11 +44,11 @@
       "zero_point": {"dtype": "int32", "shape": [5], "data": [0, -128, 0, 0, 64]}
     },
     "diagnostics": {
-      "exponent": {"dtype": "int8", "shape": [5], "data": [7, 7, 6, 23, 6]},
+      "exponent": {"dtype": "int8", "shape": [5], "data": [7, 7, 7, 23, 6]},
       "range_is_near_power_of_two": {
         "dtype": "bool",
         "shape": [5],
-        "data": [true, true, false, true, true]
+        "data": [true, true, true, true, true]
       },
       "fallback_used": {
         "dtype": "bool",

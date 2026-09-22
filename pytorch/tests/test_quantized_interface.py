@@ -1,6 +1,7 @@
 """阶段 6 QuantLSTM CUDA FP32 q-carrier 接口验收。"""
 
 import json
+import math
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -308,38 +309,47 @@ class QuantizedInterfaceTest(unittest.TestCase):
         self.assertEqual(imported.get_quant_config(), module.get_quant_config())
 
     @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
-    def test_gru_compatible_pot2_metadata_roundtrip(self):
-        module = QuantLSTM(2, 3, device="cuda")
-        initialize_module(module)
-        calibrate(module, deterministic_tensor((2, 1, 2), device="cuda"), None)
-        document = module.export_quant_params()
-        document["model_info"]["use_pot2_scale"] = True
-        document["execution_metadata"]["standard_scale_mode"] = "pot2"
+    def test_gru_compatible_pot2_calibration_roundtrip(self):
+        for method in ("minmax", "sqnr", "percentile"):
+            for bitwidth in (8, 16):
+                with self.subTest(method=method, bitwidth=bitwidth):
+                    module = QuantLSTM(
+                        2,
+                        3,
+                        device="cuda",
+                        calibration_method=method,
+                        quant_config={
+                            "schema_version": 1,
+                            "scale_mode": "pot2",
+                        },
+                    )
+                    module.set_all_bitwidth(bitwidth)
+                    initialize_module(module)
+                    calibrate(
+                        module,
+                        deterministic_tensor((2, 1, 2), device="cuda"),
+                        None,
+                    )
+                    document = module.export_quant_params()
+                    self.assertTrue(document["model_info"]["use_pot2_scale"])
+                    self.assertEqual(
+                        document["execution_metadata"]["standard_scale_mode"],
+                        "pot2",
+                    )
+                    for operator in document["operators"].values():
+                        scales = operator["scale"]
+                        if not isinstance(scales, list):
+                            scales = [scales]
+                        self.assertTrue(
+                            all(math.frexp(scale)[0] == 0.5 for scale in scales)
+                        )
 
-        for operator in document["operators"].values():
-            count = len(operator["scale"]) if isinstance(operator["scale"], list) else 1
-            is_unsigned = operator["dtype"].startswith("UINT")
-            minimum = 0 if is_unsigned else -127
-            maximum = 255 if is_unsigned else 127
-            scales = [0.125] * count
-            zero_points = [0] * count
-            real_minimums = [minimum * 0.125] * count
-            real_maximums = [maximum * 0.125] * count
-            if count == 1:
-                operator["scale"] = scales[0]
-                operator["zero_point"] = zero_points[0]
-                operator["real_min"] = real_minimums[0]
-                operator["real_max"] = real_maximums[0]
-            else:
-                operator["scale"] = scales
-                operator["zero_point"] = zero_points
-                operator["real_min"] = real_minimums
-                operator["real_max"] = real_maximums
-
-        imported = QuantLSTM(2, 3)
-        imported.load_quant_params(document)
-        self.assertEqual(imported.get_quant_config()["scale_mode"], "pot2")
-        self.assertEqual(imported.export_quant_params(), document)
+                    imported = QuantLSTM(2, 3)
+                    imported.load_quant_params(document)
+                    self.assertEqual(
+                        imported.get_quant_config()["scale_mode"], "pot2"
+                    )
+                    self.assertEqual(imported.export_quant_params(), document)
 
     @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_bias_disabled_bundle_omits_bias_operators(self):

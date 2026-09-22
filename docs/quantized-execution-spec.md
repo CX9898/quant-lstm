@@ -124,9 +124,12 @@ qmax = 2^(b-1) - 1
 qmin = -qmax
 S = max(abs(r_min), abs(r_max)) / qmax
 Z = 0
+adjusted_range = [-qmax*S, qmax*S]
 ```
 
-INT8 为 `[-127,127]`，INT16 为 `[-32767,32767]`。二进制补码最小负值在该模式非法。四组 weight/bias 强制使用此模式，所有 `4H` zero point 均为 0。
+`adjusted_range` 始终从最终 FP32 standard scale 重建，即使原始观测范围是非零常量；
+POT2 CoverRange 不得直接使用退化的原始 `[v,v]`。INT8 为 `[-127,127]`，INT16 为
+`[-32767,32767]`。二进制补码最小负值在该模式非法。四组 weight/bias 强制使用此模式，所有 `4H` zero point 均为 0。
 
 ### 5.2 Signed asymmetric
 

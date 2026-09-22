@@ -74,21 +74,20 @@ CalibrationResult calibrateMinMax(float range_minimum, float range_maximum,
     }
 
     const bool fallback_used = candidate_scale < static_cast<double>(minimum_scale);
-    float scale = 0.0F;
-    if (fallback_used) {
-        scale = minimum_scale;
-        if (type.is_symmetric && !type.is_unsigned) {
-            adjusted_minimum = -static_cast<float>(quantized_range.maximum) * minimum_scale;
-            adjusted_maximum = static_cast<float>(quantized_range.maximum) * minimum_scale;
-        } else if (type.is_symmetric) {
-            adjusted_minimum = 0.0F;
-            adjusted_maximum = static_cast<float>(quantized_range.maximum) * minimum_scale;
-        } else {
-            adjusted_minimum = std::min(range_minimum, 0.0F);
-            adjusted_maximum = adjusted_minimum + static_cast<float>(steps) * minimum_scale;
-        }
+    const float scale = fallback_used ? minimum_scale : checkedScale(candidate_scale);
+
+    // Match GRU's ContinuousScaleResult: CoverRange consumes the range represented by the
+    // finalized FP32 scale, not the possibly constant observed range.
+    if (type.is_symmetric && !type.is_unsigned) {
+        const float extent = static_cast<float>(quantized_range.maximum) * scale;
+        adjusted_minimum = -extent;
+        adjusted_maximum = extent;
+    } else if (type.is_symmetric) {
+        adjusted_minimum = 0.0F;
+        adjusted_maximum = static_cast<float>(quantized_range.maximum) * scale;
     } else {
-        scale = checkedScale(candidate_scale);
+        adjusted_minimum = std::min(range_minimum, 0.0F);
+        adjusted_maximum = adjusted_minimum + static_cast<float>(steps) * scale;
     }
 
     const std::int32_t zero_point =

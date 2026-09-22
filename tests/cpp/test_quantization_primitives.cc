@@ -84,6 +84,20 @@ int main() {
                 "signed symmetric scale");
         require(q::quantize(12.7F, signed_calibration.param, signed_symmetric_8) == 127,
                 "signed quantize boundary");
+        for (const float constant : {-0.25F, 0.25F}) {
+            const auto constant_calibration =
+                q::calibrateMinMax(constant, constant, signed_symmetric_8);
+            const float extent = static_cast<float>(signed_symmetric_8.range().maximum) *
+                                 constant_calibration.param.scale;
+            require(!constant_calibration.diagnostics.fallback_used &&
+                        constant_calibration.diagnostics.adjusted_min == -extent &&
+                        constant_calibration.diagnostics.adjusted_max == extent,
+                    "signed symmetric constant range must align around zero");
+            const auto constant_pot =
+                q::convertScaleToPot2CoverRange(constant_calibration, signed_symmetric_8);
+            require(constant_pot.param.scale > 0.0F && constant_pot.param.zero_point == 0,
+                    "POT2 constant signed symmetric calibration");
+        }
 
         const auto unsigned_calibration = q::calibrateMinMax(-2.0F, 1.0F, unsigned_symmetric_8);
         require(q::quantize(-1.0F, unsigned_calibration.param, unsigned_symmetric_8) == 0,
