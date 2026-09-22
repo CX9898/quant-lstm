@@ -34,7 +34,7 @@ cmake -S . -B build \
   -DQUANT_LSTM_BUILD_TESTS=OFF \
   -DQUANT_LSTM_BUILD_EXAMPLES=OFF
 cmake --build build --parallel
-python -m pip install --editable ./pytorch --no-build-isolation
+python -m pip install ./pytorch --no-build-isolation
 ```
 
 安装成功后，在可访问 CUDA GPU 的环境运行：
@@ -53,8 +53,9 @@ print("QuantLSTM CUDA FP32 forward passed")
 PY
 ```
 
-上述 Python 安装是源码可编辑安装，源码目录需要保留。C++ 安装、自定义 prefix、
-CPU-only package、Docker 环境和卸载方式见[安装指南](docs/installation.md)。
+安装完成后，Python 模块、native extension 和默认配置都位于目标 Python 环境，运行
+时不需要保留源码目录。构建 wheel、C++ 安装、自定义 prefix、CPU-only package、
+Docker 环境和卸载方式见[安装指南](docs/installation.md)。
 
 ## 文档
 
@@ -71,7 +72,8 @@ CPU-only package、Docker 环境和卸载方式见[安装指南](docs/installati
 
 ## 状态与限制
 
-- Python package 尚未发布到 PyPI，也未提供脱离源码树的独立 wheel。
+- Python package 尚未发布到 PyPI；wheel 需要从源码构建，并与目标 Python、PyTorch
+  和 CUDA ABI 匹配。
 - PyTorch 接口仅支持 `num_layers=1`、`dropout=0` 和 `torch.float32`。
 - ONNX 导出表达浮点 LSTM 语义，不携带 q-carrier 参数或 QAT Clamp mask。
 - CUDA int32 backend 和整数 sigmoid/tanh LUT 尚未实现。

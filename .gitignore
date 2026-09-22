@@ -4,6 +4,7 @@
 /cmake-build-*/
 /pytorch/build/
 /pytorch/tests/build/
+*.egg-info/
 
 # Python 缓存和本地扩展产物
 __pycache__/

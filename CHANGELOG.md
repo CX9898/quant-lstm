@@ -13,6 +13,7 @@
 - CPU FP32 q-carrier 与 CPU int32 carrier reference。
 - 标准 ONNX `LSTM` 导出、CMake package 和 CPU-only 外部 consumer 验证。
 - Speech Commands v0.02 快速与完整数据集训练门禁。
+- 可脱离源码目录安装的 Python wheel，包含 native extension 和默认量化配置。
 
 ### Changed
 
@@ -23,6 +24,7 @@
 ### Known limitations
 
 - Python runtime 只支持 CUDA FP32 tensor、单层 LSTM 和 `dropout=0`。
-- Python package 目前只支持源码可编辑安装，尚未发布独立 wheel。
+- Python package 尚未发布到 PyPI；wheel 需要在兼容的 Python、PyTorch 和 CUDA
+  构建环境中生成。
 - CPU int32 reference 的 sigmoid/tanh 使用浮点函数；CUDA int32 backend 尚未实现。
 - 仓库尚未声明许可证。

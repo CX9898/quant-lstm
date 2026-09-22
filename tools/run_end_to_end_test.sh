@@ -142,6 +142,10 @@ printf '\n==> Run PyTorch functional and strict suites\n'
     tests.test_onnx_export
 )
 
+run_step "Validate standalone Python wheel installation" \
+  "${python_bin}" "${root_dir}/tests/package/test_python_wheel_install.py" \
+    --source-root "${root_dir}"
+
 if [[ "${run_cuda_validation}" -eq 1 ]]; then
   artifact_root="${build_dir}/stage4-validation-results"
   marker="$(mktemp "${build_dir}/.stage4-e2e-marker.XXXXXX")"

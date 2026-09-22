@@ -115,8 +115,9 @@ CMake 构建 `quant_lstm` 静态库，并根据选项加入 CUDA 源码。安装
 - 默认配置、JSON Schema 和公开文档；
 - 可选 C++ 示例。
 
-Python extension 通过 `pytorch/setup.py` 链接 `build/libquant_lstm.a`。当前 Python
-交付方式是源码可编辑安装；独立 wheel 发布尚未接入。完整命令见
+Python extension 通过 `pytorch/setup.py` 链接 `build/libquant_lstm.a`。wheel 包含
+Python 模块、native extension 和默认配置，安装后不依赖源码目录。项目尚未发布
+PyPI package，wheel 由用户在兼容环境中从源码构建。完整命令见
 [安装指南](installation.md)。
 
 ## 7. 验证策略
@@ -141,7 +142,8 @@ Golden schema、测试矩阵和阈值入库。构建产物、运行日志和逐�
   和性能收益明确后才会启动。
 - 静态参数缓存由 generation key 显式失效。调用方修改 master 参数后必须更新 key。
 - ONNX 导出只表达浮点 LSTM，不序列化量化执行细节。
-- Python wheel 尚未形成可独立分发的制品，源码可编辑安装依赖仓库布局。
+- Python wheel 与构建时的 Python、PyTorch C++ ABI、平台和 CUDA 依赖绑定，需要在
+  兼容环境之间分发。
 
 CUDA-only Python runtime 的设计理由记录在
 [ADR-0001](adr/0001-cuda-only-python-runtime.md)。新的跨模块设计决策应新增 ADR；

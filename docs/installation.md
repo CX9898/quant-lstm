@@ -31,8 +31,8 @@ CUDA Toolkit、驱动和 CUDA-enabled PyTorch 需要按照目标 GPU 和 PyTorch
 
 ## 2. 安装 PyTorch CUDA 模块
 
-当前 Python package 支持源码可编辑安装。以下命令均从仓库根目录执行，且原生核心
-必须构建到固定的 `build/` 目录，因为 `pytorch/setup.py` 从该目录链接
+Python package 支持普通环境安装和 wheel 安装。以下构建命令均从仓库根目录执行，
+且原生核心必须构建到固定的 `build/` 目录，因为 `pytorch/setup.py` 从该目录链接
 `libquant_lstm.a`。
 
 ```bash
@@ -47,12 +47,39 @@ cmake -S . -B build \
   -DQUANT_LSTM_BUILD_TESTS=OFF \
   -DQUANT_LSTM_BUILD_EXAMPLES=OFF
 cmake --build build --parallel
-python -m pip install --editable ./pytorch --no-build-isolation
+python -m pip install ./pytorch --no-build-isolation
 ```
 
 `--no-build-isolation` 使 extension 使用当前环境中已经安装且与 CUDA 匹配的
-PyTorch。可编辑安装保留 `pytorch/quant_lstm.py` 与仓库中的默认配置文件之间的
-路径关系，因此源码目录不能在安装后删除或移动。
+PyTorch。pip 构建并安装包含 Python 模块、`_quant_lstm` native extension 和默认
+量化配置的 wheel。安装完成后可以删除或移动源码目录。
+
+需要把 wheel 复制到另一台 ABI 兼容的机器时，先生成制品：
+
+```bash
+python -m pip wheel \
+  --no-build-isolation \
+  --no-deps \
+  --wheel-dir dist \
+  ./pytorch
+```
+
+输出文件类似：
+
+```text
+dist/quant_lstm-0.1.0-cp312-cp312-linux_x86_64.whl
+```
+
+在目标环境预先安装兼容的 CUDA-enabled PyTorch，再安装 wheel：
+
+```bash
+python -m pip install \
+  dist/quant_lstm-0.1.0-cp312-cp312-linux_x86_64.whl
+```
+
+wheel 绑定构建时的 Python ABI、平台、PyTorch C++ ABI 和 CUDA 依赖，不能跨不兼容
+环境复用。项目没有让 pip 自动选择 PyTorch CUDA variant，因此 PyTorch 必须由用户
+根据目标环境先行安装。
 
 在可访问 CUDA GPU 的环境执行验证：
 
@@ -76,13 +103,13 @@ PY
 extension、CUDA Runtime 和 native FP32 forward 已正确加载。该检查使用随机输入，
 只验证安装和接口，不用于量化校准。
 
-卸载可编辑 package：
+卸载 package：
 
 ```bash
 python -m pip uninstall quant-lstm
 ```
 
-项目尚未发布 PyPI package，也未生成可脱离源码树分发的 wheel。
+项目尚未发布 PyPI package。wheel 需要按照本节命令从源码构建。
 
 ## 3. 安装 CUDA C++ package
 
@@ -178,7 +205,7 @@ docker run --rm -it --gpus all \
   quant-lstm:cuda
 ```
 
-容器进入 `/workspace`。挂载目录后，按照第 2 节执行 CMake 构建和可编辑安装。
+容器进入 `/workspace`。挂载目录后，按照第 2 节执行 CMake 构建和普通环境安装。
 宿主机需要 NVIDIA Container Toolkit，且驱动需要支持镜像内 CUDA Runtime。
 
 ## 6. 常见安装错误
@@ -187,7 +214,7 @@ docker run --rm -it --gpus all \
 | --- | --- |
 | `未找到 CUDA 编译器` | `QUANT_LSTM_ENABLE_CUDA=ON`，但 `nvcc` 不在 `PATH` 或 CUDA Toolkit 未安装 |
 | `未找到 build/libquant_lstm.a` | Python extension 构建前未在固定 `build/` 目录完成 CMake 构建 |
-| `_quant_lstm 扩展未找到` | 可编辑安装或 `build_ext --inplace` 尚未完成，或当前 Python 环境不是构建环境 |
+| `_quant_lstm 扩展未找到` | wheel 安装尚未完成、当前 Python 环境错误，或 extension 与 Python ABI 不匹配 |
 | `PyTorch ... 只支持 CUDA input` | 输入或状态位于 CPU；将模块、输入和状态移动到 CUDA |
 | `Could not find quant-lstm` | 下游没有设置安装 prefix 的 `CMAKE_PREFIX_PATH` |
 | `Could not find CUDAToolkit` | 下游正在消费 CUDA package，但 CMake 无法定位 CUDA Toolkit |

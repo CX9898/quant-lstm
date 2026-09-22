@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import struct
+import sysconfig
 import warnings
 from pathlib import Path
 from typing import Any, Optional
@@ -16,8 +17,8 @@ try:
     import _quant_lstm
 except ImportError as exc:
     raise ImportError(
-        "_quant_lstm 扩展未找到；请先构建 CMake 核心并运行 "
-        "python setup.py build_ext --inplace"
+        "_quant_lstm 扩展未找到；请安装 quant-lstm wheel，或先构建 CMake "
+        "核心再构建 Python extension"
     ) from exc
 
 from lstm_autograd import float_lstm, quantized_lstm
@@ -27,11 +28,29 @@ from lstm_onnx import (
 )
 
 
-_DEFAULT_CONFIG_PATH = (
+_SOURCE_DEFAULT_CONFIG_PATH = (
     Path(__file__).resolve().parent.parent
     / "config"
     / "defaults"
     / "lstm_quant_default_v1.json"
+)
+_INSTALLED_DEFAULT_CONFIG_PATH = (
+    Path(sysconfig.get_path("data"))
+    / "share"
+    / "quant-lstm"
+    / "config"
+    / "lstm_quant_default_v1.json"
+)
+_DEFAULT_CONFIG_PATH = next(
+    (
+        path
+        for path in (
+            _SOURCE_DEFAULT_CONFIG_PATH,
+            _INSTALLED_DEFAULT_CONFIG_PATH,
+        )
+        if path.is_file()
+    ),
+    _INSTALLED_DEFAULT_CONFIG_PATH,
 )
 _PARAMETER_OPERATORS = {"weight_ih", "weight_hh", "bias_ih", "bias_hh"}
 _CALIBRATION_METHODS = {"minmax", "sqnr", "percentile"}

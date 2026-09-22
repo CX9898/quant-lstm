@@ -10,6 +10,6 @@
 | `lib/lstm_interface_binding.cc` | PyTorch 与 C++/CUDA 核心边界 |
 | `tests/` | Python 接口、backward、STE、双向和 ONNX 验证 |
 
-Python 层不实现生产 LSTM 公式，也不提供 CPU fallback。源码可编辑安装方式见
+Python 层不实现生产 LSTM 公式，也不提供 CPU fallback。普通安装和 wheel 构建见
 [安装指南](../docs/installation.md#2-安装-pytorch-cuda-模块)，用户配置与校准流程见
 [配置参考](../docs/configuration.md)。
