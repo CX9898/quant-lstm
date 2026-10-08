@@ -20,6 +20,7 @@
 
 ### Changed
 
+- 开发约定和测试范围合并至文档导航与测试说明，安装文档同步调整。
 - 公共量化参数统一使用 `model_info`、`operators`、可选
   `operators_reverse` 和 operator 级 standard scale/zp。
 - POT2 CoverRange 对退化校准范围复用统一 minimum-scale fallback。

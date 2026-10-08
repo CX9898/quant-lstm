@@ -11,5 +11,6 @@
 | `golden_reference_generator.cc` | 生成 reference Golden 数据 |
 | `strict_jsonschema.py` | 严格 JSON Schema 校验辅助模块 |
 
-脚本均从仓库根目录调用。端到端命令、依赖和成功判定见
-[贡献指南](../CONTRIBUTING.md)及[CUDA 性能验收](../docs/cuda-performance.md)。
+脚本均从仓库根目录调用。环境依赖见[安装指南](../docs/installation.md)，验证范围和
+命令见[测试说明](../tests/README.md#按改动范围验证)及
+[CUDA 性能验收](../docs/cuda-performance.md)。

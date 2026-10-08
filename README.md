@@ -67,7 +67,7 @@ Docker 环境和卸载方式见[安装指南](docs/installation.md)。
 - [量化公式推导](docs/lstm-quantization-formula-derivation.md)：公式、舍入和误差来源。
 - [ONNX 导出](docs/onnx-export.md)：标准 ONNX `LSTM` 导出接口。
 - [CUDA 性能验收](docs/cuda-performance.md)：测量条件、结果和版本化阈值。
-- [贡献指南](CONTRIBUTING.md)：开发环境、测试范围和提交要求。
+- [开发约定](docs/README.md#开发约定)：代码、提交和文档维护要求。
 - [变更记录](CHANGELOG.md)：未发布和正式版本的用户可见变化。
 
 ## 状态与限制
