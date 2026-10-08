@@ -142,10 +142,22 @@ checkpoint。核心阈值为：
 - 使用 128/512 个平衡样本比较 MinMax、Percentile、SQNR 的 8/16-bit 校准矩阵；
 - 配对 INT16 case 的 cell-state resolution 至少细 166 倍，logit MAE 小于 INT8 的
   `1%`，且小于一个 INT16 cell-state step；
-- 每轮校准每类使用 32 个样本，safety report 不含 non-finite unsafe entry；
+- 训练前仅校准一次，每类使用 32 个样本，safety report 不含 non-finite unsafe entry；
+- QAT 全程固定初始 PTQ 的 scale、zero point、位宽与范围；每轮核对量化参数未变化，
+  验证和最终推理复用同一套参数，报告记录 `quant_params_sha256`；
 - seed `20260921`、`20260922` 和 `20260923` 均降低训练 loss。
 
-## 5. 可复现实测结果
+## 5. 历史实测结果（逐轮重校准协议）
+
+以下历史数字来自旧的逐轮重校准协议，不代表当前固定 PTQ 参数的 QAT 结果。
+当前报告 schema 为 9，已移除 `--calibration-refresh-epochs` 和同名配置字段。
+权重更新仍会重新执行量化，但不会重新估计量化参数。
+
+固定参数 CUDA 回归（涵盖 INT8、INT16、cell_state INT16，以及训练后保存/加载）：
+
+```bash
+PYTHONPATH=pytorch:tests/real_network python tests/real_network/test_qat_fixed_quant_params.py
+```
 
 快速 profile 使用 NVIDIA RTX 6000D、PyTorch 2.13.0+cu130、10 epochs 和 primary
 seed `20260921`：

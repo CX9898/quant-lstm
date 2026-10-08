@@ -96,6 +96,7 @@ if not torch.cuda.is_available():
 PY
 
 export QUANT_LSTM_SPEECH_COMMANDS_ROOT="${dataset_root}"
+"${python_bin}" "${root_dir}/tests/real_network/test_qat_fixed_quant_params.py"
 if [[ "${full_dataset}" -eq 1 ]]; then
   export QUANT_LSTM_RUN_FULL_SPEECH_COMMANDS=1
   "${python_bin}" \

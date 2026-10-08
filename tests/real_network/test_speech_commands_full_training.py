@@ -51,7 +51,6 @@ class SpeechCommandsFullTrainingTest(unittest.TestCase):
                 epochs=10,
                 learning_rate=3.0e-3,
                 calibration_batches=4,
-                calibration_refresh_epochs=1,
                 quant_bitwidths=(8, 16),
                 seed=20260921,
                 quality_gate_seeds=(20260921,),
@@ -155,6 +154,15 @@ class SpeechCommandsFullTrainingTest(unittest.TestCase):
             (16, "quant_lstm_qat_16bit"),
         ):
             calibration = calibrations[name]
+            trained = report["training"][name]
+            self.assertEqual(trained["quant_params_policy"], "fixed_after_ptq")
+            self.assertEqual(len(trained["quant_params_sha256"]), 64)
+            self.assertTrue(
+                all(
+                    epoch["quant_params_sha256"] == trained["quant_params_sha256"]
+                    for epoch in trained["epochs"]
+                )
+            )
             self.assertEqual(calibration["sample_count"], 1_024)
             self.assertEqual(sum(calibration["label_counts"]), 1_024)
             self.assertLessEqual(

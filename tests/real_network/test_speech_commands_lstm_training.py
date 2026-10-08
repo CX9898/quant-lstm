@@ -108,7 +108,6 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
                 epochs=10,
                 learning_rate=3.0e-3,
                 calibration_batches=4,
-                calibration_refresh_epochs=1,
                 quant_bitwidths=(8, 16),
                 seed=20260921,
                 quality_gate_seeds=(20260921, 20260922, 20260923),
@@ -126,7 +125,7 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
             bitwidth: report["training"][f"quant_lstm_qat_{bitwidth}bit"]
             for bitwidth in (8, 16)
         }
-        self.assertEqual(report["schema_version"], 8)
+        self.assertEqual(report["schema_version"], 9)
         self.assertEqual(report["replacement"]["changed_module"], "lstm")
         self.assertEqual(report["quantization"]["bitwidths"], [8, 16])
         backward_oracle = report["quantization"]["real_batch_backward_oracle"]
@@ -158,8 +157,8 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
             report["quantization"]["calibration_strategy"],
             {
                 "selection": "balanced_round_robin",
-                "refresh_interval_epochs": 1,
-                "refresh_timing": "after_training_before_validation",
+                "quant_params_policy": "fixed_after_ptq",
+                "calibration_timing": "before_training_only",
                 "methods_by_bitwidth": {"8": "sqnr", "16": "minmax"},
             },
         )
@@ -294,11 +293,12 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
                     baseline["final_test_accuracy"]
                     - quality_thresholds[bitwidth]["maximum_baseline_gap"],
                 )
-                self.assertEqual(len(quantized["calibration_refreshes"]), 10)
+                self.assertEqual(quantized["quant_params_policy"], "fixed_after_ptq")
+                self.assertEqual(len(quantized["quant_params_sha256"]), 64)
                 self.assertTrue(
                     all(
-                        refresh["label_counts"] == [32, 32, 32, 32]
-                        for refresh in quantized["calibration_refreshes"]
+                        epoch["quant_params_sha256"] == quantized["quant_params_sha256"]
+                        for epoch in quantized["epochs"]
                     )
                 )
                 for epoch in quantized["epochs"]:
@@ -318,7 +318,7 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
                         )
                     ranges = epoch["qat_bias_ranges"]
                     self.assertEqual(
-                        set(ranges), {"before_refresh", "after_refresh"}
+                        set(ranges), {"post_step"}
                     )
                     for timing in ranges.values():
                         for name in ("bias_ih", "bias_hh"):
@@ -333,8 +333,6 @@ class SpeechCommandsLstmTrainingTest(unittest.TestCase):
                             self.assertGreater(
                                 diagnostic["quantization_step_min"], 0.0
                             )
-                    for diagnostic in ranges["after_refresh"].values():
-                        self.assertEqual(diagnostic["clamp_rate"], 0.0)
 
         quantized_8 = quantized_variants[8]
         quantized_16 = quantized_variants[16]

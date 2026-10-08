@@ -91,7 +91,6 @@ class ExperimentConfig:
     epochs: int = 10
     learning_rate: float = 3.0e-3
     calibration_batches: int = 4
-    calibration_refresh_epochs: int = 1
     quant_bitwidths: tuple[int, ...] = (8, 16)
     seed: int = 20260921
     quality_gate_seeds: tuple[int, ...] = ()
@@ -125,7 +124,6 @@ class ExperimentConfig:
             "batch_size",
             "epochs",
             "calibration_batches",
-            "calibration_refresh_epochs",
             "feature_chunk_size",
         ):
             if getattr(self, name) <= 0:
@@ -685,26 +683,6 @@ def _calibrate_quant_lstm(
     return calibration
 
 
-def _calibration_summary(calibration: dict, epoch: int) -> dict:
-    safety = calibration["safety"]
-    return {
-        "epoch": epoch,
-        "batch_count": calibration["batch_count"],
-        "method": calibration["method"],
-        "selection": calibration["selection"],
-        "sample_count": calibration["sample_count"],
-        "label_counts": calibration["label_counts"],
-        "safety": {
-            name: safety[name]
-            for name in (
-                "exact_integer_range_count",
-                "precision_risk_count",
-                "unsafe_non_finite_count",
-            )
-        },
-    }
-
-
 def _quant_range(operator: dict) -> tuple[int, int]:
     bitwidth = operator["bitwidth"]
     if operator["is_unsigned"]:
@@ -1140,6 +1118,16 @@ def _train(
 ) -> dict:
     torch.manual_seed(config.seed)
     torch.cuda.manual_seed_all(config.seed)
+    fixed_quant_params = (
+        model.lstm.export_quant_params() if qat_bitwidth is not None else None
+    )
+    quant_params_sha256 = (
+        hashlib.sha256(
+            json.dumps(fixed_quant_params, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        if fixed_quant_params is not None
+        else None
+    )
     initial_parameters = {
         name: parameter.detach().clone()
         for name, parameter in model.named_parameters()
@@ -1152,7 +1140,6 @@ def _train(
     )
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
     history = []
-    calibration_refreshes = []
     native_qat_checkpoint_observed = False
     started = time.perf_counter()
     for epoch in range(config.epochs):
@@ -1214,26 +1201,11 @@ def _train(
                     )
             loss_sum += loss.item() * labels.numel()
             sample_count += labels.numel()
-        bias_ranges_before_refresh = (
-            _bias_range_diagnostics(model.lstm)
-            if qat_bitwidth is not None
-            else None
-        )
-        if (
-            qat_bitwidth is not None
-            and (epoch + 1) % config.calibration_refresh_epochs == 0
-        ):
-            refreshed = _calibrate_quant_lstm(
-                model,
-                feature_sets["training"],
-                config,
-                device,
-                qat_bitwidth,
-                refresh=True,
-            )
-            calibration_refreshes.append(
-                _calibration_summary(refreshed, epoch + 1)
-            )
+        if fixed_quant_params is not None:
+            if model.lstm.export_quant_params() != fixed_quant_params:
+                raise RuntimeError(
+                    "QAT must preserve the initial PTQ quantization parameters"
+                )
         validation = _evaluate(
             model, feature_sets["validation"], config.batch_size, device, config.labels
         )
@@ -1243,6 +1215,8 @@ def _train(
             "validation_loss": validation["loss"],
             "validation_accuracy": validation["accuracy"],
         }
+        if fixed_quant_params is not None:
+            epoch_result["quant_params_sha256"] = quant_params_sha256
         if clamp_counts:
             epoch_result["qat_clamp_rates"] = {
                 name: clamp_counts[name] / clamp_elements[name]
@@ -1261,8 +1235,7 @@ def _train(
                 },
             }
             epoch_result["qat_bias_ranges"] = {
-                "before_refresh": bias_ranges_before_refresh,
-                "after_refresh": _bias_range_diagnostics(model.lstm),
+                "post_step": _bias_range_diagnostics(model.lstm),
             }
         history.append(epoch_result)
         print(
@@ -1302,6 +1275,11 @@ def _train(
         if qat_bitwidth == 8 and extended_diagnostics
         else None
     )
+    if fixed_quant_params is not None:
+        if model.lstm.export_quant_params() != fixed_quant_params:
+            raise RuntimeError(
+                "Evaluation changed the initial PTQ quantization parameters"
+            )
     update_squared_norm = sum(
         (parameter.detach() - initial_parameters[name]).square().sum().item()
         for name, parameter in model.named_parameters()
@@ -1318,7 +1296,8 @@ def _train(
         "final_test_classification": final_testing,
         "parameter_update_norm": update_squared_norm**0.5,
         "native_qat_checkpoint_observed": native_qat_checkpoint_observed,
-        "calibration_refreshes": calibration_refreshes,
+        "quant_params_sha256": quant_params_sha256,
+        "quant_params_policy": "fixed_after_ptq" if qat_bitwidth is not None else None,
         "final_quantization_error": quantization_error,
         "operator_bitwidth_ablation": operator_bitwidth_ablation,
         "duration_seconds": time.perf_counter() - started,
@@ -1554,7 +1533,7 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
         primary_results, feature_sets, config, device
     )
     return {
-        "schema_version": 8,
+        "schema_version": 9,
         "validation_scope": "real_network_training",
         "dataset": {
             "name": "speech_commands_v0.02",
@@ -1588,8 +1567,8 @@ def run_training_comparison(config: ExperimentConfig) -> dict:
             "calibration_batches": config.calibration_batches,
             "calibration_strategy": {
                 "selection": "balanced_round_robin",
-                "refresh_interval_epochs": config.calibration_refresh_epochs,
-                "refresh_timing": "after_training_before_validation",
+                "quant_params_policy": "fixed_after_ptq",
+                "calibration_timing": "before_training_only",
                 "methods_by_bitwidth": {
                     str(bitwidth): QAT_CALIBRATION_METHODS[bitwidth]
                     for bitwidth in config.quant_bitwidths
@@ -1647,7 +1626,6 @@ def _parse_arguments() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--learning-rate", type=float, default=3.0e-3)
     parser.add_argument("--calibration-batches", type=int, default=4)
-    parser.add_argument("--calibration-refresh-epochs", type=int, default=1)
     parser.add_argument(
         "--quality-gate-seed",
         type=int,
@@ -1709,7 +1687,6 @@ def main() -> None:
             epochs=arguments.epochs,
             learning_rate=arguments.learning_rate,
             calibration_batches=arguments.calibration_batches,
-            calibration_refresh_epochs=arguments.calibration_refresh_epochs,
             quant_bitwidths=tuple(arguments.quant_bitwidths or (8, 16)),
             seed=arguments.seed,
             quality_gate_seeds=tuple(arguments.quality_gate_seeds or ()),
