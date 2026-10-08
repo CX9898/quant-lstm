@@ -139,6 +139,7 @@ printf '\n==> Run PyTorch functional and strict suites\n'
     tests.test_quantized_interface \
     tests.test_bidirectional_interface \
     tests.test_backward \
+    tests.test_qat_independent \
     tests.test_onnx_export
 )
 

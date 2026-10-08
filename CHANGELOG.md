@@ -7,6 +7,9 @@
 
 ### Added
 
+- 不依赖 native checkpoint/mask 的量化前向与 QAT autograd oracle，加入默认 E2E；
+  增加配置矩阵、图与状态生命周期、非连续 tensor 和 CUDA stream 正确性验证。
+
 - 单层单向和双向 `QuantLSTM` CUDA FP32 forward/backward。
 - CUDA FP32 q-carrier INT8、INT16 和混合位宽量化前向与 QAT backward。
 - CUDA MinMax、SQNR 和 Percentile 校准，以及 GRU-compatible v1 参数交换格式。
@@ -22,6 +25,8 @@
 - POT2 CoverRange 对退化校准范围复用统一 minimum-scale fallback。
 
 ### Fixed
+
+- 修正测试 oracle 中残留的先加 zero point 再舍入公式，并增加正负 half tie 回归。
 
 - CPU/CUDA standard-scale 量化统一先执行 RNE 再加 zero point，修复非对称量化
   在奇数 zero point 的 half tie 处偏差一个量化级的问题。

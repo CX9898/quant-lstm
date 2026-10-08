@@ -52,8 +52,7 @@ def quantize_tensor(
 ) -> tuple[Tensor, Tensor]:
     qmin, qmax = _quant_range(operator)
     scales, zero_points = _operator_tensors(operator, value, per_channel)
-    translated = value.detach().double() / scales + zero_points
-    rounded = torch.round(translated)
+    rounded = torch.round(value.detach().double() / scales) + zero_points
     clamped = (rounded < qmin) | (rounded > qmax)
     return rounded.clamp(qmin, qmax).float(), clamped
 
