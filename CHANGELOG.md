@@ -25,6 +25,10 @@
 
 - CPU/CUDA standard-scale 量化统一先执行 RNE 再加 zero point，修复非对称量化
   在奇数 zero point 的 half tie 处偏差一个量化级的问题。
+- QAT 激活 Clamp mask 改为检查舍入后的量化值，保留边界外半个 LSB 内未真正
+  截断的梯度，并继续屏蔽实际越界值的梯度。
+  此修复会改变 QAT 训练轨迹：完整 35 类 Speech Commands 门禁通过，但四类快速
+  profile 的原有质量门禁尚未通过；未修改训练配方或放宽验收阈值。
 
 ### Known limitations
 

@@ -373,6 +373,74 @@ class BackwardTest(unittest.TestCase):
                     self.assertIn("checkpoint_clamp_masks", saved)
 
     @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
+    def test_qat_activation_half_lsb_boundaries_use_rounded_clamp_masks(self):
+        for bitwidth in (8, 16):
+            for sign in (-1, 1):
+                for offset in (0.25, 0.75):
+                    with self.subTest(bitwidth=bitwidth, sign=sign, offset=offset):
+                        module = QuantLSTM(1, 1, bias=False, device="cuda")
+                        module.set_all_bitwidth(bitwidth)
+                        with torch.no_grad():
+                            module.weight_ih_l0.zero_()
+                            module.weight_ih_l0[2, 0] = sign * 0.5
+                            module.weight_hh_l0.zero_()
+                        inputs = torch.ones(1, 1, 1, device="cuda")
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore", RuntimeWarning)
+                            calibrate(module, inputs, None)
+                        module.use_quantization = True
+                        module(inputs)
+                        state = module.qat_saved_state()
+                        document = module.export_quant_params()
+                        operators = document["operators"]
+                        point = operators["cell_gate_input"]
+                        gate_input = state["checkpoints"]["gate_inputs"][0, 0, 2].item()
+                        activated = torch.tanh(torch.tensor(
+                            (gate_input - point["zero_point"]) * point["scale"],
+                            dtype=torch.float32,
+                        )).item()
+                        maximum = (1 << (bitwidth - 1)) - 1
+                        scale = torch.tensor(
+                            abs(activated) / (maximum + offset), dtype=torch.float32
+                        ).item()
+                        operators["cell_gate_output"].update(
+                            scale=scale, real_min=-maximum * scale, real_max=maximum * scale
+                        )
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore", RuntimeWarning)
+                            module.load_quant_params(document)
+                        _, (_, cell) = module(inputs)
+                        state = module.qat_saved_state()
+                        cell.sum().backward()
+
+                        # Derive the mask from the specification, never from native masks.
+                        rounded = round(activated / scale)
+                        expected_clamped = abs(rounded) > maximum
+                        self.assertEqual(expected_clamped, offset == 0.75)
+                        quantized_gate = max(-maximum, min(maximum, rounded))
+                        self.assertEqual(
+                            state["checkpoints"]["gate_outputs"][0, 0, 2].item(),
+                            quantized_gate,
+                        )
+                        self.assertEqual(
+                            bool(state["checkpoint_clamp_masks"]["gate_outputs"][0, 0, 2]),
+                            expected_clamped,
+                        )
+                        self.assertFalse(state["checkpoint_clamp_masks"]["cell_states"].any())
+                        # c1=i*g, c0=0, x=1: d(c1)/d(W_g)=i*(1-g*g)*x on the STE path.
+                        input_gate_scale = operators["input_gate_output"]["scale"]
+                        input_gate = round(0.5 / input_gate_scale) * input_gate_scale
+                        input_scale = operators["input"]["scale"]
+                        quantized_input = round(1.0 / input_scale) * input_scale
+                        expected_gradient = (
+                            0.0 if expected_clamped else
+                            input_gate * (1.0 - (quantized_gate * scale) ** 2) * quantized_input
+                        )
+                        self.assertAlmostEqual(
+                            module.weight_ih_l0.grad[2, 0].item(), expected_gradient, delta=1.0e-6
+                        )
+
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_qat_calibrated_parameter_endpoints_keep_ste_gradients(self):
         device = torch.device("cuda")
         input_value = deterministic_tensor(

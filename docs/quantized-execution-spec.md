@@ -334,7 +334,10 @@ standard scale/zp 反量化到 real domain，并复用已验证的浮点 LSTM ba
 
 每个真实量化边界的 Clamp mask 中 `1` 表示发生 Clamp；STE 只在这些位置把梯度置零，
 未 Clamp 的 Round 使用恒等梯度。Cell 两路 contribution、Hidden 原始乘积及其他融合
-临时值没有独立 mask。双向模块分别执行两个单向 backward，再由时间翻转和拼接算子
+临时值没有独立 mask。激活输出的 mask 必须比较 `Round(y/S)+Z` 与目标整数范围，
+不能在 Round 前比较。例如 signed symmetric INT8 下 `y/S=127.25` 舍入为 `127`，
+不发生 Clamp，梯度保留；`y/S=127.75` 舍入为 `128` 才发生 Clamp，梯度置零。
+双向模块分别执行两个单向 backward，再由时间翻转和拼接算子
 恢复 PyTorch 的 input、h0/c0 与参数梯度顺序。本节不改变第 8 节冻结的前向公式。
 
 ## 10. Golden 与验证

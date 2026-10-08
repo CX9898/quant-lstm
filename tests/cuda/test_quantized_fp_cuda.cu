@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include "../../src/lstm/cuda/quantized_fp_math.cuh"
 #include "cuda/cuda_test_support.cuh"
 #include "golden_fixtures.h"
 #include "lstm/forward_quantized_fp_cuda.h"
@@ -24,6 +25,63 @@ using quant_lstm::test::DeviceBuffer;
 void require(bool condition, const std::string& message) {
     if (!condition) {
         throw std::runtime_error(message);
+    }
+}
+
+struct ActivationBoundary {
+    float input;
+    float scale;
+    int zero_point;
+    int expected;
+    bool clamped;
+    quant_lstm::quantization::RealActivationKind kind;
+};
+
+__global__ void activationBoundaries(const ActivationBoundary* cases, float* values,
+                                     std::uint8_t* masks, int count) {
+    const int index = static_cast<int>(threadIdx.x);
+    if (index < count) {
+        const auto& item = cases[index];
+        bool clamped = !item.clamped;
+        values[index] = quant_lstm::cuda_detail::realActivationCore(
+            item.input, 1.0F, 0, item.scale, item.zero_point, -128, 127, item.kind, &clamped);
+        masks[index] = clamped;
+    }
+}
+
+void checkActivationBoundaries() {
+    using Kind = quant_lstm::quantization::RealActivationKind;
+    // tanh(+/-20) is exactly +/-1 in FP32; sigmoid(0) is exactly 0.5.
+    // The first two scales in each group round back onto the boundary, even at a tie.
+    const std::vector<ActivationBoundary> cases{
+        {20.0F, 4.0F, 127, 127, false, Kind::Tanh},
+        {20.0F, 2.0F, 127, 127, false, Kind::Tanh},
+        {20.0F, 1.0F, 127, 127, true, Kind::Tanh},
+        {-20.0F, 4.0F, -128, -128, false, Kind::Tanh},
+        {-20.0F, 2.0F, -128, -128, false, Kind::Tanh},
+        {-20.0F, 1.0F, -128, -128, true, Kind::Tanh},
+        {0.0F, 2.0F, 127, 127, false, Kind::Sigmoid},
+        {0.0F, 1.0F, 127, 127, false, Kind::Sigmoid},
+        {0.0F, 0.5F, 127, 127, true, Kind::Sigmoid},
+    };
+    DeviceBuffer<ActivationBoundary> device_cases(cases.size());
+    DeviceBuffer<float> device_values(cases.size());
+    DeviceBuffer<std::uint8_t> device_masks(cases.size());
+    device_cases.copyFrom(cases);
+    activationBoundaries<<<1, 32>>>(device_cases.get(), device_values.get(), device_masks.get(),
+                                    static_cast<int>(cases.size()));
+    quant_lstm::test::checkCuda(cudaGetLastError(), "activationBoundaries launch");
+    const auto values = device_values.copyToHost();
+    const auto masks = device_masks.copyToHost();
+    for (std::size_t index = 0; index < cases.size(); ++index) {
+        const auto& item = cases[index];
+        bool clamped = !item.clamped;
+        const float value = quant_lstm::cuda_detail::realActivationCore(
+            item.input, 1.0F, 0, item.scale, item.zero_point, -128, 127, item.kind, &clamped);
+        require(value == item.expected && clamped == item.clamped,
+                "host activation mask must compare the rounded value with the clamp range");
+        require(values[index] == item.expected && masks[index] == item.clamped,
+                "CUDA activation mask must compare the rounded value with the clamp range");
     }
 }
 
@@ -297,6 +355,7 @@ void runGolden(const Json& document, bool caller_workspace, bool test_small_work
 
 int main() {
     try {
+        checkActivationBoundaries();
         std::size_t checked = 0;
         for (const auto& fixture : quant_lstm::test::kGoldenDocuments) {
             if (fixture.execution_model != "cpu_fp32" ||
