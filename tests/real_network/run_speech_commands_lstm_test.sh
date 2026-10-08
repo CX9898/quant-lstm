@@ -88,6 +88,11 @@ from importlib import import_module
 
 for name in ("torch", "torchaudio", "_quant_lstm"):
     import_module(name)
+
+import torch
+
+if not torch.cuda.is_available():
+    raise SystemExit("error: real-network acceptance requires an available CUDA GPU")
 PY
 
 export QUANT_LSTM_SPEECH_COMMANDS_ROOT="${dataset_root}"

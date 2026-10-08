@@ -72,7 +72,8 @@ MFCC 参数为 16 kHz、1 s、40 ms window、20 ms hop、40 mel bins 和 20 coef
 - 运行环境可以访问 CUDA GPU；
 - 数据集目录包含 `validation_list.txt` 和 `testing_list.txt`。
 
-以下命令从仓库根目录执行。
+以下命令从仓库根目录执行。显式 runner 在 CUDA 不可用时以非零状态退出；
+不能把 unittest 的可选 skip 当作真实训练验收通过。
 
 快速 profile：
 

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -439,13 +440,24 @@ int main() {
         const auto actual_cell = device_cell.copyToHost();
         const auto check = [](const std::vector<float>& actual, const std::vector<float>& expected,
                               float tolerance = 1.0e-5F) {
+            if (actual.size() != expected.size()) {
+                return false;
+            }
             for (std::size_t index = 0; index < actual.size(); ++index) {
-                if (std::abs(actual[index] - expected[index]) > tolerance) {
+                if (!std::isfinite(actual[index]) || !std::isfinite(expected[index]) ||
+                    std::abs(actual[index] - expected[index]) > tolerance) {
                     return false;
                 }
             }
             return true;
         };
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        const float infinity = std::numeric_limits<float>::infinity();
+        if (check({nan}, {0.0F}) || check({0.0F}, {nan}) || check({infinity}, {infinity}) ||
+            check({}, {0.0F})) {
+            std::cerr << "CUDA comparator accepted non-finite values or mismatched sizes\n";
+            return EXIT_FAILURE;
+        }
         if (!check(actual_output, expected_output) || !check(actual_hidden, expected_hidden) ||
             !check(actual_cell, expected_cell)) {
             std::cerr << "CUDA 与 CPU FP32 reference 不一致\n";

@@ -26,6 +26,9 @@
 
 ### Fixed
 
+- CUDA 浮点测试比较器拒绝 NaN、Infinity 和长度不匹配；真实网络 runner 在无
+  可用 CUDA GPU 时失败退出，避免将跳过训练误报为验收成功。
+
 - 修正测试 oracle 中残留的先加 zero point 再舍入公式，并增加正负 half tie 回归。
 
 - CPU/CUDA standard-scale 量化统一先执行 RNE 再加 zero point，修复非对称量化
