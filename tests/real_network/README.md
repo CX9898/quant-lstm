@@ -51,8 +51,9 @@ loss 和 gradient clipping。唯一变化是 recurrent module：
 | INT8 QAT | `QuantLSTM` 8-bit q-carrier | SQNR |
 | INT16 QAT | `QuantLSTM` 16-bit q-carrier | MinMax |
 
-QAT 初始校准使用类别平衡的 training subset。每个 epoch 训练结束后刷新 range，再执行
-validation，并把结果用于下一 epoch。Validation 和 testing 样本不参与校准。
+QAT 仅在训练前使用类别平衡的 training subset 校准一次。随后固定这套 PTQ 量化参数，
+所有训练 epoch、validation 和 testing 都复用它；权重更新不会重新校准 range。
+Validation 和 testing 样本不参与校准。
 
 快速 profile 使用 `yes`、`no`、`up` 和 `down`，每类选择 128 条 training、32 条
 validation 和 32 条 testing 音频。完整 profile 对 35 个词目录分类，并按照官方
