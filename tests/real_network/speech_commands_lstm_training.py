@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import random
 import sys
 import tarfile
@@ -88,8 +89,11 @@ class ExperimentConfig:
     feature_cache: Path | None = None
     hidden_size: int = 64
     batch_size: int = 32
-    epochs: int = 10
-    learning_rate: float = 3.0e-3
+    epochs: int = 20
+    learning_rate: float = 3.0e-4
+    pretrain_epochs: int = 50
+    pretrain_learning_rate: float = 3.0e-3
+    minimum_pretrain_validation_accuracy: float = 0.80
     calibration_batches: int = 4
     quant_bitwidths: tuple[int, ...] = (8, 16)
     seed: int = 20260921
@@ -123,13 +127,17 @@ class ExperimentConfig:
             "hidden_size",
             "batch_size",
             "epochs",
+            "pretrain_epochs",
             "calibration_batches",
             "feature_chunk_size",
         ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")
-        if self.learning_rate <= 0.0:
-            raise ValueError("learning_rate must be positive")
+        for name in ("learning_rate", "pretrain_learning_rate"):
+            if not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0.0:
+                raise ValueError(f"{name} must be finite and positive")
+        if not 0.0 <= self.minimum_pretrain_validation_accuracy <= 1.0:
+            raise ValueError("minimum_pretrain_validation_accuracy must be in [0, 1]")
         if not self.quant_bitwidths:
             raise ValueError("quant_bitwidths must be non-empty")
         if len(set(self.quant_bitwidths)) != len(self.quant_bitwidths):
@@ -619,6 +627,8 @@ def _evaluate(
             features = features.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
             logits = model(features)
+            if not torch.isfinite(logits).all():
+                raise RuntimeError("Non-finite evaluation logits")
             total_loss += F.cross_entropy(logits, labels, reduction="sum").item()
             predictions = logits.argmax(dim=1)
             if confusion is None:
@@ -1106,6 +1116,19 @@ def _calibration_strategy_matrix(
     }
 
 
+def _state_sha256(model: nn.Module) -> str:
+    digest = hashlib.sha256()
+    for name, tensor in sorted(model.state_dict().items()):
+        value = tensor.detach().cpu().contiguous()
+        digest.update(f"{name}:{value.dtype}:{tuple(value.shape)}".encode())
+        digest.update(value.numpy().tobytes())
+    return digest.hexdigest()
+
+
+def _validation_key(metrics: dict) -> tuple[float, float]:
+    return metrics["accuracy"], -metrics["loss"]
+
+
 def _train(
     name: str,
     model: nn.Module,
@@ -1115,7 +1138,9 @@ def _train(
     qat_bitwidth: int | None = None,
     *,
     extended_diagnostics: bool = True,
+    pretraining: bool = False,
 ) -> dict:
+    """Select only on validation; leave model at the selected checkpoint."""
     torch.manual_seed(config.seed)
     torch.cuda.manual_seed_all(config.seed)
     fixed_quant_params = (
@@ -1128,6 +1153,7 @@ def _train(
         if fixed_quant_params is not None
         else None
     )
+    initial_state_sha256 = _state_sha256(model)
     initial_parameters = {
         name: parameter.detach().clone()
         for name, parameter in model.named_parameters()
@@ -1138,11 +1164,26 @@ def _train(
     initial_validation = _evaluate(
         model, feature_sets["validation"], config.batch_size, device, config.labels
     )
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
+    epochs = config.pretrain_epochs if pretraining else config.epochs
+    learning_rate = config.pretrain_learning_rate if pretraining else config.learning_rate
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    scheduler = (
+        torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[25, 40], gamma=0.3)
+        if pretraining else None
+    )
+
+    def snapshot(epoch, validation):
+        return {
+            "epoch": epoch, "validation": validation,
+            "weights": {k: v.detach().cpu().clone() for k, v in model.state_dict().items()},
+        }
+
+    start = snapshot(0, initial_validation)
+    best, best_trained = start, None
     history = []
     native_qat_checkpoint_observed = False
     started = time.perf_counter()
-    for epoch in range(config.epochs):
+    for epoch in range(epochs):
         model.train()
         generator = torch.Generator().manual_seed(config.seed + epoch)
         order = torch.randperm(
@@ -1187,8 +1228,12 @@ def _train(
                             mask_name, 0
                         ) + mask.numel()
             loss = F.cross_entropy(logits, labels)
+            if not torch.isfinite(loss):
+                raise RuntimeError(f"Non-finite training loss: {name}, epoch {epoch + 1}")
             loss.backward()
-            nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=5.0, error_if_nonfinite=True
+            )
             optimizer.step()
             if qat_bitwidth is not None:
                 post_step = _bias_range_diagnostics(model.lstm)
@@ -1237,7 +1282,15 @@ def _train(
             epoch_result["qat_bias_ranges"] = {
                 "post_step": _bias_range_diagnostics(model.lstm),
             }
+        last = snapshot(epoch + 1, validation)
+        if _validation_key(validation) > _validation_key(best["validation"]):
+            best = last
+        if best_trained is None or _validation_key(validation) > _validation_key(best_trained["validation"]):
+            best_trained = last
+        epoch_result["learning_rate"] = optimizer.param_groups[0]["lr"]
         history.append(epoch_result)
+        if scheduler is not None:
+            scheduler.step()
         print(
             json.dumps(
                 {
@@ -1254,350 +1307,189 @@ def _train(
             flush=True,
         )
     torch.cuda.synchronize(device)
-    final_testing = _evaluate(
-        model, feature_sets["testing"], config.batch_size, device, config.labels
-    )
-    quantization_error = (
-        _quantization_error(
-            model, feature_sets["testing"], config.batch_size, device
-        )
-        if qat_bitwidth is not None
-        else None
-    )
-    operator_bitwidth_ablation = (
-        _operator_bitwidth_ablation(
-            model,
-            feature_sets,
-            config,
-            device,
-            quantization_error,
-        )
-        if qat_bitwidth == 8 and extended_diagnostics
-        else None
-    )
-    if fixed_quant_params is not None:
-        if model.lstm.export_quant_params() != fixed_quant_params:
-            raise RuntimeError(
-                "Evaluation changed the initial PTQ quantization parameters"
-            )
     update_squared_norm = sum(
         (parameter.detach() - initial_parameters[name]).square().sum().item()
         for name, parameter in model.named_parameters()
     )
+    # All selection is finished before any test-set evaluation.
+    testing = {}
+    for checkpoint in (start, best, best_trained, last):
+        epoch = checkpoint["epoch"]
+        if epoch not in testing:
+            model.load_state_dict(checkpoint["weights"])
+            testing[epoch] = _evaluate(
+                model, feature_sets["testing"], config.batch_size, device, config.labels
+            )
+    model.load_state_dict(best["weights"])
+    restored_validation = _evaluate(
+        model, feature_sets["validation"], config.batch_size, device, config.labels
+    )
+    if restored_validation != best["validation"]:
+        raise RuntimeError("Selected checkpoint did not reproduce validation metrics")
+    quantization_error = (
+        _quantization_error(model, feature_sets["testing"], config.batch_size, device)
+        if qat_bitwidth is not None else None
+    )
+    operator_bitwidth_ablation = (
+        _operator_bitwidth_ablation(model, feature_sets, config, device, quantization_error)
+        if qat_bitwidth == 8 and extended_diagnostics else None
+    )
+    if fixed_quant_params is not None:
+        if model.lstm.export_quant_params() != fixed_quant_params:
+            raise RuntimeError("Evaluation changed the initial PTQ quantization parameters")
     return {
+        "initial_state_sha256": initial_state_sha256,
+        "selected_state_sha256": _state_sha256(model),
         "initial_train_loss": initial_training["loss"],
-        "initial_validation_accuracy": initial_validation["accuracy"],
         "final_train_loss": history[-1]["train_loss"],
-        "best_validation_accuracy": max(
-            epoch["validation_accuracy"] for epoch in history
-        ),
-        "final_test_loss": final_testing["loss"],
-        "final_test_accuracy": final_testing["accuracy"],
-        "final_test_classification": final_testing,
+        "initial_validation": initial_validation,
+        "selected_epoch": best["epoch"],
+        "selected_validation": best["validation"],
+        "best_trained_epoch": best_trained["epoch"],
+        "best_trained_validation": best_trained["validation"],
+        "last_validation": last["validation"],
+        "starting_test": testing[0],
+        "selected_test": testing[best["epoch"]],
+        "best_trained_test": testing[best_trained["epoch"]],
+        "last_test": testing[last["epoch"]],
         "parameter_update_norm": update_squared_norm**0.5,
         "native_qat_checkpoint_observed": native_qat_checkpoint_observed,
         "quant_params_sha256": quant_params_sha256,
         "quant_params_policy": "fixed_after_ptq" if qat_bitwidth is not None else None,
-        "final_quantization_error": quantization_error,
+        "selected_quantization_error": quantization_error,
         "operator_bitwidth_ablation": operator_bitwidth_ablation,
         "duration_seconds": time.perf_counter() - started,
         "epochs": history,
     }
 
 
-def _quality_result(result: dict, *, quantized: bool) -> dict:
-    summary = {
-        name: result[name]
-        for name in (
-            "initial_train_loss",
-            "final_train_loss",
-            "best_validation_accuracy",
-            "final_test_accuracy",
-        )
-    }
-    if quantized:
-        summary["logit_mae"] = result["final_quantization_error"]["mae"]
-        summary["prediction_agreement"] = result["final_quantization_error"][
-            "prediction_agreement"
-        ]
-    return summary
-
-
-def _run_additional_quality_seed(
-    feature_sets: dict[str, tuple[Tensor, Tensor]],
-    config: ExperimentConfig,
-    device: torch.device,
-) -> dict[str, dict]:
+def _run_quality_seed(feature_sets, config, device, *, extended_diagnostics=False):
     torch.manual_seed(config.seed)
     torch.cuda.manual_seed_all(config.seed)
     baseline = SpeechCommandsLstmClassifier(
-        config.hidden_size,
-        len(config.labels),
-        use_quant_lstm=False,
-        device=device,
+        config.hidden_size, len(config.labels), use_quant_lstm=False, device=device
     )
-    quantized_variants = {}
-    for bitwidth in config.quant_bitwidths:
-        name = f"quant_lstm_qat_{bitwidth}bit"
-        model = SpeechCommandsLstmClassifier(
-            config.hidden_size,
-            len(config.labels),
-            use_quant_lstm=True,
-            device=device,
-        )
-        _copy_shared_initial_state(baseline, model)
-        model.lstm.calibration_method = QAT_CALIBRATION_METHODS[bitwidth]
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            _calibrate_quant_lstm(
-                model, feature_sets["training"], config, device, bitwidth
-            )
-        quantized_variants[name] = model
-
     baseline_result = _train(
-        f"seed_{config.seed}_torch_lstm",
-        baseline,
-        feature_sets,
-        config,
-        device,
-        extended_diagnostics=False,
+        f"seed_{config.seed}_torch_lstm", baseline, feature_sets, config, device,
+        pretraining=True, extended_diagnostics=False,
     )
-    results = {
-        "torch_lstm": _quality_result(baseline_result, quantized=False)
-    }
-    for name, model in quantized_variants.items():
-        bitwidth = int(name.removesuffix("bit").rsplit("_", 1)[1])
-        result = _train(
-            f"seed_{config.seed}_{name}",
-            model,
-            feature_sets,
-            config,
-            device,
-            qat_bitwidth=bitwidth,
-            extended_diagnostics=False,
+    accuracy = baseline_result["selected_validation"]["accuracy"]
+    if accuracy < config.minimum_pretrain_validation_accuracy:
+        raise RuntimeError(
+            f"Float baseline validation accuracy {accuracy:.6f} is below "
+            f"{config.minimum_pretrain_validation_accuracy:.6f}; QAT quality cannot be assessed"
         )
-        results[name] = _quality_result(result, quantized=True)
-    return results
-
-
-def _multi_seed_quality(
-    primary_results: dict[str, dict],
-    feature_sets: dict[str, tuple[Tensor, Tensor]],
-    config: ExperimentConfig,
-    device: torch.device,
-) -> dict:
-    seeds = config.quality_gate_seeds or (config.seed,)
-    model_names = (
-        "torch_lstm",
-        *(f"quant_lstm_qat_{bitwidth}bit" for bitwidth in config.quant_bitwidths),
+    # Every branch is cloned from this same validation-selected FLOAT checkpoint.
+    finetune_config = replace(config, seed=config.seed + 10000)
+    models, differences, calibrations, backward = {}, {}, {}, {}
+    for bits in (None, *config.quant_bitwidths):
+        name = "quant_lstm_float" if bits is None else f"quant_lstm_qat_{bits}bit"
+        model = SpeechCommandsLstmClassifier(
+            config.hidden_size, len(config.labels), use_quant_lstm=True, device=device
+        )
+        differences[name] = _copy_shared_initial_state(baseline, model)
+        if _state_sha256(model) != baseline_result["selected_state_sha256"]:
+            raise RuntimeError("Finetuning did not start from the selected float checkpoint")
+        if bits is not None:
+            model.lstm.calibration_method = QAT_CALIBRATION_METHODS[bits]
+            calibrations[name] = _calibrate_quant_lstm(
+                model, feature_sets["training"], config, device, bits
+            )
+            backward[str(bits)] = _real_batch_backward_oracle(
+                model, feature_sets["training"], config, device
+            )
+        models[name] = model
+    training = {"torch_lstm": baseline_result}
+    for name, model in models.items():
+        bits = None if name == "quant_lstm_float" else int(name.removesuffix("bit").rsplit("_", 1)[1])
+        training[name] = _train(
+            f"seed_{config.seed}_{name}", model, feature_sets, finetune_config, device,
+            qat_bitwidth=bits, extended_diagnostics=extended_diagnostics,
+        )
+    matrix_source = next(name for name in models if name != "quant_lstm_float")
+    matrix = (
+        _calibration_strategy_matrix(models[matrix_source], matrix_source, feature_sets, config, device)
+        if extended_diagnostics else {"enabled": False, "reason": "extended diagnostics disabled"}
     )
-    runs = {
-        str(config.seed): {
-            name: _quality_result(
-                primary_results[name], quantized=name != "torch_lstm"
-            )
-            for name in model_names
-        }
-    }
-    for seed in seeds:
-        if seed == config.seed:
-            continue
-        seed_config = replace(config, seed=seed, quality_gate_seeds=())
-        runs[str(seed)] = _run_additional_quality_seed(
-            feature_sets, seed_config, device
-        )
-    aggregate = {}
-    for name in model_names:
-        values = [run[name] for run in runs.values()]
-        aggregate[name] = {
-            "minimum_validation_accuracy": min(
-                value["best_validation_accuracy"] for value in values
-            ),
-            "mean_validation_accuracy": sum(
-                value["best_validation_accuracy"] for value in values
-            )
-            / len(values),
-            "minimum_test_accuracy": min(
-                value["final_test_accuracy"] for value in values
-            ),
-            "mean_test_accuracy": sum(
-                value["final_test_accuracy"] for value in values
-            )
-            / len(values),
-        }
     return {
-        "seeds": list(seeds),
-        "runs": runs,
-        "aggregate": aggregate,
+        "training": training,
+        "initial_shared_state_max_abs_diff": differences,
+        "calibration": calibrations,
+        "real_batch_backward_oracle": backward,
+        "calibration_strategy_matrix": matrix,
     }
 
 
 def run_training_comparison(config: ExperimentConfig) -> dict:
-    """Train matched torch-LSTM and QuantLSTM-QAT keyword spotters."""
+    """Pretrain float, calibrate PTQ once, then finetune with fixed quantizers."""
     config.validate()
-    config = ExperimentConfig(**{**asdict(config), "dataset_root": Path(config.dataset_root)})
     if not torch.cuda.is_available():
         raise RuntimeError("QuantLSTM real-network training requires CUDA")
     device = torch.device(config.device)
     if device.type != "cuda":
         raise ValueError("device must select CUDA")
-
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
     torch.backends.cudnn.benchmark = False
-    torch.manual_seed(config.seed)
-    torch.cuda.manual_seed_all(config.seed)
-
     feature_sets, manifest, example_digests = load_feature_sets(config)
-    baseline = SpeechCommandsLstmClassifier(
-        config.hidden_size,
-        len(config.labels),
-        use_quant_lstm=False,
-        device=device,
-    )
-    native_float = SpeechCommandsLstmClassifier(
-        config.hidden_size,
-        len(config.labels),
-        use_quant_lstm=True,
-        device=device,
-    )
-    quantized_variants = {}
-    initial_differences = {
-        "quant_lstm_float": _copy_shared_initial_state(baseline, native_float)
-    }
-    calibrations = {}
-    for bitwidth in config.quant_bitwidths:
-        name = f"quant_lstm_qat_{bitwidth}bit"
-        quantized = SpeechCommandsLstmClassifier(
-            config.hidden_size,
-            len(config.labels),
-            use_quant_lstm=True,
-            device=device,
+    seeds = config.quality_gate_seeds or (config.seed,)
+    runs = {}
+    for seed in seeds:
+        runs[str(seed)] = _run_quality_seed(
+            feature_sets, replace(config, seed=seed, quality_gate_seeds=()), device,
+            extended_diagnostics=config.extended_diagnostics and seed == config.seed,
         )
-        initial_differences[name] = _copy_shared_initial_state(baseline, quantized)
-        quantized.lstm.calibration_method = QAT_CALIBRATION_METHODS[bitwidth]
-        calibrations[name] = _calibrate_quant_lstm(
-            quantized, feature_sets["training"], config, device, bitwidth
-        )
-        quantized_variants[name] = quantized
-
-    real_batch_backward_oracle = {
-        str(bitwidth): _real_batch_backward_oracle(
-            quantized_variants[f"quant_lstm_qat_{bitwidth}bit"],
-            feature_sets["training"],
-            config,
-            device,
-        )
-        for bitwidth in config.quant_bitwidths
-    }
-
-    baseline_result = _train(
-        "torch_lstm", baseline, feature_sets, config, device
-    )
-    native_float_result = _train(
-        "quant_lstm_float", native_float, feature_sets, config, device
-    )
-    quantized_results = {
-        name: _train(
-            name,
-            model,
-            feature_sets,
-            config,
-            device,
-            qat_bitwidth=int(name.removesuffix("bit").rsplit("_", 1)[1]),
-            extended_diagnostics=config.extended_diagnostics,
-        )
-        for name, model in quantized_variants.items()
-    }
-    matrix_source = (
-        "quant_lstm_qat_8bit"
-        if "quant_lstm_qat_8bit" in quantized_variants
-        else next(iter(quantized_variants))
-    )
-    calibration_strategy_matrix = (
-        _calibration_strategy_matrix(
-            quantized_variants[matrix_source],
-            matrix_source,
-            feature_sets,
-            config,
-            device,
-        )
-        if config.extended_diagnostics
-        else {"enabled": False, "reason": "disabled for full-dataset training"}
-    )
-    primary_results = {
-        "torch_lstm": baseline_result,
-        **quantized_results,
-    }
-    multi_seed_quality = _multi_seed_quality(
-        primary_results, feature_sets, config, device
-    )
+    primary = runs[str(config.seed)]
     return {
-        "schema_version": 9,
-        "validation_scope": "real_network_training",
+        "schema_version": 10,
+        "validation_scope": "pretrained_fixed_quantizer_qat",
+        "selection": {
+            "source": "validation_only",
+            "criterion": "highest_accuracy_then_lowest_loss",
+            "epoch_zero_eligible": True,
+            "best_trained_and_last_reported_separately": True,
+        },
         "dataset": {
-            "name": "speech_commands_v0.02",
-            "root": str(config.dataset_root),
+            "name": "speech_commands_v0.02", "root": str(config.dataset_root),
             "profile": config.dataset_profile,
             "split_source": "validation_list.txt and testing_list.txt",
             "labels": list(config.labels),
-            "training_samples": feature_sets["training"][0].size(0),
-            "validation_samples": feature_sets["validation"][0].size(0),
-            "test_samples": feature_sets["testing"][0].size(0),
+            "training_samples": len(feature_sets["training"][1]),
+            "validation_samples": len(feature_sets["validation"][1]),
+            "test_samples": len(feature_sets["testing"][1]),
             "feature_shape": list(feature_sets["training"][0].shape[1:]),
-            "example_id_sha256": example_digests,
-            "audit": manifest.audit,
+            "example_id_sha256": example_digests, "audit": manifest.audit,
         },
         "model": {
             "source": "google-research/kws_streaming/models/lstm.py",
             "topology": "20-coefficient MFCC -> LSTM -> dropout(0) -> dense",
-            "hidden_size": config.hidden_size,
-            "peepholes": False,
-            "projection": False,
+            "hidden_size": config.hidden_size, "peepholes": False, "projection": False,
         },
         "replacement": {
-            "changed_module": "lstm",
-            "baseline": "torch.nn.LSTM",
+            "changed_module": "lstm", "baseline": "torch.nn.LSTM",
             "candidate": "quant_lstm.QuantLSTM",
-            "initial_shared_state_max_abs_diff": initial_differences,
+            "source_checkpoint": "validation_selected_pretrained_float",
+            "initial_shared_state_max_abs_diff": primary["initial_shared_state_max_abs_diff"],
         },
         "quantization": {
-            "mode": "qat",
-            "bitwidths": list(config.quant_bitwidths),
+            "mode": "pretrained_qat", "bitwidths": list(config.quant_bitwidths),
             "calibration_batches": config.calibration_batches,
             "calibration_strategy": {
                 "selection": "balanced_round_robin",
                 "quant_params_policy": "fixed_after_ptq",
-                "calibration_timing": "before_training_only",
-                "methods_by_bitwidth": {
-                    str(bitwidth): QAT_CALIBRATION_METHODS[bitwidth]
-                    for bitwidth in config.quant_bitwidths
-                },
+                "calibration_timing": "after_float_pretraining_before_qat",
+                "methods_by_bitwidth": {str(b): QAT_CALIBRATION_METHODS[b] for b in config.quant_bitwidths},
             },
-            "calibration": calibrations,
-            "calibration_strategy_matrix": calibration_strategy_matrix,
-            "real_batch_backward_oracle": real_batch_backward_oracle,
+            "calibration": primary["calibration"],
+            "calibration_strategy_matrix": primary["calibration_strategy_matrix"],
+            "real_batch_backward_oracle": primary["real_batch_backward_oracle"],
         },
-        "environment": {
-            "torch": torch.__version__,
-            "torchaudio": torchaudio.__version__,
-            "cuda": torch.version.cuda,
-            "gpu": torch.cuda.get_device_name(device),
-        },
-        "config": {
-            **asdict(config),
-            "dataset_root": str(config.dataset_root),
-            "feature_cache": (
-                None if config.feature_cache is None else str(config.feature_cache)
-            ),
-            "labels": list(config.labels),
-        },
-        "training": {
-            "torch_lstm": baseline_result,
-            "quant_lstm_float": native_float_result,
-            **quantized_results,
-        },
-        "multi_seed_quality": multi_seed_quality,
+        "environment": {"torch": torch.__version__, "torchaudio": torchaudio.__version__,
+                        "cuda": torch.version.cuda, "gpu": torch.cuda.get_device_name(device)},
+        "config": {**asdict(config), "dataset_root": str(config.dataset_root),
+                   "feature_cache": None if config.feature_cache is None else str(config.feature_cache)},
+        "training": primary["training"],
+        "multi_seed_quality": {"seeds": list(seeds), "runs": runs},
     }
 
 
@@ -1623,8 +1515,11 @@ def _parse_arguments() -> argparse.Namespace:
     parser.add_argument("--test-samples-per-label", type=int, default=32)
     parser.add_argument("--hidden-size", type=int, default=64)
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--learning-rate", type=float, default=3.0e-3)
+    parser.add_argument("--epochs", type=int, default=20, help="QAT/float continuation epochs")
+    parser.add_argument("--learning-rate", type=float, default=3.0e-4)
+    parser.add_argument("--pretrain-epochs", type=int, default=50)
+    parser.add_argument("--pretrain-learning-rate", type=float, default=3.0e-3)
+    parser.add_argument("--minimum-pretrain-validation-accuracy", type=float, default=0.80)
     parser.add_argument("--calibration-batches", type=int, default=4)
     parser.add_argument(
         "--quality-gate-seed",
@@ -1686,6 +1581,9 @@ def main() -> None:
             batch_size=arguments.batch_size,
             epochs=arguments.epochs,
             learning_rate=arguments.learning_rate,
+            pretrain_epochs=arguments.pretrain_epochs,
+            pretrain_learning_rate=arguments.pretrain_learning_rate,
+            minimum_pretrain_validation_accuracy=arguments.minimum_pretrain_validation_accuracy,
             calibration_batches=arguments.calibration_batches,
             quant_bitwidths=tuple(arguments.quant_bitwidths or (8, 16)),
             seed=arguments.seed,

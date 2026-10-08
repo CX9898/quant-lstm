@@ -11,7 +11,7 @@
 | `precision/` | 精度矩阵、阈值和报告 schema |
 | `benchmarks/` | CUDA benchmark、设备 profile 和性能阈值 |
 | `package/` | 独立 CMake consumer 和源码无关的 Python wheel 安装 |
-| `real_network/` | Speech Commands v0.02 训练比较 |
+| `real_network/` | Speech Commands 浮点预训练、PTQ 与固定参数 QAT 质量门禁 |
 
 构建产物和运行报告写入 Git 忽略目录。默认验证入口为：
 

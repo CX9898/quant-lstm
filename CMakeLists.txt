@@ -453,6 +453,7 @@ install(
 install(
     FILES
         tests/real_network/README.md
+        tests/real_network/HISTORICAL_RESULTS.md
     DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/quant-lstm/tests/real_network
 )
 

@@ -13,7 +13,7 @@ usage() {
 Usage: tests/real_network/run_speech_commands_lstm_test.sh [options]
 
 Run matched torch.nn.LSTM, native-float QuantLSTM, 8-bit QuantLSTM QAT, and
-16-bit QuantLSTM QAT training on Speech Commands v0.02.
+16-bit QuantLSTM QAT after shared float pretraining on Speech Commands v0.02.
 
 Options:
   --dataset-root PATH  Extracted dataset containing validation_list.txt
@@ -97,6 +97,7 @@ PY
 
 export QUANT_LSTM_SPEECH_COMMANDS_ROOT="${dataset_root}"
 "${python_bin}" "${root_dir}/tests/real_network/test_qat_fixed_quant_params.py"
+"${python_bin}" "${root_dir}/tests/real_network/test_pretrained_qat_protocol.py"
 if [[ "${full_dataset}" -eq 1 ]]; then
   export QUANT_LSTM_RUN_FULL_SPEECH_COMMANDS=1
   "${python_bin}" \

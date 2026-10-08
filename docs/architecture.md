@@ -128,7 +128,7 @@ PyPI package，wheel 由用户在兼容环境中从源码构建。完整命令�
 | CUDA | rounding、FP32、q-carrier、校准 round-trip、严格精度 | CTest CUDA targets |
 | PyTorch | 接口、布局、双向、FP32 backward、QAT STE、ONNX | `tools/run_end_to_end_test.sh` |
 | 性能 | cuBLAS 调用、sanitizer、P50/P95、设备专用阈值 | `tools/run_end_to_end_test.sh --with-cuda-validation` |
-| 真实网络 | Speech Commands FP32、INT8 QAT、INT16 QAT | `tests/real_network/run_speech_commands_lstm_test.sh` |
+| 真实网络 | Speech Commands 浮点预训练 → PTQ → 固定参数 QAT | `tests/real_network/run_speech_commands_lstm_test.sh` |
 
 Golden schema、测试矩阵和阈值入库。构建产物、运行日志和逐次生成的报告保存在忽略
 目录中。性能和精度结论必须同时记录环境、数据、shape、seed 和测量范围。

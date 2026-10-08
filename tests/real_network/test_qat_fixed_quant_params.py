@@ -44,11 +44,13 @@ class FixedQuantParamsTest(unittest.TestCase):
                 ptq_params = model.lstm.export_quant_params()
                 original_weight = model.lstm.weight_ih_l0.detach().clone()
                 observed_training = []
+                observed_weight_updates = []
 
                 def check_quantizer(module, inputs):
                     self.assertFalse(module.calibrating, "QAT recalibrated after initial PTQ")
                     self.assertEqual(module.export_quant_params(), ptq_params)
                     observed_training.append(module.training)
+                    observed_weight_updates.append(not torch.equal(original_weight, module.weight_ih_l0))
 
                 handle = model.lstm.register_forward_pre_hook(check_quantizer)
                 try:
@@ -62,7 +64,8 @@ class FixedQuantParamsTest(unittest.TestCase):
                 self.assertIn(True, observed_training)
                 self.assertIn(False, observed_training)
                 self.assertTrue(result["native_qat_checkpoint_observed"])
-                self.assertFalse(torch.equal(original_weight, model.lstm.weight_ih_l0))
+                self.assertTrue(any(observed_weight_updates))
+                self.assertGreater(result["parameter_update_norm"], 0)
                 self.assertEqual(model.lstm.export_quant_params(), ptq_params)
                 model.eval()
                 with torch.no_grad():
