@@ -85,10 +85,8 @@ RUN if [[ -n "${PIP_INDEX_URL}" ]]; then \
         python -m pip config set global.trusted-host "${PIP_TRUSTED_HOST}"; \
     fi
 
-COPY requirements-test.txt /tmp/quant-lstm/requirements-test.txt
-
 RUN python -m pip install --no-cache-dir \
-        --requirement /tmp/quant-lstm/requirements-test.txt \
+        jsonschema==4.26.0 referencing==0.37.0 \
     && cmake --version \
     && test -f /usr/share/cmake/nlohmann_json/nlohmann_jsonConfig.cmake \
     && python -c \
