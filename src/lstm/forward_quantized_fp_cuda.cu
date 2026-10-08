@@ -507,9 +507,9 @@ __device__ __forceinline__ float clampDevice(float value, const DeviceQuantPoint
 
 __device__ __forceinline__ float quantizeMasterDevice(float value, const DeviceQuantPoint& point,
                                                       std::uint8_t* clamped = nullptr) {
-    const double translated = static_cast<double>(value) / static_cast<double>(point.scale) +
-                              static_cast<double>(point.zero_point);
-    const double rounded = quantization::roundToNearestEven(translated);
+    const double rounded = quantization::roundToNearestEven(static_cast<double>(value) /
+                                                            static_cast<double>(point.scale)) +
+                           static_cast<double>(point.zero_point);
     if (clamped != nullptr) {
         *clamped = rounded < static_cast<double>(point.minimum) ||
                    rounded > static_cast<double>(point.maximum);

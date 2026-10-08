@@ -1,3 +1,4 @@
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -78,6 +79,30 @@ int main() {
         requireThrows([&] { signed_symmetric_8.validateValue(-128); },
                       "symmetric -128 must be rejected");
         signed_asymmetric_8.validateValue(-128);
+
+        // Literal RNE answers are independent of the production rounding implementation.
+        constexpr std::array<float, 6> ties{-2.5F, -1.5F, -0.5F, 0.5F, 1.5F, 2.5F};
+        constexpr std::array<int, 6> rounded{-2, -2, 0, 0, 2, 2};
+        for (const int zero_point : {-3, -2, -1, 0, 1, 2, 3}) {
+            for (const float scale : {0.5F, 1.0F, 2.0F}) {
+                const q::QuantParam param{scale, zero_point};
+                for (std::size_t index = 0; index < ties.size(); ++index) {
+                    require(q::quantize(ties[index] * scale, param, signed_asymmetric_8) ==
+                                rounded[index] + zero_point,
+                            "affine quantization must round before adding zero point");
+                }
+            }
+            const q::QuantParam input_param{1.0F, 0};
+            const q::QuantParam output_param{1.0F, zero_point};
+            require(q::realActivation(std::int32_t{0}, input_param, signed_asymmetric_8,
+                                      output_param, signed_asymmetric_8,
+                                      q::RealActivationKind::Sigmoid) == zero_point,
+                    "INT32 sigmoid half tie must round before adding zero point");
+            require(q::realActivation(0.0F, input_param, signed_asymmetric_8, output_param,
+                                      signed_asymmetric_8, q::RealActivationKind::Sigmoid) ==
+                        static_cast<float>(zero_point),
+                    "FP32 sigmoid half tie must round before adding zero point");
+        }
 
         const auto signed_calibration = q::calibrateMinMax(-12.7F, 12.7F, signed_symmetric_8);
         require(std::abs(signed_calibration.param.scale - 0.1F) < 1.0e-7F,

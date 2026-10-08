@@ -22,8 +22,8 @@ inline std::int32_t quantize(float value, const QuantParam& param, const Quantiz
     if (!std::isfinite(value)) {
         throw std::invalid_argument("量化输入必须有限");
     }
-    const double translated =
-        static_cast<double>(value) / param.scale + static_cast<double>(param.zero_point);
+    const double translated = roundToNearestEven(static_cast<double>(value) / param.scale) +
+                              static_cast<double>(param.zero_point);
     const QuantizedRange range = type.range();
     if (translated <= static_cast<double>(range.minimum)) {
         return range.minimum;

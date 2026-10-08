@@ -21,6 +21,11 @@
   `operators_reverse` 和 operator 级 standard scale/zp。
 - POT2 CoverRange 对退化校准范围复用统一 minimum-scale fallback。
 
+### Fixed
+
+- CPU/CUDA standard-scale 量化统一先执行 RNE 再加 zero point，修复非对称量化
+  在奇数 zero point 的 half tie 处偏差一个量化级的问题。
+
 ### Known limitations
 
 - Python runtime 只支持 CUDA FP32 tensor、单层 LSTM 和 `dropout=0`。

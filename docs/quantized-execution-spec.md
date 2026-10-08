@@ -267,6 +267,10 @@ q_out = Clamp(RoundToNearestEven(y_real/S_out)+Z_out)
 
 FP 和 int32 载体 reference 必须复用同一个真实激活边界实现。
 
+所有 standard-scale 量化边界（包括 input、参数和初始状态）必须先执行 RNE，
+再加 zero point。不能改写为 `RoundToNearestEven(y/S+Z)`：奇数 `Z` 会改变
+half tie 的奇偶性，例如 `y/S=0.5, Z=1` 的正确量化值是 `1`，不是 `2`。
+
 ### 8.3 Cell 双比例延迟舍入
 
 ```text

@@ -40,8 +40,8 @@ QUANT_LSTM_CUDA_HOST_DEVICE inline float realActivationCore(
                                 ? realTanh(real_input)
                                 : realSigmoid(real_input);
     // 这是激活输出的 standard-scale 量化边界，不是算术 rescale raw ratio。
-    const double translated = static_cast<double>(activated) / static_cast<double>(output_scale) +
-                              static_cast<double>(output_zero_point);
+    const double scaled = static_cast<double>(activated) / static_cast<double>(output_scale);
+    const double translated = scaled + static_cast<double>(output_zero_point);
     if (translated <= static_cast<double>(output_minimum)) {
         if (clamped != nullptr) {
             *clamped = translated < static_cast<double>(output_minimum);
@@ -57,7 +57,8 @@ QUANT_LSTM_CUDA_HOST_DEVICE inline float realActivationCore(
     if (clamped != nullptr) {
         *clamped = false;
     }
-    return static_cast<float>(quantization::roundToNearestEven(translated));
+    return static_cast<float>(quantization::roundToNearestEven(scaled) +
+                              static_cast<double>(output_zero_point));
 }
 
 QUANT_LSTM_CUDA_HOST_DEVICE inline float applyExecutionRescaleCore(

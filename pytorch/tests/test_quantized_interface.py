@@ -103,6 +103,55 @@ class QuantizedInterfaceTest(unittest.TestCase):
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
 
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
+    def test_master_quantization_rounds_before_adding_zero_point(self):
+        module = QuantLSTM(1, 1, bias=False, device="cuda")
+        initialize_module(module)
+        values = torch.tensor(
+            [-2.5, -1.5, -0.5, 0.5, 1.5, 2.5], device="cuda"
+        ).reshape(6, 1, 1)
+        calibrate(module, values, None)
+        document = module.export_quant_params()
+        rounded = torch.tensor(
+            [-2.0, -2.0, 0.0, 0.0, 2.0, 2.0], device="cuda"
+        ).reshape_as(values)
+        for zero_point in (-3, -2, -1, 0, 1, 2, 3):
+            with self.subTest(zero_point=zero_point):
+                document["operators"]["input"].update(
+                    dtype="INT8", symmetric=False, scale=1.0,
+                    zero_point=zero_point,
+                    real_min=-128 - zero_point, real_max=127 - zero_point,
+                )
+                module.load_quant_params(document)
+                module.use_quantization = True
+                module(values)
+                actual = module.qat_saved_state()["quantized_master"]["input"]
+                torch.testing.assert_close(actual, rounded + zero_point, rtol=0, atol=0)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
+    def test_sigmoid_quantization_rounds_before_adding_zero_point(self):
+        module = QuantLSTM(1, 1, bias=False, device="cuda")
+        with torch.no_grad():
+            module.weight_ih_l0.zero_()
+            module.weight_hh_l0.zero_()
+        values = torch.ones(1, 1, 1, device="cuda")
+        calibrate(module, values, None)
+        document = module.export_quant_params()
+        for zero_point in (-3, -2, -1, 0, 1, 2, 3):
+            with self.subTest(zero_point=zero_point):
+                for name in ("input_gate_output", "forget_gate_output", "output_gate_output"):
+                    document["operators"][name].update(
+                        dtype="INT8", symmetric=False, scale=1.0,
+                        zero_point=zero_point,
+                        real_min=-128 - zero_point, real_max=127 - zero_point,
+                    )
+                module.load_quant_params(document)
+                module.use_quantization = True
+                module(values)
+                gates = module.qat_saved_state()["checkpoints"]["gate_outputs"]
+                # Zero preactivation gives sigmoid(0)=0.5; RNE(0.5)=0.
+                self.assertEqual(gates[0, 0, [0, 1, 3]].tolist(), [zero_point] * 3)
+
     def test_config_api_and_error_contracts(self):
         module = QuantLSTM(3, 4)
         resolved = module.get_quant_config()
