@@ -19,6 +19,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(nlohmann_json 3.11.2 REQUIRED)
 
 add_library(quant_lstm_headers INTERFACE)
@@ -60,6 +61,9 @@ if(QUANT_LSTM_ENABLE_CUDA)
     if(NOT CMAKE_CUDA_COMPILER)
         message(FATAL_ERROR "QUANT_LSTM_ENABLE_CUDA=ON，但未找到 CUDA 编译器")
     endif()
+    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES native)
+    endif()
     enable_language(CUDA)
     set(CMAKE_CUDA_STANDARD 17)
     set(CMAKE_CUDA_STANDARD_REQUIRED ON)
@@ -78,7 +82,6 @@ if(QUANT_LSTM_ENABLE_CUDA)
     set_target_properties(
         quant_lstm
         PROPERTIES
-            CUDA_ARCHITECTURES native
             CUDA_SEPARABLE_COMPILATION OFF
     )
 endif()
@@ -396,7 +399,6 @@ if(QUANT_LSTM_BUILD_TESTS)
         set_target_properties(
             quant_lstm_cuda_benchmark
             PROPERTIES
-                CUDA_ARCHITECTURES native
                 OUTPUT_NAME quant_lstm_cuda_benchmark
                 RUNTIME_OUTPUT_DIRECTORY
                     "${CMAKE_BINARY_DIR}/tests/benchmarks")
@@ -485,6 +487,7 @@ install(
 )
 install(
     FILES
+        cmake/Findnlohmann_json.cmake
         ${CMAKE_CURRENT_BINARY_DIR}/quant-lstm-config.cmake
         ${CMAKE_CURRENT_BINARY_DIR}/quant-lstm-config-version.cmake
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/quant-lstm

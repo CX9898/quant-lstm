@@ -803,13 +803,22 @@ py::tuple lstmForwardQuantized(const torch::Tensor& input, const torch::Tensor& 
                           safetySummary(execution.diagnostics));
 }
 
+quant_lstm::quantization::HistogramCalibrationOptions histogramOptions(float percentile) {
+    TORCH_CHECK(std::isfinite(percentile) && percentile > 0.0F && percentile <= 100.0F,
+                "percentile must be in (0, 100]");
+    quant_lstm::quantization::HistogramCalibrationOptions options;
+    options.percentile = percentile;
+    return options;
+}
+
 class CalibrationSessionBinding {
    public:
     CalibrationSessionBinding(const std::string& resolved_config_json, std::int64_t input_size,
                               std::int64_t hidden_size, bool bias_enabled,
-                              const std::string& method)
+                              const std::string& method, float percentile)
         : config_(quant_lstm::parseResolvedQuantConfig(resolved_config_json, true)),
-          session_(config_, input_size, hidden_size, bias_enabled, parseCalibrationMethod(method)) {
+          session_(config_, input_size, hidden_size, bias_enabled, parseCalibrationMethod(method),
+                   histogramOptions(percentile)) {
     }
 
     std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> collect(
@@ -941,9 +950,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
                py::arg("bundle_json"), py::arg("require_exact_accumulation") = false);
 
     py::class_<CalibrationSessionBinding>(module, "CalibrationSession")
-        .def(py::init<const std::string&, std::int64_t, std::int64_t, bool, const std::string&>(),
+        .def(py::init<const std::string&, std::int64_t, std::int64_t, bool, const std::string&, float>(),
              py::arg("resolved_config_json"), py::arg("input_size"), py::arg("hidden_size"),
-             py::arg("bias_enabled"), py::arg("method") = "minmax")
+             py::arg("bias_enabled"), py::arg("method") = "minmax",
+             py::arg("percentile") = 99.99F)
         .def("collect", &CalibrationSessionBinding::collect, py::arg("input"), py::arg("weight_ih"),
              py::arg("weight_hh"), py::arg("bias_ih") = std::nullopt,
              py::arg("bias_hh") = std::nullopt, py::arg("initial_hidden") = std::nullopt,

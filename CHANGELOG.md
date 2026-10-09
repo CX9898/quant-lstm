@@ -5,6 +5,11 @@
 
 ## [Unreleased]
 
+- 增加与 QuantGRU 对齐的循环算子集成接口，配置、校准生命周期、Po2 和 AIMET/ONNX
+  编码处理均由本库负责，无 AIMET 依赖。
+- 增加 Percentile 数值、参数锁及模型复制接口；per-gate ONNX 编码按原生展开形式重排。
+- 构建支持外部目录、显式 CUDA 架构和构建期 JSON 头文件 wheel。
+
 ### Added
 
 - 不依赖 native checkpoint/mask 的量化前向与 QAT autograd oracle，加入默认 E2E；

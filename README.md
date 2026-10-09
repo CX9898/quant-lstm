@@ -189,3 +189,5 @@ tools/run_end_to_end_test.sh
 ## 许可证
 
 QuantLSTM 仓库目前尚未提供 `LICENSE` 文件，尚未声明开源许可证。
+
+AIMET/rx-met 接入与通用接口见 [循环算子集成接口](docs/aimet_integration.md)。

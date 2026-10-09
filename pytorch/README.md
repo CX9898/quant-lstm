@@ -6,6 +6,7 @@
 | --- | --- |
 | `quant_lstm.py` | 模块状态、配置、校准和参数导入导出 |
 | `lstm_autograd.py` | autograd Function 与 extension 调度 |
+| `lstm_aimet.py` | 通用循环算子接入接口：配置、校准生命周期、Po2、AIMET 编码与 ONNX 参数对齐 |
 | `lstm_onnx.py` | 标准 ONNX `LSTM` symbolic |
 | `lib/lstm_interface_binding.cc` | PyTorch 与 C++/CUDA 核心边界 |
 | `tests/` | Python 接口、backward、STE、双向和 ONNX 验证 |
@@ -23,3 +24,5 @@ Python 层不实现生产 LSTM 公式，也不提供 CPU fallback。普通安装
 覆盖 INT8/INT16、混合位宽、signed/unsigned、三种参数粒度、affine/POT2、两种布局、
 饱和输入、有无 bias，以及多次前向后反向、非连续 tensor、分段状态和非默认 stream。
 这些数值测试不能代替 Speech Commands 的训练质量门禁。
+
+AIMET/rx-met 接入方法与编码约定见 [循环算子集成接口](../docs/aimet_integration.md)。

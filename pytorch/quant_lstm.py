@@ -22,6 +22,7 @@ except ImportError as exc:
     ) from exc
 
 from lstm_autograd import float_lstm, quantized_lstm
+from lstm_aimet import LSTMAimetIntegration, normalize_quant_lstm_onnx
 from lstm_onnx import (
     ensure_quant_lstm_onnx_registered,
     onnx_lstm,
@@ -377,7 +378,7 @@ def _validate_external_document(
             raise ValueError(f"{field} 必须是 object")
 
 
-class _UnidirectionalQuantLSTM(nn.Module):
+class _UnidirectionalQuantLSTM(LSTMAimetIntegration, nn.Module):
     """与单层单向 nn.LSTM 对齐的双模式模块。
 
     use_quantization=False 使用浮点路径。校准并设置
@@ -431,8 +432,10 @@ class _UnidirectionalQuantLSTM(nn.Module):
         self.bidirectional = bidirectional
         self.use_quantization = bool(use_quantization)
         self.calibrating = False
+        self._quant_params_locked = False
         self.require_exact_accumulation = bool(require_exact_accumulation)
         self._calibration_method = calibration_method
+        self._percentile_value = 99.99
         self._cublas_math_mode = cublas_math_mode
 
         factory_kwargs = {
@@ -501,6 +504,7 @@ class _UnidirectionalQuantLSTM(nn.Module):
                 parameter.uniform_(-bound, bound)
 
     def _invalidate_quant_params(self) -> None:
+        self._quant_params_locked = False
         self._calibration_session = None
         self._quant_params_bundle_json = None
         self._last_safety_report = None
@@ -516,6 +520,39 @@ class _UnidirectionalQuantLSTM(nn.Module):
             _strict_json_loads(self._resolved_config_json)
         )
         self._invalidate_quant_params()
+
+    def __getstate__(self):
+        state = super().__getstate__()
+        # Native calibration collectors cannot be pickled. Completed encodings are JSON.
+        if self.calibrating:
+            raise RuntimeError("Cannot copy QuantLSTM during calibration")
+        state["_calibration_session"] = None
+        state["_reverse_calibration_session"] = None
+        state["_qat_saved_state"] = None
+        return state
+
+    @property
+    def percentile_value(self) -> float:
+        return self._percentile_value
+
+    @percentile_value.setter
+    def percentile_value(self, value: float) -> None:
+        value = float(value)
+        if not math.isfinite(value) or not 0 < value <= 100:
+            raise ValueError("percentile_value must be in (0, 100]")
+        if value != self._percentile_value:
+            self.reset_calibration()
+        self._percentile_value = value
+
+    def load_quant_config(self, source: dict[str, Any] | str | Path) -> None:
+        """Validate a native override; keep existing encodings when it is unchanged."""
+        resolved = _quant_lstm.resolve_quant_config(
+            _DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"), _json_source(source))
+        if resolved == self._resolved_config_json:
+            return
+        if self.is_calibrated():
+            raise RuntimeError("Reset QuantLSTM calibration before changing quant_config")
+        self._apply_override(_resolved_override(_strict_json_loads(resolved)))
 
     def get_quant_config(self, operator: Optional[str] = None) -> dict[str, Any]:
         """返回 C++ resolver 产生的完整 canonical resolved config。"""
@@ -562,6 +599,7 @@ class _UnidirectionalQuantLSTM(nn.Module):
                 self.hidden_size,
                 self.bias,
                 self.calibration_method,
+                self.percentile_value,
             )
         return self._calibration_session
 
@@ -586,6 +624,14 @@ class _UnidirectionalQuantLSTM(nn.Module):
             self.batch_first,
         )
         return output, (final_hidden, final_cell)
+
+    def quant_params_locked(self) -> bool:
+        return self._quant_params_locked
+
+    def set_quant_params_locked(self, locked: bool = True) -> None:
+        if locked and not self.is_calibrated():
+            raise RuntimeError("Cannot lock uncalibrated QuantLSTM parameters")
+        self._quant_params_locked = bool(locked)
 
     def reset_calibration(self) -> None:
         self._invalidate_quant_params()
@@ -918,6 +964,7 @@ class QuantLSTM(_UnidirectionalQuantLSTM):
                 self.hidden_size,
                 self.bias,
                 self.calibration_method,
+                self.percentile_value,
             )
         return self._reverse_calibration_session
 
