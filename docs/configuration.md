@@ -261,8 +261,9 @@ restored.use_quantization = True
 | `finalize_calibration()` | finalization 期间派生并审计 | 生成并锁定参数 |
 | `load_quant_params()` | 加载期间完整审计 | 用导入参数替换会话 |
 
-修改模型 weight 不会自动刷新量化参数。QAT 训练需要按照训练流程定期使用代表性训练
-数据重新校准；静态参数缓存的调用方还需要在 master 参数变化后更新 generation key。
+修改模型 weight 不会自动刷新量化参数。本项目的 QAT 流程沿用首次 PTQ 校准所得的
+scale、zero point 和位宽，不按 epoch 重新校准。浮点主权重继续更新，每次前向按
+固定参数执行量化；静态参数缓存的调用方仍需在 master 参数变化后更新 generation key。
 
 ## 7. 错误与告警
 

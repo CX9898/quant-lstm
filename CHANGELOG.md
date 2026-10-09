@@ -20,6 +20,11 @@
 
 ### Changed
 
+- README 按 QuantGRU 的使用流程组织，补充保存重载、ONNX 导出示例及接口速查。
+
+- 重构 README，补充安装、PTQ/QAT 使用、目录、测试和贡献入口；配置文档同步明确
+  QAT 沿用首次 PTQ 校准参数，不按 epoch 重新校准。
+
 - 公共 JSON Schema 从 `config/schema/` 移至根目录 `schemas/`，与用户配置分开；
   CMake 安装后的规范文件位于 `share/quant-lstm/schemas/`，默认配置仍位于
   `share/quant-lstm/config/`。
