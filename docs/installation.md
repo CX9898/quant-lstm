@@ -135,6 +135,7 @@ cmake --install build-install
 <prefix>/lib/libquant_lstm.a
 <prefix>/lib/cmake/quant-lstm/
 <prefix>/share/quant-lstm/config/
+<prefix>/share/quant-lstm/schemas/
 <prefix>/share/doc/quant-lstm/
 ```
 

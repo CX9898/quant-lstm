@@ -20,6 +20,10 @@
 
 ### Changed
 
+- 公共 JSON Schema 从 `config/schema/` 移至根目录 `schemas/`，与用户配置分开；
+  CMake 安装后的规范文件位于 `share/quant-lstm/schemas/`，默认配置仍位于
+  `share/quant-lstm/config/`。
+
 - 开发约定和测试范围合并至文档导航与测试说明，安装文档同步调整。
 - 公共量化参数统一使用 `model_info`、`operators`、可选
   `operators_reverse` 和 operator 级 standard scale/zp。

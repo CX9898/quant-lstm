@@ -16,7 +16,7 @@ from tests import lstm_backward_oracle as oracle
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_SCHEMA = json.loads(
-    (ROOT / "config/schema/lstm_pytorch_quant_params.schema.json").read_text()
+    (ROOT / "schemas/lstm_pytorch_quant_params.schema.json").read_text()
 )
 def deterministic_tensor(shape, start=-0.35, stop=0.35, *, device="cpu"):
     count = 1

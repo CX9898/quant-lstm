@@ -9,10 +9,12 @@ Round/Clamp 位置以[量化执行规格](quantized-execution-spec.md)为准。
 
 | 表示 | Schema | 用途 |
 | --- | --- | --- |
-| sparse override | `config/schema/lstm_quant_override.schema.json` | 构造模块或修改配置时提供用户覆盖项 |
-| resolved config | `config/schema/lstm_quant_resolved.schema.json` | C++ resolver 生成的完整执行配置 |
+| sparse override | `schemas/lstm_quant_override.schema.json` | 构造模块或修改配置时提供用户覆盖项 |
+| resolved config | `schemas/lstm_quant_resolved.schema.json` | C++ resolver 生成的完整执行配置 |
 
-默认值的唯一来源是 `config/defaults/lstm_quant_default_v1.json`。解析顺序为：
+用户可调整的默认配置位于 `config/defaults/`；根目录 `schemas/` 存放文件格式与
+校验规范，通常不需要修改。默认值的唯一来源是
+`config/defaults/lstm_quant_default_v1.json`。解析顺序为：
 
 ```text
 default config <- user override -> canonical resolved config
@@ -207,8 +209,8 @@ restored.use_quantization = True
 
 公共格式使用 GRU-compatible schema v1：
 
-- 单向 schema：`config/schema/lstm_pytorch_quant_params.schema.json`。
-- 双向 schema：`config/schema/lstm_pytorch_bidirectional_quant_params.schema.json`。
+- 单向 schema：`schemas/lstm_pytorch_quant_params.schema.json`。
+- 双向 schema：`schemas/lstm_pytorch_bidirectional_quant_params.schema.json`。
 - 根字段为 `schema_version`、`model_info`、`execution_metadata`、`operators`，双向
   文档另含 `operators_reverse`。
 

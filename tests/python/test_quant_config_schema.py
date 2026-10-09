@@ -8,8 +8,8 @@ from tools.strict_jsonschema import StrictDraft202012Validator
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DEFAULT_PATH = ROOT / "config/defaults/lstm_quant_default_v1.json"
-OVERRIDE_SCHEMA_PATH = ROOT / "config/schema/lstm_quant_override.schema.json"
-RESOLVED_SCHEMA_PATH = ROOT / "config/schema/lstm_quant_resolved.schema.json"
+OVERRIDE_SCHEMA_PATH = ROOT / "schemas/lstm_quant_override.schema.json"
+RESOLVED_SCHEMA_PATH = ROOT / "schemas/lstm_quant_resolved.schema.json"
 
 
 class QuantConfigSchemaTest(unittest.TestCase):

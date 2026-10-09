@@ -6,7 +6,7 @@ import jsonschema
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SCHEMA_DIR = ROOT / "config/schema"
+SCHEMA_DIR = ROOT / "schemas"
 
 
 class PytorchInterfaceSchemaTest(unittest.TestCase):

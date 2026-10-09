@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 BIDIRECTIONAL_SCHEMA = json.loads(
     (
         ROOT
-        / "config/schema/lstm_pytorch_bidirectional_quant_params.schema.json"
+        / "schemas/lstm_pytorch_bidirectional_quant_params.schema.json"
     ).read_text()
 )
 

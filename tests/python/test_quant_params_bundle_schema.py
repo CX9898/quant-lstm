@@ -7,7 +7,7 @@ from tools.strict_jsonschema import StrictDraft202012Validator
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-SCHEMA_PATH = ROOT / "config/schema/lstm_quant_params_bundle.schema.json"
+SCHEMA_PATH = ROOT / "schemas/lstm_quant_params_bundle.schema.json"
 DEFAULT_PATH = ROOT / "config/defaults/lstm_quant_default_v1.json"
 
 

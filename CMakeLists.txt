@@ -426,12 +426,16 @@ install(
 install(
     FILES
         config/defaults/lstm_quant_default_v1.json
-        config/schema/lstm_quant_override.schema.json
-        config/schema/lstm_quant_resolved.schema.json
-        config/schema/lstm_quant_params_bundle.schema.json
-        config/schema/lstm_pytorch_quant_params.schema.json
-        config/schema/lstm_pytorch_bidirectional_quant_params.schema.json
     DESTINATION ${CMAKE_INSTALL_DATADIR}/quant-lstm/config
+)
+install(
+    FILES
+        schemas/lstm_quant_override.schema.json
+        schemas/lstm_quant_resolved.schema.json
+        schemas/lstm_quant_params_bundle.schema.json
+        schemas/lstm_pytorch_quant_params.schema.json
+        schemas/lstm_pytorch_bidirectional_quant_params.schema.json
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/quant-lstm/schemas
 )
 install(
     FILES
