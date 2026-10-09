@@ -28,14 +28,10 @@ cuBLAS SGEMM 执行，sigmoid/tanh 使用浮点计算。CPU 浮点和 int32 refe
 版本、CUDA Toolkit 和 CUDA 版 PyTorch。Python 需要开发头文件、`pip`、`setuptools`
 和 `wheel`，编译工具链与 PyTorch CUDA 版本保持兼容。
 
-以下命令从本仓库根目录执行：
+默认构建 Release CUDA 库，测试和示例默认关闭。以下命令从本仓库根目录执行：
 
 ```bash
-cmake -S . -B build \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DQUANT_LSTM_ENABLE_CUDA=ON \
-  -DQUANT_LSTM_BUILD_TESTS=OFF \
-  -DQUANT_LSTM_BUILD_EXAMPLES=OFF
+cmake -S . -B build
 cmake --build build --parallel 2
 python -m pip install ./pytorch --no-deps --no-build-isolation
 ```

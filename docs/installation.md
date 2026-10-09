@@ -35,17 +35,22 @@ Python package 支持普通环境安装和 wheel 安装。以下构建命令均�
 且原生核心必须构建到固定的 `build/` 目录，因为 `pytorch/setup.py` 从该目录链接
 `libquant_lstm.a`。
 
+新构建目录默认启用 CUDA，关闭测试和示例；单配置生成器默认使用 `Release`。
+普通安装无需显式指定这些开关。需要开发构建时可传入
+`-DCMAKE_BUILD_TYPE=Debug`、`-DQUANT_LSTM_BUILD_TESTS=ON` 或
+`-DQUANT_LSTM_BUILD_EXAMPLES=ON`；仓库验证脚本会显式开启所需目标。
+多配置生成器使用 `cmake --build build --config Release` 选择构建类型。
+
+已有构建目录保留 CMake 缓存中的设置；需要恢复当前默认值时，使用
+`cmake --fresh -S . -B build` 重新配置。
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 
 # 按目标 CUDA 环境安装 CUDA-enabled PyTorch 后执行：
-cmake -S . -B build \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DQUANT_LSTM_ENABLE_CUDA=ON \
-  -DQUANT_LSTM_BUILD_TESTS=OFF \
-  -DQUANT_LSTM_BUILD_EXAMPLES=OFF
+cmake -S . -B build
 cmake --build build --parallel
 python -m pip install ./pytorch --no-build-isolation
 ```
@@ -119,11 +124,7 @@ python -m pip uninstall quant-lstm
 install_prefix=/path/to/quant-lstm-install
 
 cmake -S . -B build-install \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_INSTALL_PREFIX="${install_prefix}" \
-  -DQUANT_LSTM_ENABLE_CUDA=ON \
-  -DQUANT_LSTM_BUILD_TESTS=OFF \
-  -DQUANT_LSTM_BUILD_EXAMPLES=OFF
+  -DCMAKE_INSTALL_PREFIX="${install_prefix}"
 cmake --build build-install --parallel
 cmake --install build-install
 ```
@@ -174,10 +175,8 @@ CUDA 或 cuBLAS：
 install_prefix=/path/to/quant-lstm-cpu-install
 
 cmake -S . -B build-cpu-install \
-  -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="${install_prefix}" \
   -DQUANT_LSTM_ENABLE_CUDA=OFF \
-  -DQUANT_LSTM_BUILD_TESTS=OFF \
   -DQUANT_LSTM_BUILD_EXAMPLES=ON
 cmake --build build-cpu-install --parallel
 cmake --install build-cpu-install

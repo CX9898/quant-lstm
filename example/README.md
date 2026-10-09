@@ -10,7 +10,6 @@
 ```bash
 cmake -S . -B build-example \
   -DQUANT_LSTM_ENABLE_CUDA=OFF \
-  -DQUANT_LSTM_BUILD_TESTS=OFF \
   -DQUANT_LSTM_BUILD_EXAMPLES=ON
 cmake --build build-example --parallel
 build-example/lstm_float_example

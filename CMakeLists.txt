@@ -5,9 +5,15 @@ project(quant-lstm VERSION 0.1.0 LANGUAGES CXX)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
+# 单配置生成器默认构建 Release，保留用户显式指定的构建类型。
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
+endif()
+
 option(QUANT_LSTM_ENABLE_CUDA "构建 CUDA 浮点和量化后端" ON)
-option(QUANT_LSTM_BUILD_TESTS "构建测试" ON)
-option(QUANT_LSTM_BUILD_EXAMPLES "构建示例" ON)
+option(QUANT_LSTM_BUILD_TESTS "构建测试" OFF)
+option(QUANT_LSTM_BUILD_EXAMPLES "构建示例" OFF)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

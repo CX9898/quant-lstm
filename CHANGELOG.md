@@ -20,6 +20,9 @@
 
 ### Changed
 
+- 普通源码安装默认构建 Release CUDA 库，测试和示例改为显式开启；安装命令简化为
+  `cmake -S . -B build`。已有 CMake 缓存和显式构建选项继续生效。
+
 - README 按 QuantGRU 的使用流程组织，补充保存重载、ONNX 导出示例及接口速查。
 
 - 重构 README，补充安装、PTQ/QAT 使用、目录、测试和贡献入口；配置文档同步明确
