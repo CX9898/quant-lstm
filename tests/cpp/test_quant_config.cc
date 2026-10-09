@@ -92,7 +92,21 @@ int main() {
                 default_canonical.substr(start, end - start).find("granularity") != std::string::npos;
             require(exposes_granularity == quant_lstm::isParameterOperator(id),
                     "only parameter config may expose granularity");
-            if (!quant_lstm::isParameterOperator(id)) {
+            const std::string operator_text = default_canonical.substr(start, end - start);
+            if (quant_lstm::isParameterOperator(id)) {
+                require(operator_text.find("is_unsigned") == std::string::npos &&
+                            operator_text.find("is_symmetric") == std::string::npos,
+                        "fixed parameter flags must not be exposed");
+                require(!defaults.at(id).type.is_unsigned && defaults.at(id).type.is_symmetric,
+                        "parameters must remain signed symmetric internally");
+                for (const std::string field : {"\"is_unsigned\":false,", "\"is_symmetric\":true,"}) {
+                    std::string invalid = default_canonical;
+                    invalid.insert(start + key.size(), field);
+                    requireThrows(
+                        [&] { static_cast<void>(quant_lstm::parseResolvedQuantConfig(invalid, false)); },
+                        "fixed parameter flags must not be accepted");
+                }
+            } else {
                 require(defaults.at(id).granularity == quant_lstm::QuantGranularity::PerTensor,
                         "non-parameter granularity must remain per_tensor internally");
             }
@@ -106,6 +120,25 @@ int main() {
                 static_cast<void>(quant_lstm::parseResolvedQuantConfig(non_parameter_field, false));
             },
             "non-parameter granularity field must not be accepted in resolved config");
+        std::string annotated = default_canonical;
+        annotated.insert(annotated.find(input_key) + input_key.size(),
+                         "\n      \"comment\": \"输入序列 x_t\",");
+        require(quant_lstm::toCanonicalJson(quant_lstm::parseResolvedQuantConfig(annotated, false)) ==
+                    default_canonical,
+                "comments must not affect execution config");
+        require(quant_lstm::toCanonicalJson(quant_lstm::resolveQuantConfig(
+                    annotated, R"({"schema_version":1})")) == default_canonical,
+                "annotated defaults must resolve normally");
+        requireThrows(
+            [&] { static_cast<void>(quant_lstm::parseResolvedQuantConfig(annotated)); },
+            "canonical execution config must not contain comments");
+        const auto commented_override = quant_lstm::resolveQuantConfig(
+            default_canonical,
+            R"({"schema_version":1,"operators":{"input":{"comment":"输入序列","bitwidth":16}}})");
+        const auto plain_override = quant_lstm::resolveQuantConfig(
+            default_canonical, R"({"schema_version":1,"operators":{"input":{"bitwidth":16}}})");
+        require(quant_lstm::toCanonicalJson(commented_override) == quant_lstm::toCanonicalJson(plain_override),
+                "override comments must not affect execution config");
         const auto parsed_default = quant_lstm::parseResolvedQuantConfig(default_canonical);
         require(quant_lstm::toCanonicalJson(parsed_default) == default_canonical,
                 "default canonical round-trip");
@@ -136,7 +169,7 @@ int main() {
                 '"' + std::string(quant_lstm::quantOperatorName(id)) + "\":{\"bitwidth\":16";
             if (quant_lstm::isParameterOperator(id)) {
                 pure_int16_override +=
-                    R"(,"is_unsigned":false,"is_symmetric":true,"granularity":"per_channel")";
+                    R"(,"granularity":"per_channel")";
             } else {
                 pure_int16_override += R"(,"is_unsigned":false,"is_symmetric":true)";
             }
@@ -171,6 +204,13 @@ int main() {
                 [&] { static_cast<void>(quant_lstm::resolveQuantConfig(defaults_json, invalid)); },
                 "invalid override was accepted");
         };
+        reject_override(R"({"schema_version":1,"operators":{"input":{"comment":12,"bitwidth":8}}})");
+        reject_override(R"({"schema_version":1,"operators":{"input":{"comment":null,"bitwidth":8}}})");
+        reject_override(R"({"schema_version":1,"operators":{"input":{"comment":{},"bitwidth":8}}})");
+        reject_override(R"({"schema_version":1,"operators":{"input":{"comment":"说明"}}})");
+        reject_override(R"({"schema_version":1,"operators":{"input":{"comment":"a","comment":"b","bitwidth":8}}})");
+        reject_override(R"({"schema_version":1,"operators":{"weight_ih":{"is_unsigned":false}}})");
+        reject_override(R"({"schema_version":1,"operators":{"weight_ih":{"is_symmetric":true}}})");
         reject_override("");
         reject_override(R"({"schema_version":1,"schema_version":1})");
         reject_override(

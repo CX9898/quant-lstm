@@ -300,8 +300,8 @@ class PrecisionContractV2Test(unittest.TestCase):
 
                 for parameter in PARAMETERS:
                     operator = operators[parameter]
-                    self.assertFalse(operator["is_unsigned"])
-                    self.assertTrue(operator["is_symmetric"])
+                    self.assertNotIn("is_unsigned", operator)
+                    self.assertNotIn("is_symmetric", operator)
                     declared = case["parameter_granularities"][parameter]
                     if (
                         case["bias_profile"] == "disabled"

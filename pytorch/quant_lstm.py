@@ -106,13 +106,12 @@ def _json_source(value: dict[str, Any] | str | Path | None) -> str:
 def _resolved_override(resolved: dict[str, Any]) -> dict[str, Any]:
     operators = {}
     for name, config in resolved["operators"].items():
-        fields = {
-            "bitwidth": config["bitwidth"],
-            "is_unsigned": config["is_unsigned"],
-            "is_symmetric": config["is_symmetric"],
-        }
+        fields = {"bitwidth": config["bitwidth"]}
         if name in _PARAMETER_OPERATORS:
             fields["granularity"] = config["granularity"]
+        else:
+            fields["is_unsigned"] = config["is_unsigned"]
+            fields["is_symmetric"] = config["is_symmetric"]
         operators[name] = fields
     return {
         "schema_version": 1,

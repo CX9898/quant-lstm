@@ -30,7 +30,9 @@ class QuantParamsBundleSchemaTest(unittest.TestCase):
                 "bias_hh",
             } else 1
             operators[name] = {
-                **config,
+                **{key: value for key, value in config.items() if key != "comment"},
+                "is_unsigned": config.get("is_unsigned", False),
+                "is_symmetric": config.get("is_symmetric", True),
                 "granularity": config.get("granularity", "per_tensor"),
                 "scales": ["0.0078125"] * count,
                 "zero_points": [0] * count,

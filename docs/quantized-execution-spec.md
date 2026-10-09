@@ -79,7 +79,7 @@ Python、CPU、CUDA、Golden 和报告只消费 resolved config，不得各自�
 | 其他非参数量化点 | `false` | `true` |
 | 四组 weight/bias | `false` | `true`，不可覆盖为 false |
 
-除 weight/bias 固定约束外，非参数量化点可通过 override 独立配置 `bitwidth/is_unsigned/is_symmetric`。激活和状态 granularity 固定为 `per_tensor`。
+Weight/bias 只展示并接受 `bitwidth/granularity`，有符号、对称量化由内部固定。非参数量化点可通过 override 独立配置 `bitwidth/is_unsigned/is_symmetric`；其 granularity 在内部固定为 `per_tensor`，不作为配置字段。每个量化点可带字符串 `comment` 解释对应张量，resolver 会在生成 canonical config 时移除该注释。
 
 ### 4.3 参数粒度
 

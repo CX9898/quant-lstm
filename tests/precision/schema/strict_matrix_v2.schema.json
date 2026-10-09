@@ -780,9 +780,7 @@
     "operator_required": {
       "type": "object",
       "required": [
-        "bitwidth",
-        "is_unsigned",
-        "is_symmetric"
+        "bitwidth"
       ]
     },
     "non_parameter": {
@@ -807,7 +805,11 @@
             "is_symmetric": {
               "type": "boolean"
             }
-          }
+          },
+          "required": [
+            "is_unsigned",
+            "is_symmetric"
+          ]
         }
       ]
     },
@@ -826,12 +828,6 @@
                 8,
                 16
               ]
-            },
-            "is_unsigned": {
-              "const": false
-            },
-            "is_symmetric": {
-              "const": true
             },
             "granularity": {
               "enum": [

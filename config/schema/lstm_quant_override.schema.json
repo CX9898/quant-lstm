@@ -40,21 +40,68 @@
       "minProperties": 1,
       "additionalProperties": false,
       "properties": {
-        "bitwidth": {"$ref": "#/$defs/bitwidth"},
-        "is_unsigned": {"type": "boolean"},
-        "is_symmetric": {"type": "boolean"}
-      }
+        "bitwidth": {
+          "$ref": "#/$defs/bitwidth"
+        },
+        "is_unsigned": {
+          "type": "boolean"
+        },
+        "is_symmetric": {
+          "type": "boolean"
+        },
+        "comment": {
+          "type": "string"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "bitwidth"
+          ]
+        },
+        {
+          "required": [
+            "is_unsigned"
+          ]
+        },
+        {
+          "required": [
+            "is_symmetric"
+          ]
+        }
+      ]
     },
     "parameter_override": {
       "type": "object",
       "minProperties": 1,
       "additionalProperties": false,
       "properties": {
-        "bitwidth": {"$ref": "#/$defs/bitwidth"},
-        "is_unsigned": {"const": false},
-        "is_symmetric": {"const": true},
-        "granularity": {"enum": ["per_tensor", "per_gate", "per_channel"]}
-      }
+        "bitwidth": {
+          "$ref": "#/$defs/bitwidth"
+        },
+        "granularity": {
+          "enum": [
+            "per_tensor",
+            "per_gate",
+            "per_channel"
+          ]
+        },
+        "comment": {
+          "type": "string"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "bitwidth"
+          ]
+        },
+        {
+          "required": [
+            "granularity"
+          ]
+        }
+      ]
     }
   }
 }

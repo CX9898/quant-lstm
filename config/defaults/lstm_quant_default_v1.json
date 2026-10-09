@@ -5,96 +5,106 @@
     "input": {
       "bitwidth": 8,
       "is_unsigned": false,
-      "is_symmetric": true
+      "is_symmetric": true,
+      "comment": "输入序列 x_t。"
     },
     "output": {
       "bitwidth": 8,
       "is_unsigned": false,
-      "is_symmetric": true
+      "is_symmetric": true,
+      "comment": "隐藏状态 h_t，同时作为本步输出和下一步循环输入。"
     },
     "cell_state": {
       "bitwidth": 8,
       "is_unsigned": false,
-      "is_symmetric": true
+      "is_symmetric": true,
+      "comment": "细胞状态 c_t，保存长期记忆。"
     },
     "weight_ih": {
       "bitwidth": 8,
-      "is_unsigned": false,
-      "is_symmetric": true,
-      "granularity": "per_channel"
+      "granularity": "per_channel",
+      "comment": "输入到四个门的权重 W_ih，形状 [4H, I]。"
     },
     "weight_hh": {
       "bitwidth": 8,
-      "is_unsigned": false,
-      "is_symmetric": true,
-      "granularity": "per_channel"
+      "granularity": "per_channel",
+      "comment": "上一隐藏状态到四个门的权重 W_hh，形状 [4H, H]。"
     },
     "bias_ih": {
       "bitwidth": 8,
-      "is_unsigned": false,
-      "is_symmetric": true,
-      "granularity": "per_channel"
+      "granularity": "per_channel",
+      "comment": "输入线性分支的偏置 b_ih，形状 [4H]；仅 bias=True 时生效。"
     },
     "bias_hh": {
       "bitwidth": 8,
-      "is_unsigned": false,
-      "is_symmetric": true,
-      "granularity": "per_channel"
+      "granularity": "per_channel",
+      "comment": "循环线性分支的偏置 b_hh，形状 [4H]；仅 bias=True 时生效。"
     },
     "weight_ih_linear": {
       "bitwidth": 8,
       "is_unsigned": false,
-      "is_symmetric": true
+      "is_symmetric": true,
+      "comment": "输入线性分支结果 W_ih x_t + b_ih，包含四个门。"
     },
     "weight_hh_linear": {
       "bitwidth": 8,
       "is_unsigned": false,
-      "is_symmetric": true
+      "is_symmetric": true,
+      "comment": "循环线性分支结果 W_hh h_(t-1) + b_hh，包含四个门。"
     },
     "input_gate_input": {
       "bitwidth": 8,
       "is_unsigned": false,
-      "is_symmetric": true
+      "is_symmetric": true,
+      "comment": "输入门 i 经过 sigmoid 之前的输入，两条线性分支对应切片之和。"
     },
     "forget_gate_input": {
       "bitwidth": 8,
       "is_unsigned": false,
-      "is_symmetric": true
+      "is_symmetric": true,
+      "comment": "遗忘门 f 经过 sigmoid 之前的输入，两条线性分支对应切片之和。"
     },
     "cell_gate_input": {
       "bitwidth": 8,
       "is_unsigned": false,
-      "is_symmetric": true
+      "is_symmetric": true,
+      "comment": "候选细胞 g 经过 tanh 之前的输入，两条线性分支对应切片之和。"
     },
     "output_gate_input": {
       "bitwidth": 8,
       "is_unsigned": false,
-      "is_symmetric": true
+      "is_symmetric": true,
+      "comment": "输出门 o 经过 sigmoid 之前的输入，两条线性分支对应切片之和。"
     },
     "input_gate_output": {
       "bitwidth": 8,
       "is_unsigned": true,
-      "is_symmetric": true
+      "is_symmetric": true,
+      "comment": "输入门 i_t = sigmoid(input_gate_input)，控制新信息写入。"
     },
     "forget_gate_output": {
       "bitwidth": 8,
       "is_unsigned": true,
-      "is_symmetric": true
+      "is_symmetric": true,
+      "comment": "遗忘门 f_t = sigmoid(forget_gate_input)，控制旧细胞状态保留。"
     },
     "cell_gate_output": {
       "bitwidth": 8,
       "is_unsigned": false,
-      "is_symmetric": true
+      "is_symmetric": true,
+      "comment": "候选细胞 g_t = tanh(cell_gate_input)，提供待写入内容。"
     },
     "output_gate_output": {
       "bitwidth": 8,
       "is_unsigned": true,
-      "is_symmetric": true
+      "is_symmetric": true,
+      "comment": "输出门 o_t = sigmoid(output_gate_input)，控制隐藏状态输出。"
     },
     "cell_tanh_output": {
       "bitwidth": 8,
       "is_unsigned": false,
-      "is_symmetric": true
+      "is_symmetric": true,
+      "comment": "tanh(c_t) 的结果，与输出门 o_t 相乘得到 h_t。"
     }
   }
 }

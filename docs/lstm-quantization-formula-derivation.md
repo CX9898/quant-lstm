@@ -954,11 +954,11 @@ input_contribution
 1. `config/schema/lstm_quant_override.schema.json`：用户输入的稀疏覆盖配置。根对象必须包含 `schema_version=1`；`scale_mode` 和 `operators` 可省略并继承默认 profile。某个 operator 出现时，允许只填写要覆盖的合法字段。
 2. `config/schema/lstm_quant_resolved.schema.json`：解析后的完整执行配置。`scale_mode`、全部真实量化点及每个适用字段都必须存在，任何 forward 只接受该表示。
 
-版本化默认值保存在 `config/defaults/lstm_quant_default_v1.json`：基础位宽为 8 bit、`scale_mode=affine`、四组 weight/bias 为 `per_channel`，signedness/symmetry 使用第 2.3 节冻结的基础 profile。Weight/bias 的 override 可修改 `bitwidth` 和 `granularity`；`is_unsigned/is_symmetric` 若出现只能分别为 `false/true`。其他真实量化点可逐字段覆盖 `bitwidth/is_unsigned/is_symmetric`，其 granularity 在内部固定为 `per_tensor`，resolved config 不展示也不接受该字段。
+版本化默认值保存在 `config/defaults/lstm_quant_default_v1.json`：基础位宽为 8 bit、`scale_mode=affine`、四组 weight/bias 为 `per_channel`，signedness/symmetry 使用第 2.3 节冻结的基础 profile。Weight/bias 的 override 只接受 `bitwidth` 和 `granularity`；`is_unsigned/is_symmetric` 在内部固定为 `false/true`，不作为配置字段展示或接受。其他真实量化点可逐字段覆盖 `bitwidth/is_unsigned/is_symmetric`，其 granularity 在内部固定为 `per_tensor`，resolved config 不展示也不接受该字段。
 
 首版所有真实量化点的 `bitwidth` 枚举严格限制为 `{8,16}`，允许不同量化点混合使用这两个值。`int32_t` carrier、`int64_t/__int128` 累加器、16-bit M+shift multiplier 和 Q31 Cell multiplier 是执行类型或编码参数，不属于该枚举。任何其他 bitwidth 在 override 校验/resolution 阶段直接失败；未来扩展必须升级 schema 版本，并先补充数值安全证明、Golden、严格矩阵和独立精度阈值。
 
-解析器按字段执行一次确定性合并：`versioned defaults <- user override`。不支持全局/类别/多级继承，不把 JSON Schema 的 `default` 注解当作运行时赋值机制。解析完成后立即产生 canonical resolved config；Python binding、CPU reference、CUDA 和报告模块共享同一个 C++ resolver，不得分别补默认值。Golden 用例只嵌入 resolved config，不能嵌入稀疏 override。
+解析器按字段执行一次确定性合并：`versioned defaults <- user override`。不支持全局/类别/多级继承，不把 JSON Schema 的 `default` 注解当作运行时赋值机制。默认文件及 override 中每个量化点可带一条字符串 `comment` 解释该张量，解析器校验类型后移除；注释不参与量化。解析完成后立即产生 canonical resolved config；Python binding、CPU reference、CUDA 和报告模块共享同一个 C++ resolver，不得分别补默认值。Golden 用例只嵌入 resolved config，不能嵌入稀疏 override。
 
 两套 schema 的所有对象都使用 `additionalProperties:false`；未知 operator、遗留 `mul_*`、不适用字段、`null`、重复 key、错误类型、越界位宽和非法枚举在 forward 前失败。Canonical writer 固定字段顺序和枚举拼写，resolved config 再次解析和序列化必须字节一致。精度报告记录完整 resolved config 及其内容摘要，保证稀疏输入最终执行了什么可以审计。
 

@@ -41,6 +41,34 @@ class QuantConfigSchemaTest(unittest.TestCase):
                         invalid["operators"][name]["granularity"] = granularity
                         self.assertFalse(validator.is_valid(invalid))
 
+    def test_parameter_fixed_flags_are_not_configuration_fields(self) -> None:
+        validators = [StrictDraft202012Validator(schema) for schema in
+                      (self.resolved_schema, self.override_schema)]
+        for name in ("weight_ih", "weight_hh", "bias_ih", "bias_hh"):
+            for field in ("is_unsigned", "is_symmetric"):
+                self.assertNotIn(field, self.default["operators"][name])
+                for value in (False, True):
+                    invalid = copy.deepcopy(self.default)
+                    invalid["operators"][name][field] = value
+                    for validator in validators:
+                        self.assertFalse(validator.is_valid(invalid))
+
+    def test_operator_comments_are_optional_strings(self) -> None:
+        for schema in (self.resolved_schema, self.override_schema):
+            validator = StrictDraft202012Validator(schema)
+            validator.validate(self.default)
+            without_comments = copy.deepcopy(self.default)
+            for name, operator in without_comments["operators"].items():
+                self.assertIsInstance(operator.pop("comment"), str)
+                for invalid_comment in (None, 1, {}, []):
+                    invalid = copy.deepcopy(self.default)
+                    invalid["operators"][name]["comment"] = invalid_comment
+                    self.assertFalse(validator.is_valid(invalid))
+            validator.validate(without_comments)
+        self.assertFalse(StrictDraft202012Validator(self.override_schema).is_valid({
+            "schema_version": 1, "operators": {"input": {"comment": "输入序列"}},
+        }))
+
     def test_sparse_override_variants(self) -> None:
         valid = [
             {"schema_version": 1},

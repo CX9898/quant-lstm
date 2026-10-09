@@ -51,21 +51,22 @@ Python 不补充默认值。`QuantLSTM` 构造函数把 override 原文交给 C+
 
 ## 3. Operator 字段
 
-每个 operator 可配置：
+各 operator 的可配置字段如下：
 
 | 字段 | 类型 | 取值 | 默认值 |
 | --- | --- | --- | --- |
 | `bitwidth` | integer | `8` 或 `16` | `8` |
-| `is_unsigned` | boolean | `true` 或 `false` | 见下表 |
-| `is_symmetric` | boolean | `true` 或 `false` | `true` |
+| `is_unsigned`（仅非参数量化点） | boolean | `true` 或 `false` | 见下表 |
+| `is_symmetric`（仅非参数量化点） | boolean | `true` 或 `false` | `true` |
 | `granularity`（仅权重和偏置） | string | `per_tensor`、`per_gate`、`per_channel` | `per_channel` |
 
 只有 `weight_ih`、`weight_hh`、`bias_ih` 和 `bias_hh` 可以修改 `granularity`。
-这四组参数固定为 signed symmetric；设置 unsigned、asymmetric 或非零 zero point
-会失败。其余量化点在内部固定为 `per_tensor`，默认 JSON 和
+这四组参数只展示和接受 `bitwidth/granularity`，内部固定为 signed symmetric；
+`is_unsigned/is_symmetric` 不再作为配置字段，导入量化参数时非零 zero point 仍会失败。其余量化点在内部固定为 `per_tensor`，默认 JSON 和
 `get_quant_config()` 返回的 resolved config 均不展示、也不接受该字段。
-旧 resolved 配置中的非参数 `granularity` 字段需要删除后再加载。
-校准参数交换文档中的粒度元数据仍保留，用于解释 scale 分组。
+旧 resolved 配置需要删除非参数 `granularity` 和权重、偏置的
+`is_unsigned/is_symmetric` 字段后再加载。
+校准参数交换文档中的类型和粒度元数据仍保留，用于解释整数编码及 scale 分组。
 
 默认 signed/unsigned 设置为：
 
@@ -102,6 +103,25 @@ module.adjust_quant_config(
 
 `set_all_bitwidth()` 和 `adjust_quant_config()` 会立即重新运行 resolver，并使已有
 校准参数失效。修改后必须重新校准或加载与新配置一致的参数文档。
+
+### 3.1 量化点说明
+
+默认 JSON 为每个量化点提供一条可选的字符串 `comment`，解释其对应张量，例如：
+
+```json
+"forget_gate_input": {
+  "bitwidth": 8,
+  "is_unsigned": false,
+  "is_symmetric": true,
+  "comment": "遗忘门 f 经过 sigmoid 之前的输入，两条线性分支对应切片之和。"
+}
+```
+
+默认文件和 sparse override 均支持该注释。它不参与量化计算，C++ resolver 生成
+canonical resolved config 时会移除，因此 `get_quant_config()` 不返回注释。
+默认文件作为可编辑的配置来源不要求 canonical 字节格式；运行时 canonical config
+的严格字节校验保持不变。`comment` 不是量化选项，operator override 仍须至少包含
+一个实际配置字段。`schema_version` 是格式标识，当前固定为 `1`。
 
 ## 4. 校准
 

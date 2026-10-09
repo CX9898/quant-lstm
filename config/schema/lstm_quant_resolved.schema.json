@@ -56,34 +56,72 @@
   "$defs": {
     "common_required": {
       "type": "object",
-      "required": ["bitwidth", "is_unsigned", "is_symmetric"]
+      "required": [
+        "bitwidth"
+      ]
     },
     "non_parameter": {
       "allOf": [
-        {"$ref": "#/$defs/common_required"},
+        {
+          "$ref": "#/$defs/common_required"
+        },
         {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "bitwidth": {"type": "integer", "enum": [8, 16]},
-            "is_unsigned": {"type": "boolean"},
-            "is_symmetric": {"type": "boolean"}
-          }
+            "bitwidth": {
+              "type": "integer",
+              "enum": [
+                8,
+                16
+              ]
+            },
+            "is_unsigned": {
+              "type": "boolean"
+            },
+            "is_symmetric": {
+              "type": "boolean"
+            },
+            "comment": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "is_unsigned",
+            "is_symmetric"
+          ]
         }
       ]
     },
     "parameter": {
       "allOf": [
-        {"$ref": "#/$defs/common_required"},
+        {
+          "$ref": "#/$defs/common_required"
+        },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["granularity"],
+          "required": [
+            "granularity"
+          ],
           "properties": {
-            "bitwidth": {"type": "integer", "enum": [8, 16]},
-            "is_unsigned": {"const": false},
-            "is_symmetric": {"const": true},
-            "granularity": {"enum": ["per_tensor", "per_gate", "per_channel"]}
+            "bitwidth": {
+              "type": "integer",
+              "enum": [
+                8,
+                16
+              ]
+            },
+            "granularity": {
+              "enum": [
+                "per_tensor",
+                "per_gate",
+                "per_channel"
+              ]
+            },
+            "comment": {
+              "type": "string"
+            }
           }
         }
       ]

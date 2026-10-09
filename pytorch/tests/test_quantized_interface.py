@@ -160,6 +160,20 @@ class QuantizedInterfaceTest(unittest.TestCase):
         parameters = {"weight_ih", "weight_hh", "bias_ih", "bias_hh"}
         for name, config in resolved["operators"].items():
             self.assertEqual("granularity" in config, name in parameters)
+            self.assertNotIn("comment", config)
+            self.assertEqual("is_unsigned" in config, name not in parameters)
+            self.assertEqual("is_symmetric" in config, name not in parameters)
+
+        annotated = QuantLSTM(3, 4, quant_config={
+            "schema_version": 1,
+            "operators": {"forget_gate_input": {"comment": "遗忘门的 sigmoid 输入", "bitwidth": 8}},
+        })
+        self.assertEqual(annotated.get_quant_config(), resolved)
+        for name in parameters:
+            with self.assertRaises(ValueError):
+                module.adjust_quant_config(name, is_unsigned=False)
+            with self.assertRaises(ValueError):
+                module.adjust_quant_config(name, is_symmetric=True)
 
         module.set_all_bitwidth(16)
         self.assertTrue(
