@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+- LSTM 的 AIMET/RX 部署编码对齐 QuantGRU：补充 schema_version 3 和 bitwidth，
+  使用字符串 is_symmetric、I/O 列表、internal_ops.output 列表及扁平参数数组。
+  双向 h/c 网格以一维 per-channel 编码保留；原生参数与阶段回读格式保持兼容。
+
 - 增加与 QuantGRU 对齐的循环算子集成接口，配置、校准生命周期、Po2 和 AIMET/ONNX
   编码处理均由本库负责，无 AIMET 依赖。
 - 增加 Percentile 数值、参数锁及模型复制接口；per-gate ONNX 编码按原生展开形式重排。

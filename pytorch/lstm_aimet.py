@@ -18,6 +18,46 @@ def _pot2_scale(scale, method, rmin, rmax, tolerance):
     return 2.0 ** (round(exponent) if method == "round" or near_power else math.ceil(exponent))
 
 
+_PARAMETER_OPERATORS = {"weight_ih", "weight_hh", "bias_ih", "bias_hh"}
+_ENCODING_FIELDS = ("scale", "zero_point", "real_min", "real_max")
+
+
+def _aimet_encoding(native):
+    """Use the same scalar/vector record as QuantGRU's AIMET export."""
+    encoding = deepcopy(native)
+    encoding["bitwidth"] = int(encoding["dtype"].removeprefix("UINT").removeprefix("INT"))
+    encoding["is_symmetric"] = "True" if encoding.pop("symmetric") else "False"
+    return encoding
+
+
+def _internal_encodings(operators):
+    # Parameter records belong to param_encodings. Each internal activation
+    # follows GRU's operator -> output -> list[encoding] structure.
+    return {name: {"output": [_aimet_encoding(encoding)]}
+            for name, encoding in operators.items() if name not in _PARAMETER_OPERATORS}
+
+
+def _state_encoding(document, operator):
+    """Encode the concatenated directions as a flat per-channel record.
+
+    Sequence and h/c states use direction-major hidden channels. Repeating each
+    direction's scalar grid H times retains independent grids without a custom
+    forward/reverse dictionary inside an encoding record.
+    """
+    forward = document["operators"][operator]
+    if "operators_reverse" not in document:
+        return _aimet_encoding(forward)
+    reverse = document["operators_reverse"][operator]
+    if any(forward[key] != reverse[key] for key in ("dtype", "symmetric")):
+        raise ValueError(f"LSTM directions have incompatible state encodings: {operator}")
+    hidden = document["model_info"]["hidden_size"]
+    encoding = _aimet_encoding(forward)
+    encoding["enc_type"] = "PER_CHANNEL"
+    for field in _ENCODING_FIELDS:
+        encoding[field] = [forward[field]] * hidden + [reverse[field]] * hidden
+    return encoding
+
+
 def _onnx_parameter_encoding(doc, names):
     """Expand quantization groups and reorder IFGO to ONNX IOFC per direction."""
     hidden = doc["model_info"]["hidden_size"]
@@ -30,7 +70,7 @@ def _onnx_parameter_encoding(doc, names):
             if any(operators[name][key] != template[key] for key in ("dtype", "symmetric")):
                 raise ValueError(f"ONNX packed parameter has incompatible encodings: {names}")
     result = {"dtype": template["dtype"], "symmetric": template["symmetric"], "enc_type": "PER_CHANNEL"}
-    for field in ("scale", "zero_point", "real_min", "real_max"):
+    for field in _ENCODING_FIELDS:
         packed = []
         for operators in directions:
             rows = []
@@ -44,9 +84,9 @@ def _onnx_parameter_encoding(doc, names):
                 if len(values) != 4 * hidden:
                     raise ValueError(f"Invalid native LSTM parameter row count: {name}.{field}")
                 rows.extend(values[i * hidden + j] for i in (0, 3, 1, 2) for j in range(hidden))
-            packed.append(rows)
+            packed.extend(rows)
         result[field] = packed
-    return result
+    return _aimet_encoding(result)
 
 
 class LSTMAimetIntegration:
@@ -152,34 +192,35 @@ class LSTMAimetIntegration:
                 raise RuntimeError("QuantLSTM must be calibrated before exporting encodings")
             return encodings_dict
         name = module_name if module_name is not None else getattr(self, "_module_name", "lstm")
-        encodings = encodings_dict
         doc = self.export_quant_params()
-        encodings.setdefault("quant_lstm_encodings", {})[name] = doc
         ops = doc["operators"]
-        entry = {"is_LSTM": True, "input": {"0": deepcopy(ops["input"]),
-                 "1": deepcopy(ops["output"]), "2": deepcopy(ops["cell_state"])},
-                 "output": {"0": deepcopy(ops["output"]), "1": deepcopy(ops["output"]),
-                            "2": deepcopy(ops["cell_state"])},
-                 "internal_ops": deepcopy(ops)}
+        hidden_encoding = _state_encoding(doc, "output")
+        cell_encoding = _state_encoding(doc, "cell_state")
+        entry = {
+            "is_LSTM": True,
+            # Logical module inputs x/h0/c0 and outputs sequence/h/c, as lists
+            # of ordinary RX encoding records (the same container as GRU).
+            "input": [_aimet_encoding(ops["input"]), deepcopy(hidden_encoding), deepcopy(cell_encoding)],
+            "output": [hidden_encoding, deepcopy(hidden_encoding), cell_encoding],
+            "internal_ops": _internal_encodings(ops),
+        }
         if "operators_reverse" in doc:
-            entry["internal_ops_reverse"] = deepcopy(doc["operators_reverse"])
-            # Directions can have distinct hidden/cell grids; do not claim one shared output grid.
-            for key, op in (("0", "output"), ("1", "output"), ("2", "cell_state")):
-                entry["output"][key] = {"forward": deepcopy(ops[op]),
-                                       "reverse": deepcopy(doc["operators_reverse"][op])}
-            for key, op in (("1", "output"), ("2", "cell_state")):
-                entry["input"][key] = {"forward": deepcopy(ops[op]),
-                                      "reverse": deepcopy(doc["operators_reverse"][op])}
-        encodings.setdefault("activation_encodings", {})[name] = entry
-        if not for_onnx:
-            return encodings_dict
-        for suffix, operators in (("weight_ih.weight", ("weight_ih",)),
-                                  ("weight_hh.weight", ("weight_hh",)),
-                                  ("bias", ("bias_ih", "bias_hh"))):
-            if suffix == "bias" and not self.bias:
-                continue
-            key = f"{name}.{suffix}"
-            encodings.setdefault("param_encodings", {})[key] = _onnx_parameter_encoding(doc, operators)
+            entry["internal_ops_reverse"] = _internal_encodings(doc["operators_reverse"])
+        params = {}
+        if for_onnx:
+            for suffix, operators in (("weight_ih.weight", ("weight_ih",)),
+                                      ("weight_hh.weight", ("weight_hh",)),
+                                      ("bias", ("bias_ih", "bias_hh"))):
+                if suffix == "bias" and not self.bias:
+                    continue
+                params[f"{name}.{suffix}"] = _onnx_parameter_encoding(doc, operators)
+        # Match GRU's outer schema and retain an unmodified native checkpoint.
+        # Validate packing first so a failed deployment export leaves the caller
+        # dictionary unchanged (stage-only export permits distinct bias grids).
+        encodings_dict.setdefault("schema_version", 3)
+        encodings_dict.setdefault("quant_lstm_encodings", {})[name] = doc
+        encodings_dict.setdefault("activation_encodings", {})[name] = entry
+        encodings_dict.setdefault("param_encodings", {}).update(params)
         return encodings_dict
 
     def load_quant_params_from_aimet_format(
