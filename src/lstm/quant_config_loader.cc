@@ -222,9 +222,15 @@ std::string readString(const Json& value, std::string_view field) {
 }
 
 OperatorQuantConfig parseResolvedOperator(QuantOperator id, const Json& value) {
-    rejectUnknownKeys(value, {"bitwidth", "is_unsigned", "is_symmetric", "granularity"},
-                      quantOperatorName(id));
-    for (const char* field : {"bitwidth", "is_unsigned", "is_symmetric", "granularity"}) {
+    const bool parameter = isParameterOperator(id);
+    if (parameter) {
+        rejectUnknownKeys(value, {"bitwidth", "is_unsigned", "is_symmetric", "granularity"},
+                          quantOperatorName(id));
+    } else {
+        rejectUnknownKeys(value, {"bitwidth", "is_unsigned", "is_symmetric"},
+                          quantOperatorName(id));
+    }
+    for (const char* field : {"bitwidth", "is_unsigned", "is_symmetric"}) {
         if (!value.contains(field) || value[field].is_null()) {
             throw std::invalid_argument(std::string(quantOperatorName(id)) +
                                         " resolved field 缺失: " + field);
@@ -234,7 +240,13 @@ OperatorQuantConfig parseResolvedOperator(QuantOperator id, const Json& value) {
     result.type.bitwidth = readBitwidth(value["bitwidth"]);
     result.type.is_unsigned = readBoolean(value["is_unsigned"], "is_unsigned");
     result.type.is_symmetric = readBoolean(value["is_symmetric"], "is_symmetric");
-    result.granularity = parseGranularity(readString(value["granularity"], "granularity"));
+    if (parameter) {
+        if (!value.contains("granularity") || value["granularity"].is_null()) {
+            throw std::invalid_argument(std::string(quantOperatorName(id)) +
+                                        " resolved field 缺失: granularity");
+        }
+        result.granularity = parseGranularity(readString(value["granularity"], "granularity"));
+    }
     return result;
 }
 
@@ -370,7 +382,9 @@ std::string toCanonicalJson(const LstmOperatorQuantConfig& config) {
         operator_json["bitwidth"] = value.type.bitwidth;
         operator_json["is_unsigned"] = value.type.is_unsigned;
         operator_json["is_symmetric"] = value.type.is_symmetric;
-        operator_json["granularity"] = granularityName(value.granularity);
+        if (isParameterOperator(id)) {
+            operator_json["granularity"] = granularityName(value.granularity);
+        }
         operators[std::string(quantOperatorName(id))] = std::move(operator_json);
     }
     root["operators"] = std::move(operators);

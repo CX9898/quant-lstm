@@ -782,8 +782,7 @@
       "required": [
         "bitwidth",
         "is_unsigned",
-        "is_symmetric",
-        "granularity"
+        "is_symmetric"
       ]
     },
     "non_parameter": {
@@ -807,9 +806,6 @@
             },
             "is_symmetric": {
               "type": "boolean"
-            },
-            "granularity": {
-              "const": "per_tensor"
             }
           }
         }
@@ -844,7 +840,10 @@
                 "per_channel"
               ]
             }
-          }
+          },
+          "required": [
+            "granularity"
+          ]
         }
       ]
     }

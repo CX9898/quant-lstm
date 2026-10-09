@@ -82,6 +82,30 @@ int main() {
             "non-canonical resolved JSON");
 
         const std::string default_canonical = quant_lstm::toCanonicalJson(defaults);
+        for (std::size_t index = 0; index < quant_lstm::kQuantOperatorCount; ++index) {
+            const auto id = static_cast<quant_lstm::QuantOperator>(index);
+            const std::string key = '"' + std::string(quant_lstm::quantOperatorName(id)) + "\": {";
+            const auto start = default_canonical.find(key);
+            require(start != std::string::npos, "canonical operator missing");
+            const auto end = default_canonical.find('}', start);
+            const bool exposes_granularity =
+                default_canonical.substr(start, end - start).find("granularity") != std::string::npos;
+            require(exposes_granularity == quant_lstm::isParameterOperator(id),
+                    "only parameter config may expose granularity");
+            if (!quant_lstm::isParameterOperator(id)) {
+                require(defaults.at(id).granularity == quant_lstm::QuantGranularity::PerTensor,
+                        "non-parameter granularity must remain per_tensor internally");
+            }
+        }
+        std::string non_parameter_field = default_canonical;
+        const std::string input_key = "\"input\": {";
+        non_parameter_field.insert(non_parameter_field.find(input_key) + input_key.size(),
+                                   "\n      \"granularity\": \"per_tensor\",");
+        requireThrows(
+            [&] {
+                static_cast<void>(quant_lstm::parseResolvedQuantConfig(non_parameter_field, false));
+            },
+            "non-parameter granularity field must not be accepted in resolved config");
         const auto parsed_default = quant_lstm::parseResolvedQuantConfig(default_canonical);
         require(quant_lstm::toCanonicalJson(parsed_default) == default_canonical,
                 "default canonical round-trip");

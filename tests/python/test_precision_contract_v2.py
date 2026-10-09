@@ -313,7 +313,7 @@ class PrecisionContractV2Test(unittest.TestCase):
 
                 for name, operator in operators.items():
                     if name not in PARAMETERS:
-                        self.assertEqual(operator["granularity"], "per_tensor")
+                        self.assertNotIn("granularity", operator)
 
                 profile = case["activation_profile"]
                 if profile in activation_flags:

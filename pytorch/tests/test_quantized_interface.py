@@ -157,6 +157,9 @@ class QuantizedInterfaceTest(unittest.TestCase):
         resolved = module.get_quant_config()
         self.assertEqual(len(resolved["operators"]), 18)
         self.assertEqual(resolved["scale_mode"], "affine")
+        parameters = {"weight_ih", "weight_hh", "bias_ih", "bias_hh"}
+        for name, config in resolved["operators"].items():
+            self.assertEqual("granularity" in config, name in parameters)
 
         module.set_all_bitwidth(16)
         self.assertTrue(

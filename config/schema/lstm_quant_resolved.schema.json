@@ -56,7 +56,7 @@
   "$defs": {
     "common_required": {
       "type": "object",
-      "required": ["bitwidth", "is_unsigned", "is_symmetric", "granularity"]
+      "required": ["bitwidth", "is_unsigned", "is_symmetric"]
     },
     "non_parameter": {
       "allOf": [
@@ -67,8 +67,7 @@
           "properties": {
             "bitwidth": {"type": "integer", "enum": [8, 16]},
             "is_unsigned": {"type": "boolean"},
-            "is_symmetric": {"type": "boolean"},
-            "granularity": {"const": "per_tensor"}
+            "is_symmetric": {"type": "boolean"}
           }
         }
       ]
@@ -79,6 +78,7 @@
         {
           "type": "object",
           "additionalProperties": false,
+          "required": ["granularity"],
           "properties": {
             "bitwidth": {"type": "integer", "enum": [8, 16]},
             "is_unsigned": {"const": false},

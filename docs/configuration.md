@@ -58,11 +58,14 @@ Python 不补充默认值。`QuantLSTM` 构造函数把 override 原文交给 C+
 | `bitwidth` | integer | `8` 或 `16` | `8` |
 | `is_unsigned` | boolean | `true` 或 `false` | 见下表 |
 | `is_symmetric` | boolean | `true` 或 `false` | `true` |
-| `granularity` | string | `per_tensor`、`per_gate`、`per_channel` | 参数为 `per_channel`，其他为 `per_tensor` |
+| `granularity`（仅权重和偏置） | string | `per_tensor`、`per_gate`、`per_channel` | `per_channel` |
 
 只有 `weight_ih`、`weight_hh`、`bias_ih` 和 `bias_hh` 可以修改 `granularity`。
 这四组参数固定为 signed symmetric；设置 unsigned、asymmetric 或非零 zero point
-会失败。其余量化点固定为 `per_tensor`。
+会失败。其余量化点在内部固定为 `per_tensor`，默认 JSON 和
+`get_quant_config()` 返回的 resolved config 均不展示、也不接受该字段。
+旧 resolved 配置中的非参数 `granularity` 字段需要删除后再加载。
+校准参数交换文档中的粒度元数据仍保留，用于解释 scale 分组。
 
 默认 signed/unsigned 设置为：
 

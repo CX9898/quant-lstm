@@ -29,6 +29,18 @@ class QuantConfigSchemaTest(unittest.TestCase):
         StrictDraft202012Validator(self.resolved_schema).validate(self.default)
         self.assertEqual(len(self.default["operators"]), 18)
 
+    def test_only_parameters_expose_granularity(self) -> None:
+        parameters = {"weight_ih", "weight_hh", "bias_ih", "bias_hh"}
+        validator = StrictDraft202012Validator(self.resolved_schema)
+        for name, operator in self.default["operators"].items():
+            with self.subTest(operator=name):
+                self.assertEqual("granularity" in operator, name in parameters)
+                if name not in parameters:
+                    for granularity in ("per_tensor", "per_gate", "per_channel"):
+                        invalid = copy.deepcopy(self.default)
+                        invalid["operators"][name]["granularity"] = granularity
+                        self.assertFalse(validator.is_valid(invalid))
+
     def test_sparse_override_variants(self) -> None:
         valid = [
             {"schema_version": 1},
@@ -95,7 +107,7 @@ class QuantConfigSchemaTest(unittest.TestCase):
         missing_operator = copy.deepcopy(self.default)
         del missing_operator["operators"]["cell_tanh_output"]
         missing_field = copy.deepcopy(self.default)
-        del missing_field["operators"]["input"]["granularity"]
+        del missing_field["operators"]["weight_ih"]["granularity"]
         extra_field = copy.deepcopy(self.default)
         extra_field["operators"]["input"]["unexpected"] = 1
         validator = StrictDraft202012Validator(self.resolved_schema)

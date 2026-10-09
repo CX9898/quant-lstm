@@ -31,6 +31,7 @@ class QuantParamsBundleSchemaTest(unittest.TestCase):
             } else 1
             operators[name] = {
                 **config,
+                "granularity": config.get("granularity", "per_tensor"),
                 "scales": ["0.0078125"] * count,
                 "zero_points": [0] * count,
             }
