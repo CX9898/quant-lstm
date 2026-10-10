@@ -29,7 +29,7 @@ def assert_rx_encoding(test, record):
     bits = record['bitwidth']
     unsigned = record['dtype'].startswith('UINT')
     qmax = (1 << (bits if unsigned else bits - 1)) - 1
-    qmin = 0 if unsigned else (-qmax if record['is_symmetric'] == 'True' else -qmax - 1)
+    qmin = 0 if unsigned else -qmax - 1
     for scale, zp, lo, hi in zip(*fields):
         test.assertGreater(scale, 0)
         test.assertIsInstance(zp, int)
@@ -99,7 +99,7 @@ class NativeAimetInterfaceTest(unittest.TestCase):
                               ('operators_reverse', [0.05, 0.06, 0.07, 0.08])]:
             scales = [value for value in scales for _ in range(2)]
             enc = doc[field]['weight_ih']
-            enc.update(scale=scales, real_min=[-127 * s for s in scales],
+            enc.update(scale=scales, real_min=[-128 * s for s in scales],
                        real_max=[127 * s for s in scales])
         module.load_quant_params(doc)
         encodings = module.export_quant_params_to_aimet_format({}, module_name='rnn')
@@ -193,7 +193,7 @@ class NativeAimetInterfaceTest(unittest.TestCase):
                                               ('operators_reverse', 0.03, 0.04)]:
             for name, scale in [('output', hidden_scale), ('cell_state', cell_scale)]:
                 doc[key][name].update(scale=scale, zero_point=0,
-                                      real_min=-127 * scale, real_max=127 * scale)
+                                      real_min=-128 * scale, real_max=127 * scale)
         module.load_quant_params(doc)
         result = module.export_quant_params_to_aimet_format({}, module_name='rnn')
         layer = result['activation_encodings']['rnn']
@@ -238,6 +238,23 @@ class NativeAimetInterfaceTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'incompatible encodings'):
                 module.export_quant_params_to_aimet_format(existing, module_name='rnn', for_onnx=for_onnx)
             self.assertEqual(before, existing)
+
+    def test_pot2_preserves_symmetric_calibration_span(self):
+        module = QuantLSTM(4, 2, batch_first=True).cuda()
+        with module.calibration_context():
+            module(self.x)
+        document = module.export_quant_params()
+        scale = 1.018 / 254
+        document['operators']['input'].update(
+            scale=scale, zero_point=0, real_min=-128 * scale, real_max=127 * scale)
+        module.load_quant_params(document)
+        # Symmetric calibration span 1.018 is within 2% of 1.0. Including the
+        # extra negative code would exceed that tolerance and double the scale.
+        module.enable_pot2(method='cover_range', tolerance=0.02)
+        encoding = module.export_quant_params()['operators']['input']
+        self.assertEqual(encoding['scale'], 2.0 ** -8)
+        self.assertEqual(encoding['real_min'], -0.5)
+        self.assertEqual(encoding['real_max'], 127 / 256)
 
     def test_public_reload_pot2_and_invalid_records(self):
         module = QuantLSTM(4, 3, batch_first=True, bidirectional=True).cuda()

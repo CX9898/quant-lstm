@@ -37,7 +37,7 @@
       "quantized": {
         "dtype": "int32",
         "shape": [6],
-        "data": [128, 255, 0, 0, 127, -127]
+        "data": [128, 255, 0, 0, 127, -128]
       }
     },
     "diagnostics": {}

@@ -68,7 +68,7 @@ int main() {
         const q::QuantizationType signed_asymmetric_8{8, false, false};
         const q::QuantizationType unsigned_symmetric_8{8, true, true};
         require(
-            signed_symmetric_8.range().minimum == -127 && signed_symmetric_8.range().maximum == 127,
+            signed_symmetric_8.range().minimum == -128 && signed_symmetric_8.range().maximum == 127,
             "signed symmetric INT8 range");
         require(signed_asymmetric_8.range().minimum == -128 &&
                     signed_asymmetric_8.range().maximum == 127,
@@ -76,8 +76,9 @@ int main() {
         require(unsigned_symmetric_8.range().minimum == 0 &&
                     unsigned_symmetric_8.range().maximum == 255,
                 "unsigned INT8 range");
-        requireThrows([&] { signed_symmetric_8.validateValue(-128); },
-                      "symmetric -128 must be rejected");
+        signed_symmetric_8.validateValue(-128);
+        requireThrows([&] { signed_symmetric_8.validateValue(-129); },
+                      "value below INT8 minimum must be rejected");
         signed_asymmetric_8.validateValue(-128);
 
         // Literal RNE answers are independent of the production rounding implementation.
@@ -102,6 +103,30 @@ int main() {
                                       signed_asymmetric_8, q::RealActivationKind::Sigmoid) ==
                         static_cast<float>(zero_point),
                     "FP32 sigmoid half tie must round before adding zero point");
+        }
+
+        // Calibration divides by the positive endpoint, while quantize,
+        // dequantize accept the complete signed integer range.
+        for (const std::uint8_t bits : {8, 16}) {
+            const q::QuantizationType type{bits, false, true};
+            const int minimum = bits == 8 ? -128 : -32768;
+            const int maximum = bits == 8 ? 127 : 32767;
+            const float scale = bits == 8 ? 0.125F : 0.000244140625F;
+            const float extent = maximum * scale;
+            const auto calibrated = q::calibrateMinMax(-extent, extent, type);
+            require(calibrated.param.scale == scale && calibrated.param.zero_point == 0,
+                    "signed symmetric calibration still divides max_abs by qmax");
+            require(q::quantize(minimum * scale, calibrated.param, type) == minimum,
+                    "signed minimum must remain representable");
+            require(q::dequantize(minimum, calibrated.param, type) == minimum * scale,
+                    "dequantization must accept signed minimum");
+            require(q::quantize((minimum - 1) * scale, calibrated.param, type) == minimum &&
+                        q::quantize((maximum + 1) * scale, calibrated.param, type) == maximum,
+                    "only values outside the complete signed range saturate");
+            require(q::quantize((minimum - 0.5F) * scale, calibrated.param, type) == minimum &&
+                        q::quantize((minimum + 0.5F) * scale, calibrated.param, type) == minimum,
+                    "negative boundary half ties use round-to-nearest-even");
+            type.validateValue(minimum);
         }
 
         const auto signed_calibration = q::calibrateMinMax(-12.7F, 12.7F, signed_symmetric_8);

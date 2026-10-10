@@ -60,6 +60,9 @@ restored.set_quant_params_locked(True)
   改写该字段，不新增 LSTM 专有顶层区段。
 - 每条编码包含 `dtype`、整数 `bitwidth`、字符串 `is_symmetric`（`"True"` / `"False"`）、
   `enc_type`、`scale`、`zero_point`、`real_min`、`real_max`；不输出原生 `symmetric` 字段。
+- `real_min = (qmin-zero_point)*scale`、`real_max = (qmax-zero_point)*scale`，
+  signed 使用完整 INT8 `[-128,127]` / INT16 `[-32768,32767]`，与 GRU 一致；
+  signed symmetric 校准仍按 `max_abs/qmax` 计算 scale，不减少负端可表示值。
 - `activation_encodings[模块路径]` 标记 `is_LSTM`。与 GRU 一致，`input` 和 `output`
   各为单元素编码列表，分别取正向 `input`、`output` 的 `PER_TENSOR` 标量编码；
   它们不枚举 ONNX 或模块的全部输入输出端口。

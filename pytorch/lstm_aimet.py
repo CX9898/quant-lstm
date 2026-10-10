@@ -189,11 +189,16 @@ class LSTMAimetIntegration:
                 bitwidth = int(encoding["dtype"].lstrip("UINT"))
                 unsigned = encoding["dtype"].startswith("UINT")
                 qmax = (1 << (bitwidth if unsigned else bitwidth - 1)) - 1
-                qmin = 0 if unsigned else (-qmax if encoding["symmetric"] else -qmax - 1)
+                qmin = 0 if unsigned else -qmax - 1
                 vector = isinstance(encoding["scale"], list)
                 values = {key: value if vector else [value] for key, value in encoding.items()
                           if key in {"scale", "zero_point", "real_min", "real_max"}}
-                scales = [_pot2_scale(scale, method, lo, hi, tolerance)
+                # CoverRange uses the symmetric calibration span. The exported
+                # integer range additionally includes the most negative code.
+                symmetric_signed = encoding["symmetric"] and not unsigned
+                scales = [_pot2_scale(scale, method,
+                                      -qmax * scale if symmetric_signed else lo,
+                                      qmax * scale if symmetric_signed else hi, tolerance)
                     for scale, lo, hi in zip(values["scale"], values["real_min"], values["real_max"])]
                 for key, values_out in {
                     "scale": scales,

@@ -129,6 +129,42 @@ class QuantizedInterfaceTest(unittest.TestCase):
                 torch.testing.assert_close(actual, rounded + zero_point, rtol=0, atol=0)
 
     @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
+    def test_signed_minimum_and_qat_clamp_masks(self):
+        for bits, qmin, qmax, scale in ((8, -128, 127, 0.125),
+                                       (16, -32768, 32767, 2.0 ** -12)):
+            with self.subTest(bitwidth=bits):
+                module = QuantLSTM(1, 1, device="cuda")
+                initialize_module(module)
+                module.set_all_bitwidth(bits)
+                calibrate(module, torch.ones(2, 1, 1, device="cuda"), None)
+                document = module.export_quant_params()
+                for name in ("input", "output", "cell_state", "weight_ih",
+                             "weight_hh", "bias_ih", "bias_hh"):
+                    encoding = document["operators"][name]
+                    count = len(encoding["scale"]) if isinstance(encoding["scale"], list) else 0
+                    for key, value in {"scale": scale, "zero_point": 0,
+                                       "real_min": qmin * scale, "real_max": qmax * scale}.items():
+                        encoding[key] = [value] * count if count else value
+                module.load_quant_params(document)
+                with torch.no_grad():
+                    for parameter in module.parameters():
+                        parameter.reshape(-1)[0] = qmin * scale
+                values = (torch.tensor([qmin - 1, qmin - 0.5, qmin, qmin + 0.5,
+                                        qmax, qmax + 1], device="cuda") * scale).reshape(6, 1, 1)
+                state = tuple(torch.full((1, 1, 1), qmin * scale, device="cuda") for _ in range(2))
+                module.use_quantization = True
+                module.train()
+                module(values, state)
+                saved = module.qat_saved_state()
+                self.assertEqual(saved["quantized_master"]["input"].reshape(-1).tolist(),
+                                 [qmin, qmin, qmin, qmin, qmax, qmax])
+                self.assertEqual(saved["master_clamp_masks"]["input"].reshape(-1).tolist(),
+                                 [1, 0, 0, 0, 0, 1])
+                for name in ("h_0", "c_0", "weight_ih", "weight_hh", "bias_ih", "bias_hh"):
+                    self.assertEqual(saved["quantized_master"][name].reshape(-1)[0].item(), qmin)
+                    self.assertFalse(saved["master_clamp_masks"][name].reshape(-1)[0].item())
+
+    @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_sigmoid_quantization_rounds_before_adding_zero_point(self):
         module = QuantLSTM(1, 1, bias=False, device="cuda")
         with torch.no_grad():

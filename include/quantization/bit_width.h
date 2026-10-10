@@ -32,8 +32,9 @@ struct QuantizationType {
             return {0, static_cast<std::int32_t>((std::uint32_t{1} << bitwidth) - 1U)};
         }
         const auto maximum = static_cast<std::int32_t>((std::uint32_t{1} << (bitwidth - 1U)) - 1U);
-        return is_symmetric ? QuantizedRange{-maximum, maximum}
-                            : QuantizedRange{-maximum - 1, maximum};
+        // Symmetric calibration fixes zero_point=0 and divides max_abs by qmax.
+        // Saturation still uses the complete signed storage range, as in GRU.
+        return QuantizedRange{-maximum - 1, maximum};
     }
 
     void validateValue(std::int64_t value) const {

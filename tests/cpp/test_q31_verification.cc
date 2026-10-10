@@ -84,7 +84,7 @@ std::pair<std::int64_t, std::int64_t> oracleRange(const q::QuantizationType& typ
         return {0, (std::int64_t{1} << type.bitwidth) - 1};
     }
     const std::int64_t maximum = (std::int64_t{1} << (type.bitwidth - 1U)) - 1;
-    return {type.is_symmetric ? -maximum : -maximum - 1, maximum};
+    return {-maximum - 1, maximum};
 }
 
 std::int32_t oracleCell(std::int32_t forget_gate, std::int32_t old_cell, std::int32_t input_gate,

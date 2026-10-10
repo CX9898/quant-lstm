@@ -74,13 +74,13 @@ class SpeechCommandsDiagnosticsTest(unittest.TestCase):
             }
         )["input"]
 
-        self.assertEqual(summary["quantized_levels"], 254)
+        self.assertEqual(summary["quantized_levels"], 255)
         self.assertAlmostEqual(summary["quantization_step_min"], 0.1)
         self.assertAlmostEqual(summary["quantization_step_max"], 0.1)
-        self.assertAlmostEqual(summary["representable_min"], -12.7)
+        self.assertAlmostEqual(summary["representable_min"], -12.8)
         self.assertAlmostEqual(summary["representable_max"], 12.7)
-        self.assertAlmostEqual(summary["representable_span_min"], 25.4)
-        self.assertAlmostEqual(summary["representable_span_max"], 25.4)
+        self.assertAlmostEqual(summary["representable_span_min"], 25.5)
+        self.assertAlmostEqual(summary["representable_span_max"], 25.5)
 
 
 class SpeechCommandsLstmTrainingTest(unittest.TestCase):

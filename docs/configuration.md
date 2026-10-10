@@ -70,6 +70,11 @@ Python 不补充默认值。`QuantLSTM` 构造函数把 override 原文交给 C+
 `is_unsigned/is_symmetric` 字段后再加载。
 校准参数交换文档中的类型和粒度元数据仍保留，用于解释整数编码及 scale 分组。
 
+Signed 量化在 CPU/CUDA 和 QAT 中均使用完整范围：INT8 `[-128,127]`、
+INT16 `[-32768,32767]`。`is_symmetric=true` 时校准仍使用
+`scale=max_abs/(2^(bitwidth-1)-1)`、`zero_point=0`。导出的 `real_min/real_max`
+由整数上下界、最终 scale 和 zero point 计算；最小负值合法，不应提前截断。
+
 默认 signed/unsigned 设置为：
 
 | 量化点 | `is_unsigned` | `is_symmetric` |

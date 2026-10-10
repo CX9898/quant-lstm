@@ -47,7 +47,7 @@ def make_case(seed, bits=8, bias=True, bf=False, mode='affine', saturate=False, 
         p['symmetric'] = parameter
         is_unsigned = unsigned and not parameter
         p['dtype'] = f"{'UINT' if is_unsigned else 'INT'}{point_bits}"
-        lo = 0 if is_unsigned else -(2 ** (point_bits - 1) - 1) if parameter else -2 ** (point_bits - 1)
+        lo = 0 if is_unsigned else -2 ** (point_bits - 1)
         hi = 2 ** (point_bits - (not is_unsigned)) - 1
         if is_unsigned:
             p['zero_point'] = (hi // 2) | 1

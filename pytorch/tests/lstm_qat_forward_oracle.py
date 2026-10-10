@@ -32,7 +32,7 @@ class Reference:
             s = s.reshape((-1,) + (1,) * (value.ndim - 1))
             z = z.reshape(s.shape)
         hi = 2 ** (p['bitwidth'] - (not p['is_unsigned'])) - 1
-        lo = 0 if p['is_unsigned'] else -hi - int(not p['is_symmetric'])
+        lo = 0 if p['is_unsigned'] else -hi - 1
         return (s, z, lo, hi)
 
     def clamp(self, q, name):

@@ -11,6 +11,6 @@ int main() {
     const quant_lstm::LstmShape shape{1, 1, 1, 1};
     const quant_lstm::quantization::QuantizationType type{8, false, true};
     const auto range = type.range();
-    return shape.hidden_size == 1 && range.minimum == -127 && range.maximum == 127 ? EXIT_SUCCESS
+    return shape.hidden_size == 1 && range.minimum == -128 && range.maximum == 127 ? EXIT_SUCCESS
                                                                                    : EXIT_FAILURE;
 }

@@ -21,9 +21,6 @@ def _quant_range(operator: dict[str, Any]) -> tuple[int, int]:
     bitwidth = operator["bitwidth"]
     if operator["is_unsigned"]:
         return 0, (1 << bitwidth) - 1
-    if operator["is_symmetric"]:
-        maximum = (1 << (bitwidth - 1)) - 1
-        return -maximum, maximum
     return -(1 << (bitwidth - 1)), (1 << (bitwidth - 1)) - 1
 
 

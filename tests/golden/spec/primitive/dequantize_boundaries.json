@@ -6,7 +6,7 @@
   "primitive": "quant_dequant",
   "attributes": {"operation": "dequantize"},
   "inputs": {
-    "value": {"dtype": "int32", "shape": [2], "data": [-127, 0]},
+    "value": {"dtype": "int32", "shape": [2], "data": [-128, 0]},
     "scale": {
       "dtype": "float32",
       "shape": [2],
@@ -19,7 +19,7 @@
   },
   "expected": {
     "checkpoints": {
-      "real": {"dtype": "float32", "shape": [2], "data": ["-15.875", "-1"]}
+      "real": {"dtype": "float32", "shape": [2], "data": ["-16", "-1"]}
     },
     "diagnostics": {}
   }

@@ -133,12 +133,12 @@ def _float32_value(value: float) -> float:
 
 
 def _quantized_range(
-    bitwidth: int, is_unsigned: bool, is_symmetric: bool
+    bitwidth: int, is_unsigned: bool
 ) -> tuple[int, int]:
     if is_unsigned:
         return 0, (1 << bitwidth) - 1
     maximum = (1 << (bitwidth - 1)) - 1
-    return (-maximum if is_symmetric else -(1 << (bitwidth - 1))), maximum
+    return -(1 << (bitwidth - 1)), maximum
 
 
 def _external_operator(internal: dict[str, Any]) -> dict[str, Any]:
@@ -148,7 +148,7 @@ def _external_operator(internal: dict[str, Any]) -> dict[str, Any]:
     scales = [_float32_value(float(value)) for value in internal["scales"]]
     zero_points = [int(value) for value in internal["zero_points"]]
     minimum, maximum = _quantized_range(
-        bitwidth, is_unsigned, is_symmetric
+        bitwidth, is_unsigned
     )
     real_minimums = [
         scale * (minimum - zero_point)
@@ -252,7 +252,7 @@ def _internal_operator(name: str, external: Any) -> dict[str, Any]:
     is_unsigned = dtype.startswith("UINT")
     is_symmetric = external["symmetric"]
     minimum, maximum = _quantized_range(
-        bitwidth, is_unsigned, is_symmetric
+        bitwidth, is_unsigned
     )
     for index, (scale, zero_point, real_minimum, real_maximum) in enumerate(
         zip(scales, zero_points, real_minimums, real_maximums)

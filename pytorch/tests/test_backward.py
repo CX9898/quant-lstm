@@ -400,11 +400,13 @@ class BackwardTest(unittest.TestCase):
                             dtype=torch.float32,
                         )).item()
                         maximum = (1 << (bitwidth - 1)) - 1
+                        minimum = -maximum - 1
+                        endpoint = maximum if sign > 0 else -minimum
                         scale = torch.tensor(
-                            abs(activated) / (maximum + offset), dtype=torch.float32
+                            abs(activated) / (endpoint + offset), dtype=torch.float32
                         ).item()
                         operators["cell_gate_output"].update(
-                            scale=scale, real_min=-maximum * scale, real_max=maximum * scale
+                            scale=scale, real_min=minimum * scale, real_max=maximum * scale
                         )
                         with warnings.catch_warnings():
                             warnings.simplefilter("ignore", RuntimeWarning)
@@ -415,9 +417,9 @@ class BackwardTest(unittest.TestCase):
 
                         # Derive the mask from the specification, never from native masks.
                         rounded = round(activated / scale)
-                        expected_clamped = abs(rounded) > maximum
+                        expected_clamped = rounded < minimum or rounded > maximum
                         self.assertEqual(expected_clamped, offset == 0.75)
-                        quantized_gate = max(-maximum, min(maximum, rounded))
+                        quantized_gate = max(minimum, min(maximum, rounded))
                         self.assertEqual(
                             state["checkpoints"]["gate_outputs"][0, 0, 2].item(),
                             quantized_gate,

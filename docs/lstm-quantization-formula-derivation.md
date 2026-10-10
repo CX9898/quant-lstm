@@ -65,7 +65,7 @@ Granularity 元数据仍随参数导入导出，用于审计 `4H` 向量的来�
 
 ```text
 qmax(b) = 2^(b-1) - 1
-qmin(b) = -qmax(b)
+qmin(b) = -2^(b-1)
 
 Z_W[c] = 0
 Z_b[c] = 0
@@ -73,14 +73,14 @@ W_hat[k,c] = q_W[k,c] * S_W[c]
 b_hat[c] = q_b[c] * S_b[c]
 ```
 
-所有配置为 signed symmetric 的真实量化点都使用严格对称整数范围 `[-qmax(b), qmax(b)]`，例如 INT8 为 `[-127,127]`、INT16 为 `[-32767,32767]`。二进制补码载体可表示的最小负值（INT8 的 `-128`、INT16 的 `-32768`）不属于有效量化范围，量化 Clamp、参数导入和 Golden/schema 校验均不得接受该值。对非退化校准范围 `[r_min,r_max]`：
+所有 signed 量化点使用完整二进制补码整数范围：INT8 为 `[-128,127]`，INT16 为 `[-32768,32767]`。symmetric 约束校准 scale 和 zero point，不禁用最小负值；CPU/CUDA 量化、重缩放、QAT 饱和掩码及参数导入均使用完整范围。对非退化校准范围 `[r_min,r_max]`，对称校准仍按正端点计算：
 
 ```text
 S_symmetric = max(abs(r_min), abs(r_max)) / qmax(b)
 Z_symmetric = 0
 ```
 
-常量或全零范围执行第 2.3.1 节的固定 minimum-scale fallback，不能通过使用最小负值改变上述严格对称范围。四组 weight/bias 的外部完整 `4H` zero-point 向量因此全部为 0；非对称、unsigned 或非零 zp 配置无效。输入、状态、Linear 输出和门激活仍可按各自配置使用非零 zero point；其中任何量化点一旦配置为 signed symmetric，也必须遵循相同的严格对称范围和 scale 公式。
+常量或全零范围执行第 2.3.1 节的固定 minimum-scale fallback。四组 weight/bias 的外部完整 `4H` zero-point 向量全部为 0；非对称、unsigned 或非零 zp 配置无效。输入、状态、Linear 输出和门激活仍可按各自配置使用非零 zero point。导出范围由最终 scale、zero point 和整数范围派生：`real_min = (qmin - Z) * S`，`real_max = (qmax - Z) * S`；INT8 对称量化为 `[-128*S,127*S]`。校准诊断仍保留对称区间 `[-qmax*S,qmax*S]`，供 POT2 CoverRange 使用。
 
 signed asymmetric 使用完整二进制补码范围，最小负值在该模式下是合法量化值：
 
@@ -98,7 +98,7 @@ Z_signed_asymmetric = Clamp(
     qmax)
 ```
 
-因此 INT8 asymmetric 为 `[-128,127]`，INT16 asymmetric 为 `[-32768,32767]`；只有 signed symmetric 使用严格对称范围并禁用最小负值。退化范围先执行第 2.3.1 节，POT2 模式随后以转换后的 standard scale 重算 zero point。
+因此 signed asymmetric 与 signed symmetric 共享完整整数范围，区别在 scale 和 zero point 的校准公式。退化范围先执行第 2.3.1 节，POT2 模式随后以转换后的 standard scale 重算 zero point。
 
 基础 profile 沿用 GRU 的域感知设置：三个 sigmoid gate output（`input_gate_output`、`forget_gate_output`、`output_gate_output`）默认 `is_unsigned=true,is_symmetric=true`；`input`、`output`、`cell_state`、两路 Linear 输出、四个 gate input、`cell_gate_output` 和 `cell_tanh_output` 默认 `is_unsigned=false,is_symmetric=true`。
 
