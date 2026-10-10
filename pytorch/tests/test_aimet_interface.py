@@ -110,7 +110,7 @@ class NativeAimetInterfaceTest(unittest.TestCase):
         fresh = QuantLSTM(4, 2, batch_first=True, bidirectional=True).cuda()
         fresh.load_state_dict(module.state_dict())
         self.assertTrue(fresh.load_quant_params_from_aimet_format(encodings, module_name='rnn'))
-        self.assertEqual(module.export_quant_params(), fresh.export_quant_params())
+        self.assertEqual(encodings, fresh.export_quant_params_to_aimet_format({}, module_name='rnn'))
         self.assertFalse(fresh.load_quant_params_from_aimet_format(encodings, module_name='missing'))
         module.use_quantization = fresh.use_quantization = True
         torch.testing.assert_close(fresh(self.x)[0], module(self.x)[0])
@@ -133,13 +133,17 @@ class NativeAimetInterfaceTest(unittest.TestCase):
                         native = module.export_quant_params()
                         result = module.export_quant_params_to_aimet_format({}, module_name='rnn')
                         self.assertEqual(result['schema_version'], 3)
-                        self.assertEqual(result['quant_lstm_encodings']['rnn'], native)
+                        self.assertEqual(set(result), {'schema_version', 'activation_encodings', 'param_encodings'})
+                        self.assertEqual(module.export_quant_params(), native)
+                        self.assertEqual(result, module.export_quant_params_to_aimet_format({}, module_name='rnn', for_onnx=False))
                         layer = result['activation_encodings']['rnn']
                         for kind in ('input', 'output'):
                             self.assertIsInstance(layer[kind], list)
-                            self.assertEqual(len(layer[kind]), 3)
+                            self.assertEqual(len(layer[kind]), 1)
                             for record in layer[kind]:
                                 assert_rx_encoding(self, record)
+                                self.assertEqual(record['enc_type'], 'PER_TENSOR')
+                                self.assertEqual(record['scale'], native['operators'][kind]['scale'])
                         for native_key, key in [('operators', 'internal_ops'),
                                                 ('operators_reverse', 'internal_ops_reverse')]:
                             if native_key not in native:
@@ -151,6 +155,7 @@ class NativeAimetInterfaceTest(unittest.TestCase):
                                 self.assertEqual(len(operation['output']), 1)
                                 record = operation['output'][0]
                                 assert_rx_encoding(self, record)
+                                self.assertEqual(record['enc_type'], 'PER_TENSOR')
                                 self.assertEqual(record['scale'], native[native_key][name]['scale'])
                         directions = 2 if bidirectional else 1
                         expected = {'rnn.weight_ih.weight': 8 * directions,
@@ -162,14 +167,22 @@ class NativeAimetInterfaceTest(unittest.TestCase):
                             record = result['param_encodings'][name]
                             assert_rx_encoding(self, record)
                             self.assertEqual(len(record['scale']), length)
-                        if bidirectional:
-                            for index, name in [(0, 'output'), (1, 'output'), (2, 'cell_state')]:
-                                record = layer['output'][index]
-                                for field in ('scale', 'zero_point', 'real_min', 'real_max'):
-                                    self.assertEqual(record[field], [native['operators'][name][field]] * 2
-                                                     + [native['operators_reverse'][name][field]] * 2)
-                            self.assertEqual(layer['input'][1], layer['output'][1])
-                            self.assertEqual(layer['input'][2], layer['output'][2])
+                        fresh = QuantLSTM(4, 2, batch_first=True, bidirectional=bidirectional,
+                                          bias=bias).cuda()
+                        fresh.load_state_dict(module.state_dict())
+                        self.assertTrue(fresh.load_quant_params_from_aimet_format(result, module_name='rnn'))
+                        self.assertEqual(result, fresh.export_quant_params_to_aimet_format({}, module_name='rnn'))
+                        restored = fresh.export_quant_params()
+                        for field in ('operators', 'operators_reverse')[:directions]:
+                            for parameter in parameter_names.intersection(native[field]):
+                                for key in ('scale', 'zero_point', 'real_min', 'real_max'):
+                                    values = native[field][parameter][key]
+                                    expected_values = values if isinstance(values, list) else [values] * 8
+                                    self.assertEqual(restored[field][parameter][key], expected_values)
+                        module.use_quantization = fresh.use_quantization = True
+                        module.eval()
+                        fresh.eval()
+                        torch.testing.assert_close(fresh(self.x), module(self.x))
 
     def test_distinct_bidirectional_state_grids_are_not_lost(self):
         module = QuantLSTM(4, 2, batch_first=True, bidirectional=True).cuda()
@@ -184,25 +197,86 @@ class NativeAimetInterfaceTest(unittest.TestCase):
         module.load_quant_params(doc)
         result = module.export_quant_params_to_aimet_format({}, module_name='rnn')
         layer = result['activation_encodings']['rnn']
-        torch.testing.assert_close(torch.tensor(layer['output'][0]['scale']),
-                                   torch.tensor([0.01, 0.01, 0.03, 0.03]))
-        torch.testing.assert_close(torch.tensor(layer['output'][2]['scale']),
-                                   torch.tensor([0.02, 0.02, 0.04, 0.04]))
+        self.assertEqual(len(layer['input']), 1)
+        self.assertEqual(len(layer['output']), 1)
+        self.assertAlmostEqual(layer['output'][0]['scale'], 0.01)
+        for key, hidden_scale, cell_scale in [('internal_ops', 0.01, 0.02),
+                                              ('internal_ops_reverse', 0.03, 0.04)]:
+            for name, scale in [('output', hidden_scale), ('cell_state', cell_scale)]:
+                record = layer[key][name]['output'][0]
+                assert_rx_encoding(self, record)
+                self.assertEqual(record['enc_type'], 'PER_TENSOR')
+                self.assertAlmostEqual(record['scale'], scale)
+        fresh = QuantLSTM(4, 2, batch_first=True, bidirectional=True).cuda()
+        fresh.load_state_dict(module.state_dict())
+        fresh.load_quant_params_from_aimet_format(result, module_name='rnn')
+        restored = fresh.export_quant_params()
+        native = module.export_quant_params()
+        for key in ('operators', 'operators_reverse'):
+            for name in ('output', 'cell_state'):
+                self.assertEqual(restored[key][name], native[key][name])
+        module.use_quantization = fresh.use_quantization = True
+        module.eval()
+        fresh.eval()
+        h0 = torch.randn(2, 2, 2, device='cuda')
+        c0 = torch.randn_like(h0)
+        torch.testing.assert_close(fresh(self.x, (h0, c0)), module(self.x, (h0, c0)),
+                                   atol=0, rtol=0)
 
-    def test_stage_roundtrip_with_distinct_bias_bitwidths(self):
+    def test_native_bias_formats_stay_separate_from_public_exports(self):
         module = QuantLSTM(4, 3, batch_first=True, quant_config={
             'schema_version': 1, 'operators': {'bias_ih': {'bitwidth': 16}}}).cuda()
         with module.calibration_context():
             module(self.x)
-        stage = module.export_quant_params_to_aimet_format({}, module_name='rnn', for_onnx=False)
+        native = module.export_quant_params()
         fresh = QuantLSTM(4, 3, batch_first=True).cuda()
-        self.assertTrue(fresh.load_quant_params_from_aimet_format(stage, module_name='rnn'))
-        self.assertEqual(module.export_quant_params(), fresh.export_quant_params())
-        existing = {'schema_version': 3, 'activation_encodings': {'other': {'input': []}}}
-        before = copy.deepcopy(existing)
-        with self.assertRaisesRegex(ValueError, 'incompatible encodings'):
-            module.export_quant_params_to_aimet_format(existing, module_name='rnn')
-        self.assertEqual(before, existing)
+        fresh.load_quant_params(native)
+        self.assertEqual(native, fresh.export_quant_params())
+        for for_onnx in (False, True):
+            existing = {'schema_version': 3, 'activation_encodings': {'other': {'input': []}}}
+            before = copy.deepcopy(existing)
+            with self.assertRaisesRegex(ValueError, 'incompatible encodings'):
+                module.export_quant_params_to_aimet_format(existing, module_name='rnn', for_onnx=for_onnx)
+            self.assertEqual(before, existing)
+
+    def test_public_reload_pot2_and_invalid_records(self):
+        module = QuantLSTM(4, 3, batch_first=True, bidirectional=True).cuda()
+        with module.calibration_context():
+            module(self.x)
+        module.enable_pot2()
+        public = module.export_quant_params_to_aimet_format({}, module_name='rnn')
+        fresh = QuantLSTM(4, 3, batch_first=True, bidirectional=True).cuda()
+        fresh.load_state_dict(module.state_dict())
+        self.assertTrue(fresh.load_quant_params_from_aimet_format(public, module_name='rnn'))
+        self.assertEqual(fresh.get_quant_config()['scale_mode'], 'pot2')
+        before = fresh.export_quant_params()
+        module.use_quantization = fresh.use_quantization = True
+        torch.testing.assert_close(fresh(self.x), module(self.x))
+        for case in ('missing_reverse', 'short_weight', 'missing_bias', 'wrong_bitwidth',
+                     'wrong_port', 'expanded_states', 'per_channel_state'):
+            with self.subTest(case=case):
+                invalid = copy.deepcopy(public)
+                if case == 'missing_reverse':
+                    del invalid['activation_encodings']['rnn']['internal_ops_reverse']
+                elif case == 'short_weight':
+                    invalid['param_encodings']['rnn.weight_ih.weight']['scale'].pop()
+                elif case == 'missing_bias':
+                    del invalid['param_encodings']['rnn.bias']
+                elif case == 'wrong_bitwidth':
+                    invalid['param_encodings']['rnn.bias']['bitwidth'] = 16
+                elif case == 'wrong_port':
+                    invalid['activation_encodings']['rnn']['output'][0]['scale'] *= 2
+                elif case == 'expanded_states':
+                    layer = invalid['activation_encodings']['rnn']
+                    layer['input'].extend(copy.deepcopy(layer['output']) * 2)
+                else:
+                    record = invalid['activation_encodings']['rnn']['internal_ops_reverse']['cell_state']['output'][0]
+                    record['enc_type'] = 'PER_CHANNEL'
+                    for field in ('scale', 'zero_point', 'real_min', 'real_max'):
+                        record[field] = [record[field]] * 3
+                with self.assertRaises(ValueError):
+                    fresh.load_quant_params_from_aimet_format(invalid, module_name='rnn')
+                self.assertEqual(before, fresh.export_quant_params())
 
     def test_lifecycle_lock_and_pot2(self):
         module = QuantLSTM(4, 3, batch_first=True).cuda()

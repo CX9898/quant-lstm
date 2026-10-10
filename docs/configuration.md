@@ -207,7 +207,8 @@ restored.load_quant_params("/path/to/quant_params.json")
 restored.use_quantization = True
 ```
 
-公共格式使用 GRU-compatible schema v1：
+算子独立的原生检查点使用 schema v1。下列字段不写入 rx-met 提供给编译器的
+encodings；rx-met 的导出和回读格式见 [通用循环算子集成接口](aimet_integration.md)。
 
 - 单向 schema：`schemas/lstm_pytorch_quant_params.schema.json`。
 - 双向 schema：`schemas/lstm_pytorch_bidirectional_quant_params.schema.json`。
