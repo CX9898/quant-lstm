@@ -1,10 +1,12 @@
 """构建 QuantLSTM CUDA FP 载体 binding 与 Python 模块。"""
 
 import os
+import shutil
 from pathlib import Path
 
 from setuptools import setup
-from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CUDA_HOME
+from setuptools.command.build_py import build_py
+from torch.utils.cpp_extension import BuildExtension, CppExtension, CUDAExtension, CUDA_HOME
 
 
 HERE = Path(__file__).resolve().parent
@@ -23,13 +25,31 @@ if not DEFAULT_CONFIG.exists():
     raise RuntimeError(f"未找到默认量化配置: {DEFAULT_CONFIG}")
 
 
+class BuildPyWithResources(build_py):
+    def run(self):
+        super().run()
+        destination = Path(self.build_lib) / "quant_lstm_resources"
+        destination.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(DEFAULT_CONFIG, destination / DEFAULT_CONFIG.name)
+
+
+onnx_headers = Path(os.environ.get("QUANT_LSTM_ONNXRUNTIME_INCLUDE",
+    ROOT / "third_party/onnxruntime/include"))
+onnx_extensions = []
+if (onnx_headers / "onnxruntime_cxx_api.h").is_file():
+    onnx_extensions.append(CppExtension(
+        name="quant_lstm_onnx_runtime", sources=[str(HERE / "lib/lstm_onnx_runtime.cc")],
+        include_dirs=[str(onnx_headers)], extra_compile_args=["-std=c++17", "-O2"],
+    ))
+
+
 setup(
     name="quant-lstm",
     version=os.environ.get("RX_MET_QUANT_LSTM_VERSION", "0.1.0"),
-    py_modules=["quant_lstm", "lstm_autograd", "lstm_onnx", "lstm_aimet"],
-    data_files=[
-        ("share/quant-lstm/config", [str(DEFAULT_CONFIG)]),
-    ],
+    py_modules=["quant_lstm", "lstm_autograd", "lstm_onnx", "lstm_aimet", "quant_lstm_onnx"],
+    packages=["quant_lstm_resources"],
+    package_data={"quant_lstm_resources": ["*.json"]},
+    zip_safe=False,
     ext_modules=[
         CUDAExtension(
             name="_quant_lstm",
@@ -39,6 +59,6 @@ setup(
             libraries=["quant_lstm", "cublas", "cudart"],
             extra_compile_args={"cxx": ["-O3", "-std=c++17"], "nvcc": ["-O3", "-std=c++17"]},
         )
-    ],
-    cmdclass={"build_ext": BuildExtension},
+    ] + onnx_extensions,
+    cmdclass={"build_ext": BuildExtension, "build_py": BuildPyWithResources},
 )

@@ -13,7 +13,7 @@ from quant_lstm import QuantLSTM, normalize_quant_lstm_onnx
 def assert_rx_encoding(test, record):
     """Validate the deployment record contract, independent of native loading."""
     test.assertEqual(set(record), {'dtype', 'bitwidth', 'is_symmetric', 'enc_type',
-                                   'scale', 'zero_point', 'real_min', 'real_max'})
+                                   'scale', 'n', 'zero_point', 'real_min', 'real_max'})
     test.assertIn(record['dtype'], {'INT8', 'UINT8', 'INT16', 'UINT16'})
     test.assertIn(record['bitwidth'], (8, 16))
     test.assertIn(record['is_symmetric'], ('True', 'False'))
@@ -36,6 +36,8 @@ def assert_rx_encoding(test, record):
         test.assertTrue(math.isfinite(scale))
         test.assertTrue(math.isclose(lo, scale * (qmin - zp), rel_tol=1e-6, abs_tol=1e-9))
         test.assertTrue(math.isclose(hi, scale * (qmax - zp), rel_tol=1e-6, abs_tol=1e-9))
+    exponents = record['n'] if isinstance(record['n'], list) else [record['n']]
+    test.assertEqual(exponents, [round(-math.log2(scale)) for scale in fields[0]])
 
 
 class ConfigurationTest(unittest.TestCase):
@@ -138,9 +140,9 @@ class NativeAimetInterfaceTest(unittest.TestCase):
                         self.assertEqual(result, module.export_quant_params_to_aimet_format({}, module_name='rnn', for_onnx=False))
                         layer = result['activation_encodings']['rnn']
                         for kind in ('input', 'output'):
-                            self.assertIsInstance(layer[kind], list)
-                            self.assertEqual(len(layer[kind]), 1)
-                            for record in layer[kind]:
+                            self.assertIsInstance(layer[kind], dict)
+                            self.assertEqual(set(layer[kind]), {'0'})
+                            for record in layer[kind].values():
                                 assert_rx_encoding(self, record)
                                 self.assertEqual(record['enc_type'], 'PER_TENSOR')
                                 self.assertEqual(record['scale'], native['operators'][kind]['scale'])
@@ -199,7 +201,7 @@ class NativeAimetInterfaceTest(unittest.TestCase):
         layer = result['activation_encodings']['rnn']
         self.assertEqual(len(layer['input']), 1)
         self.assertEqual(len(layer['output']), 1)
-        self.assertAlmostEqual(layer['output'][0]['scale'], 0.01)
+        self.assertAlmostEqual(layer['output']['0']['scale'], 0.01)
         for key, hidden_scale, cell_scale in [('internal_ops', 0.01, 0.02),
                                               ('internal_ops_reverse', 0.03, 0.04)]:
             for name, scale in [('output', hidden_scale), ('cell_state', cell_scale)]:
@@ -329,7 +331,8 @@ class NativeAimetInterfaceTest(unittest.TestCase):
         module.use_quantization = fresh.use_quantization = True
         torch.testing.assert_close(fresh(self.x), module(self.x))
         for case in ('missing_reverse', 'short_weight', 'missing_bias', 'wrong_bitwidth',
-                     'wrong_port', 'expanded_states', 'per_channel_state'):
+                     'wrong_port', 'expanded_states', 'missing_scale', 'wrong_n',
+                     'boolean_n', 'wrong_n_shape', 'per_channel_state'):
             with self.subTest(case=case):
                 invalid = copy.deepcopy(public)
                 if case == 'missing_reverse':
@@ -341,10 +344,20 @@ class NativeAimetInterfaceTest(unittest.TestCase):
                 elif case == 'wrong_bitwidth':
                     invalid['param_encodings']['rnn.bias']['bitwidth'] = 16
                 elif case == 'wrong_port':
-                    invalid['activation_encodings']['rnn']['output'][0]['scale'] *= 2
+                    invalid['activation_encodings']['rnn']['output']['0']['scale'] *= 2
                 elif case == 'expanded_states':
                     layer = invalid['activation_encodings']['rnn']
-                    layer['input'].extend(copy.deepcopy(layer['output']) * 2)
+                    layer['input']['1'] = copy.deepcopy(layer['output']['0'])
+                elif case == 'missing_scale':
+                    del invalid['param_encodings']['rnn.bias']['scale']
+                elif case == 'wrong_n':
+                    invalid['activation_encodings']['rnn']['input']['0']['n'] += 1
+                elif case == 'boolean_n':
+                    record = invalid['param_encodings']['rnn.weight_ih.weight']
+                    record['n'] = [True] * len(record['scale'])
+                elif case == 'wrong_n_shape':
+                    record = invalid['activation_encodings']['rnn']['input']['0']
+                    record['n'] = [record['n']]
                 else:
                     record = invalid['activation_encodings']['rnn']['internal_ops_reverse']['cell_state']['output'][0]
                     record['enc_type'] = 'PER_CHANNEL'

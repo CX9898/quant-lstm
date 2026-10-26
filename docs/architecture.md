@@ -59,7 +59,8 @@ PyTorch runtime 不包含 CPU dispatch。CPU 实现由 C++ 测试、示例和外
 4. CUDA backward 逆序遍历时间步，使用 pointwise kernel、cuBLAS GEMM 和 bias
    reduction 产生 input、参数和初始状态梯度。
 
-`use_quantization=False` 不执行校准、Round/Clamp 或 STE。
+`calibrating=False` 且 `use_quantization=False` 时使用完全浮点路径，不执行
+Round/Clamp 或 STE。显式校准模式优先于量化开关，关闭量化的模块仍可收集参数。
 
 ### 4.2 校准与量化执行
 

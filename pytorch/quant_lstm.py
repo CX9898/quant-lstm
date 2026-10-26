@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 import struct
-import sysconfig
+from importlib.resources import files
 import warnings
 from pathlib import Path
 from typing import Any, Optional
@@ -36,10 +36,7 @@ _SOURCE_DEFAULT_CONFIG_PATH = (
     / "lstm_quant_default_v1.json"
 )
 _INSTALLED_DEFAULT_CONFIG_PATH = (
-    Path(sysconfig.get_path("data"))
-    / "share"
-    / "quant-lstm"
-    / "config"
+    files("quant_lstm_resources")
     / "lstm_quant_default_v1.json"
 )
 _DEFAULT_CONFIG_PATH = next(

@@ -14,8 +14,15 @@
 - ONNX exports omit the optional bias input for models constructed without bias.
 
 - LSTM 的 AIMET/RX 部署编码对齐 QuantGRU：补充 schema_version 3 和 bitwidth，
-  使用字符串 is_symmetric、I/O 列表、internal_ops.output 列表及扁平参数数组。
+  使用字符串 is_symmetric、I/O 端口字典、internal_ops.output 列表及扁平参数数组。
   双向 h/c 网格以一维 per-channel 编码保留；原生参数与阶段回读格式保持兼容。
+
+- Public encoding records now include `n = round(-log2(scale))`; loaders validate
+  provided exponents and accept legacy single-element I/O lists.
+- Add the standard ONNX LSTM PTQ adapter and optional ONNX Runtime bridge.
+  Set `QUANT_LSTM_ONNXRUNTIME_INCLUDE` when building with external ORT headers.
+- Bundle the default config as a Python package resource so wheels remain
+  relocatable. Optional AIMET logging retains a standalone fallback.
 
 - 增加与 QuantGRU 对齐的循环算子集成接口，配置、校准生命周期、Po2 和 AIMET/ONNX
   编码处理均由本库负责，无 AIMET 依赖。

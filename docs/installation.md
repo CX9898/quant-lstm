@@ -137,6 +137,14 @@ rx-met 中的副本由工具包发布流程构建；同步源码后也应更新�
 
 ## 3. 安装 CUDA C++ package
 
+### ONNX Runtime PTQ bridge
+
+The optional `quant_lstm_onnx_runtime` extension is built when ONNX Runtime C/C++
+headers are available in `third_party/onnxruntime/include`. Set
+`QUANT_LSTM_ONNXRUNTIME_INCLUDE` to use another directory containing
+`onnxruntime_cxx_api.h`, then rebuild the wheel. Ordinary PyTorch LSTM execution
+and standard ONNX export do not require this extension.
+
 使用自定义安装前缀可以避免修改系统目录：
 
 ```bash

@@ -112,13 +112,15 @@ zero point 为 `-103`。默认 Po2 转换后 scale 为 `0.0625`、zero point 为
   `param_encodings`。rx-met 导出器中的 `version: "1.0.0"` 来自 AIMET；算子不新增或
   改写该字段，不新增 LSTM 专有顶层区段。
 - 每条编码包含 `dtype`、整数 `bitwidth`、字符串 `is_symmetric`（`"True"` / `"False"`）、
-  `enc_type`、`scale`、`zero_point`、`real_min`、`real_max`；不输出原生 `symmetric` 字段。
+  `enc_type`、`scale`、`n`、`zero_point`、`real_min`、`real_max`；不输出原生 `symmetric` 字段。
+  `n = round(-log2(scale))` 与 scale 保持相同标量或数组形状；加载时校验已提供的 n。
 - `real_min = (qmin-zero_point)*scale`、`real_max = (qmax-zero_point)*scale`，
   signed 使用完整 INT8 `[-128,127]` / INT16 `[-32768,32767]`，与 GRU 一致；
   signed symmetric 校准仍按 `max_abs/qmax` 计算 scale，不减少负端可表示值。
 - `activation_encodings[模块路径]` 标记 `is_LSTM`。与 GRU 一致，`input` 和 `output`
-  各为单元素编码列表，分别取正向 `input`、`output` 的 `PER_TENSOR` 标量编码；
+  各为仅包含端口 `"0"` 的编码字典，分别取正向 `input`、`output` 的 `PER_TENSOR` 标量编码；
   它们不枚举 ONNX 或模块的全部输入输出端口。
+  加载器仍接受旧版单元素编码列表。
 - `internal_ops[量化点].output` 是单元素编码列表，保存内部激活的量化网格；
   双向反向网格放在同构的 `internal_ops_reverse`。权重和 bias 放在 `param_encodings`。
 - h0/h 使用各方向的 `internal_ops.output` 编码，c0/c 使用 `internal_ops.cell_state`
@@ -149,6 +151,7 @@ zero point 为 `-103`。默认 Po2 转换后 scale 为 `0.0625`、zero point 为
         "is_symmetric": "True",
         "enc_type": "PER_TENSOR",
         "scale": 0.00390625,
+        "n": 8,
         "zero_point": 0,
         "real_min": 0.0,
         "real_max": 0.99609375

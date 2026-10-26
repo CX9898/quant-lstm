@@ -10,7 +10,8 @@
 | --- | --- |
 | [安装指南](installation.md) | Python、C++、CPU-only 和 Docker 安装 |
 | [配置与校准](configuration.md) | 配置字段、默认值、校准和参数导入导出 |
-| [ONNX 导出](onnx-export.md) | 标准 ONNX `LSTM` 导出方式和限制 |
+| [ONNX 导出](onnx-export.md) | 标准 ONNX `LSTM` 导出方式和配套编码 |
+| [AIMET/rx-met 集成](aimet_integration.md) | 通用接口、Po2 转换、量化开关、阶段恢复及部署编码格式 |
 | [真实网络测试](../tests/real_network/README.md) | Speech Commands v0.02 运行方法、阈值和结果 |
 
 ## 维护者文档
