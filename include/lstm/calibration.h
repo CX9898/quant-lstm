@@ -78,6 +78,9 @@ class LstmCalibrationCollector {
     void reset();
     void collect(const LstmShape& shape, const LstmFloatWeights& weights, const float* input,
                  const float* initial_hidden, const float* initial_cell);
+    void collect(const LstmShape& shape, const LstmFloatWeights& weights, const float* input,
+                 const float* initial_hidden, const float* initial_cell,
+                 float* output, float* final_hidden, float* final_cell);
     void merge(const LstmCalibrationBatch& batch);
 
     const LstmQuantizationRanges& ranges() const noexcept;
@@ -120,6 +123,9 @@ class LstmCalibrationSession {
 
     void collect(const LstmShape& shape, const LstmFloatWeights& weights, const float* input,
                  const float* initial_hidden, const float* initial_cell);
+    void collect(const LstmShape& shape, const LstmFloatWeights& weights, const float* input,
+                 const float* initial_hidden, const float* initial_cell,
+                 float* output, float* final_hidden, float* final_cell);
     void collect(LstmCalibrationBatch batch);
     const FinalizedLstmCalibration& finalize(bool require_exact_accumulation = false);
     void reset();

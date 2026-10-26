@@ -1,8 +1,8 @@
 # quant-lstm 安装指南
 
-quant-lstm 提供两个安装界面：PyTorch CUDA 模块和 CMake C++ package。Python
-模块面向训练、校准和推理；CMake package 面向独立 C++ 集成，也支持不依赖 CUDA
-的 reference-only 安装。
+quant-lstm 提供 PyTorch CPU/CUDA 模块和 CMake C++ package。CPU Python 模块支持
+校准和 PTQ；CUDA 模块另支持浮点训练和 QAT。CMake package 面向独立 C++ 集成，
+也支持不依赖 CUDA 的 reference-only 安装。
 
 ## 1. 环境要求
 
@@ -13,10 +13,11 @@ quant-lstm 提供两个安装界面：PyTorch CUDA 模块和 CMake C++ package�
 | `nlohmann_json` | 3.11.2 或更高版本 | 配置与参数 JSON |
 | CUDA Toolkit | 提供 `nvcc`、cuBLAS 和 CUDA Runtime | CUDA C++ 与 Python 模块 |
 | Python | 具有开发头文件 | 构建 PyTorch extension |
-| PyTorch | CUDA-enabled，且 CUDA ABI 与构建环境兼容 | Python 接口 |
+| PyTorch | CPU 或 CUDA 版，且 ABI 与构建环境兼容 | Python 接口 |
 
-CPU-only C++ package 不要求 CUDA Toolkit 或 PyTorch。Python 模块始终要求 CUDA；
-它不会在 CUDA 不可用时回退到 CPU reference。
+CPU-only C++ package 不要求 CUDA Toolkit 或 PyTorch。CPU Python 模块需要 CPU
+PyTorch，通过 `RX_MET_ENABLE_CUDA=0` 选择 CPU extension。CUDA wheel 不会自动
+转换为 CPU wheel。
 
 Ubuntu 可以使用系统包提供 CMake、编译器和 `nlohmann_json`：
 
@@ -32,8 +33,8 @@ CUDA Toolkit、驱动和 CUDA-enabled PyTorch 需要按照目标 GPU 和 PyTorch
 ## 2. 安装 PyTorch CUDA 模块
 
 Python package 支持普通环境安装和 wheel 安装。以下构建命令均从仓库根目录执行，
-且原生核心必须构建到固定的 `build/` 目录，因为 `pytorch/setup.py` 从该目录链接
-`libquant_lstm.a`。
+原生核心默认从 `build/` 目录链接 `libquant_lstm.a`，可通过
+`RX_MET_QUANT_LSTM_BUILD_DIR` 指定其他构建目录。
 
 新构建目录默认启用 CUDA，关闭测试和示例；单配置生成器默认使用 `Release`。
 普通安装无需显式指定这些开关。需要开发构建时可传入
@@ -135,15 +136,30 @@ rx-met 中的副本由工具包发布流程构建；同步源码后也应更新�
 (cd pytorch && python -m unittest -v tests.test_aimet_interface)
 ```
 
-## 3. 安装 CUDA C++ package
+### 2.2 CPU Python 模块
 
-### ONNX Runtime PTQ bridge
+先安装 CPU PyTorch，从仓库根目录构建：
+
+```bash
+cmake -S . -B build_cpu -DQUANT_LSTM_ENABLE_CUDA=OFF
+cmake --build build_cpu --parallel 2
+RX_MET_ENABLE_CUDA=0 RX_MET_QUANT_LSTM_BUILD_DIR="$PWD/build_cpu" \
+  python -m pip wheel ./pytorch --no-build-isolation --no-deps --wheel-dir dist
+```
+
+安装 CPU wheel 后，将模型、输入和状态放在 CPU，调用 `eval()` 并在
+`torch.no_grad()` 或 `torch.inference_mode()` 内执行校准和 PTQ。
+CPU 不支持训练、反向传播或 QAT；CPU 和 CUDA wheel 须在各自兼容环境中构建。
+
+### 2.3 ONNX Runtime PTQ Bridge
 
 The optional `quant_lstm_onnx_runtime` extension is built when ONNX Runtime C/C++
 headers are available in `third_party/onnxruntime/include`. Set
 `QUANT_LSTM_ONNXRUNTIME_INCLUDE` to use another directory containing
 `onnxruntime_cxx_api.h`, then rebuild the wheel. Ordinary PyTorch LSTM execution
 and standard ONNX export do not require this extension.
+
+## 3. 安装 CUDA C++ package
 
 使用自定义安装前缀可以避免修改系统目录：
 

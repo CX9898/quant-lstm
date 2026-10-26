@@ -2,7 +2,7 @@
 
 ## 1. 目标与范围
 
-quant-lstm 将单层 LSTM 的完全浮点训练、FP32 q-carrier 量化执行、CUDA 校准和
+quant-lstm 将单层 LSTM 的完全浮点训练、FP32 q-carrier 量化执行、CPU/CUDA 校准和
 QAT backward 放在 C++/CUDA 核心中。Python 层提供与 `torch.nn.LSTM` 相近的模块
 接口，并负责配置、张量布局和 autograd 调度。
 
@@ -32,8 +32,9 @@ quant_lstm C++ static library
     +-- Golden and numeric-safety support
 ```
 
-PyTorch runtime 不包含 CPU dispatch。CPU 实现由 C++ 测试、示例和外部 C++ consumer
-显式调用。
+CPU wheel 通过独立 binding 复用 C++ 浮点、校准和 FP32 q-carrier reference。
+Python 入口限制为 eval/no-grad；训练与 QAT 仍只支持 CUDA，CUDA wheel 不提供
+隐式 CPU fallback。
 
 ## 3. 模块与接口
 
@@ -73,6 +74,10 @@ Round/Clamp 或 STE。显式校准模式优先于量化开关，关闭量化的�
    `NumericSafetyReport`。
 5. `use_quantization=True` 后，CUDA q-carrier forward 在每个真实边界执行
    Round/Clamp，并使用真实 sigmoid/tanh。
+
+CPU collector 复用一次浮点 forward 的输出与 trace，在 batch 内收集各量化点的完整
+直方图后合并会话统计，与 CUDA 的统计合并边界一致。CPU q-carrier binding 显式
+转换实值 tensor 和量化整数网格，不保存训练 checkpoint。
 
 校准数据应来自训练分布的代表性样本。随机 tensor 只适用于接口冒烟测试。
 
@@ -146,6 +151,6 @@ Golden schema、测试矩阵和阈值入库。构建产物、运行日志和逐�
 - Python wheel 与构建时的 Python、PyTorch C++ ABI、平台和 CUDA 依赖绑定，需要在
   兼容环境之间分发。
 
-CUDA-only Python runtime 的设计理由记录在
-[ADR-0001](adr/0001-cuda-only-python-runtime.md)。新的跨模块设计决策应新增 ADR；
+原始 CUDA-only 边界见 [ADR-0001](adr/0001-cuda-only-python-runtime.md)，受限 CPU
+校准/PTQ 边界见 [ADR-0002](adr/0002-cpu-calibration-and-ptq.md)。新的跨模块设计决策应新增 ADR；
 当前行为变化则直接更新本文和对应专题文档。

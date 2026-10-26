@@ -1,4 +1,4 @@
-"""单层 LSTM 的浮点与 CUDA FP32 q-carrier PyTorch 接口。"""
+"""Single-layer LSTM with CUDA training and CPU/CUDA calibration and PTQ."""
 
 from __future__ import annotations
 
@@ -379,7 +379,7 @@ class _UnidirectionalQuantLSTM(LSTMAimetIntegration, nn.Module):
     """与单层单向 nn.LSTM 对齐的双模式模块。
 
     use_quantization=False 使用浮点路径。校准并设置
-    use_quantization=True 后，唯一量化后端是 CUDA FP32 q-carrier。
+    use_quantization=True 后使用 FP32 q-carrier。CPU 仅支持 eval/no-grad 前向与校准。
     """
 
     def __init__(
@@ -699,15 +699,13 @@ class _UnidirectionalQuantLSTM(LSTMAimetIntegration, nn.Module):
                 "量化推理需要先校准并调用 finalize_calibration，"
                 "或加载参数包"
             )
-        if not input.is_cuda:
-            raise RuntimeError("量化 FP 载体主路径只支持 CUDA input")
         if hx is None:
             h0 = c0 = None
         else:
             if len(hx) != 2:
                 raise ValueError("hx 必须是 (h_0, c_0)")
             h0, c0 = hx
-        save_checkpoints = self.training or torch.is_grad_enabled()
+        save_checkpoints = input.is_cuda and (self.training or torch.is_grad_enabled())
         output, final_hidden, final_cell, qat_state, safety = quantized_lstm(
             input,
             self.weight_ih_l0,
@@ -731,11 +729,14 @@ class _UnidirectionalQuantLSTM(LSTMAimetIntegration, nn.Module):
         input: Tensor,
         hx: Optional[tuple[Tensor, Tensor]] = None,
     ) -> tuple[Tensor, tuple[Tensor, Tensor]]:
-        if not input.is_cuda:
-            raise RuntimeError(
-                "QuantLSTM PyTorch 执行路径只支持 CUDA input；"
-                "CPU 实现仅用于 C++ reference model"
-            )
+        if input.device.type == "cpu":
+            if self.training or torch.is_grad_enabled():
+                raise RuntimeError(
+                    "CPU QuantLSTM supports calibration and PTQ inference only; "
+                    "call eval() and use torch.no_grad() or torch.inference_mode()"
+                )
+        elif not input.is_cuda:
+            raise RuntimeError("QuantLSTM supports CPU and CUDA tensors only")
         if self.calibrating:
             return self._collect_calibration(input, hx)
         if self.use_quantization:
@@ -1121,7 +1122,7 @@ class QuantLSTM(_UnidirectionalQuantLSTM):
             bundle_json,
             self.cublas_math_mode,
             self.require_exact_accumulation,
-            self.training or torch.is_grad_enabled(),
+            input.is_cuda and (self.training or torch.is_grad_enabled()),
         )
         output = self._reverse_sequence(output) if reverse else output
         return output, hidden, cell, qat_state, safety
@@ -1135,8 +1136,6 @@ class QuantLSTM(_UnidirectionalQuantLSTM):
             raise RuntimeError(
                 "双向量化推理需要两个方向都已完成校准或参数导入"
             )
-        if not input.is_cuda:
-            raise RuntimeError("量化 FP 载体主路径只支持 CUDA input")
         forward_state, reverse_state = self._split_bidirectional_state(input, hx)
         forward = self._run_quantized_direction(
             input, forward_state, False

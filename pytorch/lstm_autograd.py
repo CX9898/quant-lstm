@@ -1,4 +1,4 @@
-"""QuantLSTM 浮点 backward 与 FP32 q-carrier QAT 自动求导桥接。"""
+"""CUDA autograd bridge and CPU inference dispatch for QuantLSTM."""
 
 from __future__ import annotations
 
@@ -268,6 +268,11 @@ def float_lstm(
     initial_cell: Optional[Tensor],
     batch_first: bool,
 ) -> tuple[Tensor, Tensor, Tensor]:
+    if input.device.type == "cpu":
+        return _quant_lstm.lstm_forward(
+            input, weight_ih, weight_hh, bias_ih, bias_hh,
+            initial_hidden, initial_cell, batch_first,
+        )
     return _FloatLSTMFunction.apply(
         input,
         weight_ih,
@@ -294,6 +299,13 @@ def quantized_lstm(
     require_exact_accumulation: bool,
     save_checkpoints: bool,
 ) -> tuple[Tensor, Tensor, Tensor, Optional[dict[str, Any]], dict[str, Any]]:
+    if input.device.type == "cpu":
+        output, hidden, cell, _, safety = _quant_lstm.lstm_forward_quantized(
+            input, weight_ih, weight_hh, bias_ih, bias_hh,
+            initial_hidden, initial_cell, batch_first, bundle_json, math_mode,
+            require_exact_accumulation, save_checkpoints,
+        )
+        return output, hidden, cell, None, safety
     state: dict[str, Any] = {}
     output, hidden, cell = _QuantizedLSTMFunction.apply(
         input,

@@ -221,11 +221,19 @@ class FloatReferenceTest(unittest.TestCase):
     def test_cpu_runtime_is_rejected(self):
         module = QuantLSTM(2, 3)
         input_tensor = torch.zeros((4, 1, 2))
-        message = "CPU 实现仅用于 C\\+\\+ reference model"
+        message = "CPU QuantLSTM supports calibration and PTQ inference only"
         with torch.no_grad(), self.assertRaisesRegex(RuntimeError, message):
             module(input_tensor)
+        module.eval()
         with self.assertRaisesRegex(RuntimeError, message):
             module(input_tensor.requires_grad_())
+        if getattr(_quant_lstm, "supports_cuda", True) is False:
+            with torch.no_grad():
+                result = module(input_tensor)
+            self.assertEqual(result[0].shape, (4, 1, 3))
+            self.assertFalse(result[0].requires_grad)
+            return
+        message = "CPU 实现仅用于 C\\+\\+ reference model"
         with self.assertRaisesRegex(RuntimeError, message):
             _quant_lstm.lstm_forward(
                 input_tensor,

@@ -1,5 +1,6 @@
 #include "lstm/calibration.h"
 
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <stdexcept>
@@ -134,6 +135,13 @@ void LstmCalibrationCollector::observeParameter(QuantOperator id, const float* v
 void LstmCalibrationCollector::collect(const LstmShape& shape, const LstmFloatWeights& weights,
                                        const float* input, const float* initial_hidden,
                                        const float* initial_cell) {
+    collect(shape, weights, input, initial_hidden, initial_cell, nullptr, nullptr, nullptr);
+}
+
+void LstmCalibrationCollector::collect(const LstmShape& shape, const LstmFloatWeights& weights,
+                                       const float* input, const float* initial_hidden,
+                                       const float* initial_cell, float* output,
+                                       float* final_hidden, float* final_cell) {
     if (shape.input_size != input_size_ || shape.hidden_size != hidden_size_) {
         throw std::invalid_argument("校准 shape 与 collector 契约不匹配");
     }
@@ -147,47 +155,63 @@ void LstmCalibrationCollector::collect(const LstmShape& shape, const LstmFloatWe
     const std::size_t hidden = static_cast<std::size_t>(hidden_size_);
     const std::size_t state_count = batch * hidden;
 
-    std::vector<float> output(steps * state_count);
-    std::vector<float> final_hidden(state_count);
-    std::vector<float> final_cell(state_count);
+    std::vector<float> owned_output(output == nullptr ? steps * state_count : 0);
+    std::vector<float> owned_hidden(final_hidden == nullptr ? state_count : 0);
+    std::vector<float> owned_cell(final_cell == nullptr ? state_count : 0);
+    output = output == nullptr ? owned_output.data() : output;
+    final_hidden = final_hidden == nullptr ? owned_hidden.data() : final_hidden;
+    final_cell = final_cell == nullptr ? owned_cell.data() : final_cell;
     LstmFloatReferenceTrace trace;
-    lstmForwardFloatCpu(shape, weights, input, initial_hidden, initial_cell, output.data(),
-                        final_hidden.data(), final_cell.data(), &trace);
+    lstmForwardFloatCpu(shape, weights, input, initial_hidden, initial_cell, output,
+                        final_hidden, final_cell, &trace);
 
-    observeOperator(QuantOperator::Input, input, steps * batch * input_size);
+    // Match CUDA's per-batch histograms before merging into session statistics.
+    LstmCalibrationCollector batch_collector(config_, input_size_, hidden_size_, bias_enabled_,
+                                             collect_histograms_, histogram_bin_count_);
+    batch_collector.observeOperator(QuantOperator::Input, input, steps * batch * input_size);
 
     std::vector<float> zero_hidden;
     std::vector<float> zero_cell;
     const float* initial_hidden_values = stateOrZeros(initial_hidden, &zero_hidden, state_count);
     const float* initial_cell_values = stateOrZeros(initial_cell, &zero_cell, state_count);
-    observeOperator(QuantOperator::Output, initial_hidden_values, state_count);
-    observeOperator(QuantOperator::CellState, initial_cell_values, state_count);
-    observeOperator(QuantOperator::Output, trace.hidden_outputs.data(),
-                    trace.hidden_outputs.size());
-    observeOperator(QuantOperator::CellState, trace.cell_states.data(), trace.cell_states.size());
+    batch_collector.observeOperator(QuantOperator::Output, initial_hidden_values, state_count);
+    batch_collector.observeOperator(QuantOperator::CellState, initial_cell_values, state_count);
+    batch_collector.observeOperator(QuantOperator::Output, trace.hidden_outputs.data(),
+                                    trace.hidden_outputs.size());
+    batch_collector.observeOperator(QuantOperator::CellState, trace.cell_states.data(),
+                                    trace.cell_states.size());
 
-    observeParameter(QuantOperator::WeightInputHidden, weights.weight_ih, input_size);
-    observeParameter(QuantOperator::WeightHiddenHidden, weights.weight_hh, hidden);
+    batch_collector.observeParameter(QuantOperator::WeightInputHidden, weights.weight_ih, input_size);
+    batch_collector.observeParameter(QuantOperator::WeightHiddenHidden, weights.weight_hh, hidden);
     if (bias_enabled_) {
-        observeParameter(QuantOperator::BiasInputHidden, weights.bias_ih, 1);
-        observeParameter(QuantOperator::BiasHiddenHidden, weights.bias_hh, 1);
+        batch_collector.observeParameter(QuantOperator::BiasInputHidden, weights.bias_ih, 1);
+        batch_collector.observeParameter(QuantOperator::BiasHiddenHidden, weights.bias_hh, 1);
     }
 
-    observeOperator(QuantOperator::WeightInputHiddenLinear, trace.weight_input_hidden_linear.data(),
-                    trace.weight_input_hidden_linear.size());
-    observeOperator(QuantOperator::WeightHiddenHiddenLinear,
-                    trace.weight_hidden_hidden_linear.data(),
-                    trace.weight_hidden_hidden_linear.size());
-    observeOperator(QuantOperator::CellTanhOutput, trace.cell_tanh_outputs.data(),
-                    trace.cell_tanh_outputs.size());
+    batch_collector.observeOperator(QuantOperator::WeightInputHiddenLinear,
+                                    trace.weight_input_hidden_linear.data(),
+                                    trace.weight_input_hidden_linear.size());
+    batch_collector.observeOperator(QuantOperator::WeightHiddenHiddenLinear,
+                                    trace.weight_hidden_hidden_linear.data(),
+                                    trace.weight_hidden_hidden_linear.size());
+    batch_collector.observeOperator(QuantOperator::CellTanhOutput, trace.cell_tanh_outputs.data(),
+                                    trace.cell_tanh_outputs.size());
 
     const std::size_t gate_stride = kGateCount * hidden;
-    for (std::size_t row = 0; row < steps * batch; ++row) {
-        for (std::size_t gate = 0; gate < kGateCount; ++gate) {
+    std::vector<float> gate_input_values(steps * batch * hidden);
+    std::vector<float> gate_output_values(steps * batch * hidden);
+    for (std::size_t gate = 0; gate < kGateCount; ++gate) {
+        for (std::size_t row = 0; row < steps * batch; ++row) {
             const std::size_t offset = row * gate_stride + gate * hidden;
-            observeOperator(kGateInputOperators[gate], trace.gate_inputs.data() + offset, hidden);
-            observeOperator(kGateOutputOperators[gate], trace.gate_outputs.data() + offset, hidden);
+            std::copy_n(trace.gate_inputs.data() + offset, hidden,
+                         gate_input_values.data() + row * hidden);
+            std::copy_n(trace.gate_outputs.data() + offset, hidden,
+                         gate_output_values.data() + row * hidden);
         }
+        batch_collector.observeOperator(kGateInputOperators[gate], gate_input_values.data(),
+                                        gate_input_values.size());
+        batch_collector.observeOperator(kGateOutputOperators[gate], gate_output_values.data(),
+                                        gate_output_values.size());
     }
 
     for (std::size_t step = 0; step < steps; ++step) {
@@ -207,13 +231,15 @@ void LstmCalibrationCollector::collect(const LstmShape& shape, const LstmFloatWe
                 const float output_gate =
                     trace.gate_outputs[gate_base + gateOffset(GateKind::Output, hidden)];
                 const float cell_tanh = trace.cell_tanh_outputs[state_offset + channel];
-                contributions_.forget_times_old_cell.observe(forget_gate * previous_cell[channel]);
-                contributions_.input_times_cell.observe(input_gate * cell_gate);
-                contributions_.output_times_cell_tanh.observe(output_gate * cell_tanh);
+                batch_collector.contributions_.forget_times_old_cell.observe(
+                    forget_gate * previous_cell[channel]);
+                batch_collector.contributions_.input_times_cell.observe(input_gate * cell_gate);
+                batch_collector.contributions_.output_times_cell_tanh.observe(output_gate * cell_tanh);
             }
         }
     }
-    ++batch_count_;
+    merge({std::move(batch_collector.ranges_), std::move(batch_collector.contributions_),
+           std::move(batch_collector.histograms_)});
 }
 
 void LstmCalibrationCollector::merge(const LstmCalibrationBatch& batch) {
@@ -302,10 +328,18 @@ LstmCalibrationSession::LstmCalibrationSession(
 void LstmCalibrationSession::collect(const LstmShape& shape, const LstmFloatWeights& weights,
                                      const float* input, const float* initial_hidden,
                                      const float* initial_cell) {
+    collect(shape, weights, input, initial_hidden, initial_cell, nullptr, nullptr, nullptr);
+}
+
+void LstmCalibrationSession::collect(const LstmShape& shape, const LstmFloatWeights& weights,
+                                     const float* input, const float* initial_hidden,
+                                     const float* initial_cell, float* output,
+                                     float* final_hidden, float* final_cell) {
     if (state_ == CalibrationState::Locked) {
         throw std::logic_error("Locked 校准会话拒绝继续采集");
     }
-    collector_.collect(shape, weights, input, initial_hidden, initial_cell);
+    collector_.collect(shape, weights, input, initial_hidden, initial_cell, output,
+                       final_hidden, final_cell);
     state_ = CalibrationState::Dirty;
     has_finalized_ = false;
 }

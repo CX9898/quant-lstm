@@ -5,6 +5,12 @@
 
 ## [Unreleased]
 
+- Add an explicit CPU Python build for FP32 forward, MinMax/Percentile/SQNR
+  calibration and FP32 q-carrier PTQ, including the ONNX Runtime bridge.
+  CPU execution requires `eval()` with no gradients; training and QAT stay CUDA-only.
+- Align CPU per-batch histogram collection and merging with the CUDA collector;
+  calibration returns its existing forward outputs without a second forward.
+
 - Po2 conversion recomputes asymmetric zero points from calibrated ranges and
   preserves those ranges in memory when copying modules. Rebuild the native
   extension together with the Python modules when upgrading.
@@ -15,7 +21,8 @@
 
 - LSTM 的 AIMET/RX 部署编码对齐 QuantGRU：补充 schema_version 3 和 bitwidth，
   使用字符串 is_symmetric、I/O 端口字典、internal_ops.output 列表及扁平参数数组。
-  双向 h/c 网格以一维 per-channel 编码保留；原生参数与阶段回读格式保持兼容。
+  双向 h/c 网格在各方向 internal_ops 中保留标量 PER_TENSOR 编码；原生参数与
+  阶段回读格式保持兼容。
 
 - Public encoding records now include `n = round(-log2(scale))`; loaders validate
   provided exponents and accept legacy single-element I/O lists.
@@ -77,7 +84,8 @@
 
 ### Known limitations
 
-- Python runtime 只支持 CUDA FP32 tensor、单层 LSTM 和 `dropout=0`。
+- Python runtime 只支持 FP32 tensor、单层 LSTM 和 `dropout=0`；CPU 仅支持显式
+  CPU wheel 的 eval/no-grad 校准与 PTQ，浮点训练和 QAT 仍要求 CUDA。
 - Python package 尚未发布到 PyPI；wheel 需要在兼容的 Python、PyTorch 和 CUDA
   构建环境中生成。
 - CPU int32 reference 的 sigmoid/tanh 使用浮点函数；CUDA int32 backend 尚未实现。

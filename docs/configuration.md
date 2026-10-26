@@ -179,7 +179,7 @@ module.use_quantization = True
 output, (hidden, cell) = module(inference_input, inference_state)
 ```
 
-所有 module 参数、calibration batch 和状态必须是 CUDA FP32 tensor。一次 CUDA
+所有 module 参数、calibration batch 和状态必须是同设备 FP32 tensor。一次 CUDA
 浮点 forward 同时生成输出和完整 checkpoint；range、参数分组统计、直方图和三个
 cell contribution 诊断在设备端计算。只有每组 min/max 和可选 histogram bins 返回
 C++ finalization，原始 tensor 不复制到 CPU，也不会执行第二次 forward。
@@ -189,8 +189,9 @@ C++ finalization，原始 tensor 不复制到 CPU，也不会执行第二次 for
 新会话的入口。双向模块分别维护 forward/reverse 状态，且两个方向必须共享完整
 input 网格。
 
-CPU collector 是独立 C++ reference，仅用于 CUDA 校准一致性测试，不属于 Python
-校准路径或运行时 fallback。
+CPU wheel 复用 C++ 浮点 reference 的输出与 trace 进行校准，各量化点先在 batch 内
+收集完整直方图，再合并为会话统计。CPU 调用要求 `eval()` 与 no-grad；不会生成
+训练 checkpoint 或执行 QAT，也不会作为 CUDA wheel 的隐式 fallback。
 
 校准会话的 `locked` 状态与 `set_quant_params_locked(True)` 的参数锁分开管理。
 `calibration_context()` 默认开始一轮新校准，正常退出时完成 finalization，异常时恢复
@@ -203,6 +204,18 @@ CPU collector 是独立 C++ reference，仅用于 CUDA 校准一致性测试，�
 非对称 zero point 和由整数范围派生的 `real_min/real_max`；已校准的对称参数保持
 zero point 为零。校准范围的保留、文件重载后的处理和方法参数见
 [集成接口中的 Po2 转换](aimet_integration.md#已校准参数的-po2-转换)。
+
+### 4.4 Bias Training Headroom
+
+Newly calibrated `bias_ih` and `bias_hh` grids reserve training range per group:
+`scale = max(2 * max_abs_bias, 0.01) / qmax`. Po2 mode rounds this scale upward
+to a power of two. Bias uses its observed values for MinMax, Percentile and SQNR,
+without histogram clipping or constant-bin expansion. Zero bias can represent
+updates around `1e-4` at 8 bits. Larger range trades off bias resolution and does
+not guarantee that arbitrary training updates avoid saturation.
+
+Imported grids and fixed QAT encodings remain unchanged. Inspect bias saturation,
+gradients and task quality when selecting a calibration or training recipe.
 
 ## 5. 参数保存与加载
 
@@ -292,7 +305,7 @@ scale、zero point 和位宽，不按 epoch 重新校准。浮点主权重继续
 以下情况直接报错：
 
 - 量化 forward 前没有完成校准或加载参数；
-- CPU tensor、非 FP32 tensor、shape 或 bias 不匹配；
+- 非 FP32 tensor、设备、shape 或 bias 不匹配，或 CPU 调用仍启用训练/梯度；
 - 未知 operator/字段、非法位宽、非法固定值或 compact 参数向量；
 - 双向文档缺失 reverse 参数或两个方向的 input 网格不同；
 - scale 非有限、非正或不是 canonical FP32；

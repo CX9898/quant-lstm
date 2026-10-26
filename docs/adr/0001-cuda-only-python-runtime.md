@@ -1,6 +1,6 @@
 # ADR-0001：PyTorch runtime 使用 CUDA-only 执行边界
 
-状态：Accepted
+状态：Superseded for explicit CPU calibration/PTQ by [ADR-0002](0002-cpu-calibration-and-ptq.md)
 
 日期：2026-09-22
 

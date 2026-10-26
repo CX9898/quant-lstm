@@ -1,6 +1,6 @@
 # PyTorch 接口
 
-本目录提供 CUDA-only `QuantLSTM` Python API 和 `_quant_lstm` extension。
+本目录提供 `QuantLSTM` Python API 和独立构建的 CPU/CUDA `_quant_lstm` extension。
 
 | 文件 | 职责 |
 | --- | --- |
@@ -10,16 +10,18 @@
 | `lstm_onnx.py` | 标准 ONNX `LSTM` symbolic |
 | `quant_lstm_onnx.py` | ONNX 输入适配：权重与状态布局转换，复用 QuantLSTM 的校准、前向及编码接口 |
 | `lib/lstm_interface_binding.cc` | PyTorch 与 C++/CUDA 核心边界 |
+| `lib/lstm_interface_binding_cpu.cc` | CPU 浮点、校准和 PTQ 边界，不支持训练与 QAT |
 | `lib/lstm_onnx_runtime.cc` | ONNX Runtime 与原生 QuantLSTM 之间的传输桥接 |
 | `tests/` | Python 接口、backward、STE、双向和 ONNX 验证 |
 
-Python 层不实现生产 LSTM 公式，也不提供 CPU fallback。普通安装和 wheel 构建见
+Python 层不实现生产 LSTM 公式。CPU 构建仅接受 eval/no-grad 前向与校准；CUDA wheel
+不会自动切换到 CPU backend。普通安装和 wheel 构建见
 [安装指南](../docs/installation.md#2-安装-pytorch-cuda-模块)，用户配置与校准流程见
 [配置参考](../docs/configuration.md)。
 
 ONNX PTQ 支持 FP32 常量权重、单向/双向、layout 0/1、可选 bias 和初始 h/c。
 sequence_lens、peephole、反向单独运行、自定义激活、clip 和耦合 input_forget 会显式报错。
-部署仍导出标准 ONNX LSTM 与 encodings，运行桥接仅用于仿真；需要 CUDA。
+部署仍导出标准 ONNX LSTM 与 encodings，运行桥接仅用于仿真；使用所构建的 CPU 或 CUDA backend。
 构建时从 `third_party/onnxruntime/include` 读取 ORT 头文件，也可用
 `QUANT_LSTM_ONNXRUNTIME_INCLUDE` 指定头文件目录；更新后需重建 QuantLSTM wheel。
 

@@ -1,8 +1,9 @@
 # 通用循环算子集成接口
 
 QuantLSTM 的集成逻辑在本仓库维护，`pytorch/lstm_aimet.py` 通过 mixin 提供
-QuantGRU 同名的公共方法，不导入 `aimet_torch` 或 `aimet_common`。工具包只需注册
-类、ONNX 类型和导出 hook，遍历模块后调用公共方法，不解析 LSTM 内部量化点。
+QuantGRU 同名的公共方法。安装 AIMET 时可选用其运行日志；独立 wheel 无需 AIMET，
+缺少日志模块时使用本地回退。工具包只需注册类、ONNX 类型和导出 hook，遍历模块
+后调用公共方法，不解析 LSTM 内部量化点。
 
 | 接口 | 职责 |
 | --- | --- |

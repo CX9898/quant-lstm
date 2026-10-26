@@ -443,7 +443,7 @@ class BackwardTest(unittest.TestCase):
                         )
 
     @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
-    def test_qat_calibrated_parameter_endpoints_keep_ste_gradients(self):
+    def test_qat_explicit_parameter_endpoints_keep_ste_gradients(self):
         device = torch.device("cuda")
         input_value = deterministic_tensor(
             (4, 2, 3), -0.20, 0.25, device=device
@@ -464,6 +464,21 @@ class BackwardTest(unittest.TestCase):
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", RuntimeWarning)
                     calibrate(qat, input_value, (hidden, cell))
+                # Imported tight grids keep this an endpoint regression even
+                # when fresh bias calibration reserves extra training range.
+                document = qat.export_quant_params()
+                qmax = (1 << (bitwidth - 1)) - 1
+                for name in ("bias_ih", "bias_hh"):
+                    scales = (getattr(qat, f"{name}_l0").detach().abs() / qmax).tolist()
+                    self.assertTrue(all(scale > 0 for scale in scales))
+                    document["operators"][name].update(
+                        scale=scales,
+                        real_min=[-(qmax + 1) * scale for scale in scales],
+                        real_max=[qmax * scale for scale in scales],
+                    )
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)
+                    qat.load_quant_params(document)
                 qat.use_quantization = True
                 qat.train()
 
@@ -490,6 +505,8 @@ class BackwardTest(unittest.TestCase):
                 objective(reference_result).backward()
 
                 saved = qat.qat_saved_state()
+                for name in ("bias_ih", "bias_hh"):
+                    self.assertTrue((saved["quantized_master"][name].abs() == qmax).all())
                 for name in (
                     "weight_ih",
                     "weight_hh",
@@ -528,6 +545,15 @@ class BackwardTest(unittest.TestCase):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
             calibrate(module, calibration_input, calibration_state)
+        # Force a small cell-tanh grid so this fixture exercises its Clamp
+        # independently of the calibrated bias grid's training headroom.
+        document = module.export_quant_params()
+        point = document["operators"]["cell_tanh_output"]
+        scale = torch.tensor(point["scale"] / 8, dtype=torch.float32).item()
+        point.update(scale=scale, real_min=-128 * scale, real_max=127 * scale)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            module.load_quant_params(document)
         module.use_quantization = True
         module.train()
 
@@ -550,6 +576,7 @@ class BackwardTest(unittest.TestCase):
             module, grad_output, grad_hidden, grad_cell
         )
         masks = module.qat_saved_state()["checkpoint_clamp_masks"]
+        self.assertTrue(masks["cell_tanh_outputs"].any())
         self.assertGreaterEqual(
             sum(bool(mask.any()) for mask in masks.values()), 5
         )

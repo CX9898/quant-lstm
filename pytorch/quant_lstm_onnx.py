@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import importlib
+from contextlib import nullcontext
 import itertools
 from pathlib import Path
 import weakref
@@ -91,8 +92,11 @@ class OnnxLSTM:
         bias = read(inputs[3]) if inputs[3] else None
         if bias is not None and bias.shape != (directions, 8 * hidden):
             raise ValueError(prefix + "invalid B shape")
-        if not torch.cuda.is_available() or torch.device(device).type != "cuda":
-            raise RuntimeError(prefix + "native QuantLSTM calibration requires CUDA")
+        device = torch.device(device)
+        if device.type not in {"cpu", "cuda"}:
+            raise RuntimeError(prefix + "native QuantLSTM requires a CPU or CUDA device")
+        if device.type == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError(prefix + "CUDA is unavailable")
         self.module = QuantLSTM(w.shape[2], hidden, bias=bias is not None,
                                 batch_first=self.layout == 1, bidirectional=directions == 2,
                                 use_quantization=True, calibration_method=method, device=device).eval()
@@ -140,7 +144,8 @@ class OnnxLSTM:
                 tensor = torch.from_numpy(np.asarray(state).copy()).to(device)
                 states.append(tensor.transpose(0, 1).contiguous() if self.layout else tensor)
             states = tuple(states)
-        with torch.cuda.device(device), torch.no_grad():
+        device_context = torch.cuda.device(device) if device.type == "cuda" else nullcontext()
+        with device_context, torch.no_grad():
             output, (hidden, cell) = self.module(x, states)
             output = output.reshape(*output.shape[:2], self.module.num_directions, self.module.hidden_size)
             if self.layout:

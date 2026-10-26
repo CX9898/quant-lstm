@@ -34,5 +34,16 @@ tools/run_end_to_end_test.sh
 tools/run_end_to_end_test.sh --with-cuda-validation --device 0
 ```
 
+CPU Python 校准和 PTQ 另需安装 [CPU wheel](../docs/installation.md#22-cpu-python-模块)，
+并在 `pytorch/` 目录执行：
+
+```bash
+python -m unittest -v tests.test_cpu_ptq
+```
+
+该套件覆盖浮点与 PyTorch 对照、单次校准前向、MinMax/Percentile/SQNR、单双向、
+布局、可选状态、无 bias、参数回读和训练拒绝。ONNX Runtime 测试需要配套 bridge；
+设置 `QUANT_LSTM_ONNXRUNTIME_INCLUDE` 后重建 wheel。
+
 Speech Commands 测试使用外部数据集，不进入默认 CI。影响校准、QAT、位宽或模型级
 精度的改动应按[真实网络测试说明](real_network/README.md)运行相应 profile。
