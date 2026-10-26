@@ -75,11 +75,11 @@ Round/Clamp 或 STE。显式校准模式优先于量化开关，关闭量化的�
 5. `use_quantization=True` 后，CUDA q-carrier forward 在每个真实边界执行
    Round/Clamp，并使用真实 sigmoid/tanh。
 
+校准数据应来自训练分布的代表性样本。随机 tensor 只适用于接口冒烟测试。
+
 CPU collector 复用一次浮点 forward 的输出与 trace，在 batch 内收集各量化点的完整
 直方图后合并会话统计，与 CUDA 的统计合并边界一致。CPU q-carrier binding 显式
 转换实值 tensor 和量化整数网格，不保存训练 checkpoint。
-
-校准数据应来自训练分布的代表性样本。随机 tensor 只适用于接口冒烟测试。
 
 ### 4.3 QAT backward
 

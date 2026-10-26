@@ -35,7 +35,7 @@ class BuildPyWithResources(build_py):
 
 
 onnx_headers = Path(os.environ.get("QUANT_LSTM_ONNXRUNTIME_INCLUDE",
-    ROOT / "third_party/onnxruntime/include"))
+    HERE.parents[2] / "docker/environment/third_party/onnxruntime/include"))
 onnx_extensions = []
 if (onnx_headers / "onnxruntime_cxx_api.h").is_file():
     onnx_extensions.append(CppExtension(

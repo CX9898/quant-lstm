@@ -34,7 +34,7 @@ tools/run_end_to_end_test.sh
 tools/run_end_to_end_test.sh --with-cuda-validation --device 0
 ```
 
-CPU Python 校准和 PTQ 另需安装 [CPU wheel](../docs/installation.md#22-cpu-python-模块)，
+CPU Python 校准和 PTQ 另需安装 [CPU wheel](../docs/installation.md#cpu-python-模块)，
 并在 `pytorch/` 目录执行：
 
 ```bash

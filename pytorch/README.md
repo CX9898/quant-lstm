@@ -22,8 +22,8 @@ Python 层不实现生产 LSTM 公式。CPU 构建仅接受 eval/no-grad 前向�
 ONNX PTQ 支持 FP32 常量权重、单向/双向、layout 0/1、可选 bias 和初始 h/c。
 sequence_lens、peephole、反向单独运行、自定义激活、clip 和耦合 input_forget 会显式报错。
 部署仍导出标准 ONNX LSTM 与 encodings，运行桥接仅用于仿真；使用所构建的 CPU 或 CUDA backend。
-构建时从 `third_party/onnxruntime/include` 读取 ORT 头文件，也可用
-`QUANT_LSTM_ONNXRUNTIME_INCLUDE` 指定头文件目录；更新后需重建 QuantLSTM wheel。
+构建时从仓库公共环境目录读取 ORT 头文件，也可用 `QUANT_LSTM_ONNXRUNTIME_INCLUDE`
+指定头文件目录；更新后需重建 QuantLSTM wheel。
 
 正确性 E2E 包含 `tests.test_qat_independent`：从 master 参数和 standard scale/zp
 独立编码 rescale、计算完整前向轨迹与所有 Clamp mask，再通过 PyTorch autograd

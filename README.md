@@ -18,17 +18,17 @@ QuantLSTM 提供 PyTorch LSTM（长短期记忆网络）的量化实现，支持
 
 当前 CUDA 量化路径使用 FP32 承载量化后的整数网格值（q-carrier），线性运算由
 cuBLAS SGEMM 执行，sigmoid/tanh 使用浮点计算。CPU Python 接口复用浮点参考校准和
-FP32 q-carrier reference；C++ 仍提供 int32 reference。CPU 和 CUDA 使用各自构建的
-wheel，CUDA int32 后端尚未实现。
+FP32 q-carrier reference，并在实值 tensor 与整数网格之间转换；C++ 仍提供 int32
+reference，CUDA int32 后端尚未实现。CPU 与 CUDA 使用各自构建的 wheel。
 
 ## 环境与安装
 
 本仓库提供源码构建、Python wheel 和 CMake package，环境与 Docker 使用说明见
-[安装指南](docs/installation.md)。项目尚未发布到 PyPI。
+[安装指南](docs/installation.md)。
 
 源码构建需要 C++17 编译器、CMake 3.24 及以上版本、`nlohmann_json` 3.11.2 及以上
-版本及目标设备对应的 PyTorch；CUDA 构建另需 CUDA Toolkit。Python 需要开发头文件、`pip`、`setuptools`
-和 `wheel`，编译工具链与 PyTorch CUDA 版本保持兼容。
+版本及目标设备对应的 PyTorch。CUDA 构建另需 CUDA Toolkit。Python 需要开发头文件、
+`pip`、`setuptools` 和 `wheel`，编译工具链与 PyTorch 保持兼容。
 
 默认构建 Release CUDA 库，测试和示例默认关闭。以下命令从本仓库根目录执行：
 
@@ -43,7 +43,7 @@ CMake 生成 `build/libquant_lstm.a`，pip 构建 `_quant_lstm` 扩展并安装 
 `RX_MET_QUANT_LSTM_BUILD_DIR` 指定目录；安装完成后运行不依赖
 源码目录。CPU-only C++ 安装不需要 CUDA 或 PyTorch，步骤见[安装指南](docs/installation.md)。
 
-CPU Python 模块先安装 CPU PyTorch，再从仓库根目录执行：
+CPU Python 模块先安装 CPU PyTorch，再从算子根目录执行：
 
 ```bash
 cmake -S . -B build_cpu -DQUANT_LSTM_ENABLE_CUDA=OFF
@@ -95,9 +95,9 @@ lstm.use_quantization = True
 默认配置使用 `scale_mode="affine"`，`scale_mode="pot2"` 将 scale 限制为 2 的整数
 次幂。构造函数的 `quant_config` 接受配置字典、JSON 文本或文件路径；逐量化点
 调整使用 `adjust_quant_config()`。配置字段、默认值与失效规则见
-[配置说明](docs/configuration.md)。已完成 affine 校准时，可在参数锁定前调用
-`lstm.enable_pot2()`，同时重算非对称 zero point 和实数范围，见
-[Po2 转换约定](docs/aimet_integration.md#已校准参数的-po2-转换)。
+[配置说明](docs/configuration.md)。已完成 affine 校准时，可在 QAT 和参数锁定前
+调用 `lstm.enable_pot2()` 转换已有网格；转换会同时重算非对称 zero point 和实数范围，
+见[Po2 转换约定](docs/aimet_integration.md#已校准参数的-po2-转换)。
 
 QAT 在 PTQ 评估后使用 `lstm.train()` 和常规 PyTorch 训练循环。
 **scale、zero point 和位宽沿用首次 PTQ 校准结果，不按 epoch 重新校准**；浮点主权重
@@ -107,7 +107,8 @@ QAT 在 PTQ 评估后使用 `lstm.train()` 和常规 PyTorch 训练循环。
 
 ## 保存与重载
 
-模型权重与量化参数共同确定推理结果。以下代码接续已校准的 `lstm`：
+模型权重与量化参数共同确定推理结果。以下代码保存算子自身的原生检查点，接续
+已校准的 `lstm`：
 
 ```python
 torch.save(lstm.state_dict(), "lstm_weights.pth")
@@ -122,7 +123,9 @@ restored.use_quantization = True
 ```
 
 重建实例沿用原模型的形状、方向和 bias 配置，并用相同输入比较保存前后的输出。
-模型权重与量化文件按同次导出结果配套使用。
+模型权重与量化文件按同次导出结果配套使用。这里的原生 JSON 保留模型与执行信息；
+rx-met 提供给编译器的文件由 `export_onnx_json()` 生成，使用与 QuantGRU 一致的
+公共 encoding 结构，格式区别见[集成接口](docs/aimet_integration.md#编码与-onnx)。
 
 ## ONNX 导出
 
@@ -160,12 +163,12 @@ finally:
 | `forward(input, hx=None)` | 按量化开关执行浮点或量化计算，`hx` 为 `(h_0, c_0)` |
 | `set_all_bitwidth()` | 将所有量化点设为 8-bit 或 16-bit |
 | `get_quant_config()`、`adjust_quant_config()` | 查询或调整量化点的配置 |
-| `calibration_context()` | 管理校准会话，成功退出时完成参数计算 |
-| `finalize_calibration()`、`reset_calibration()` | 完成校准会话，或清除校准状态及参数锁 |
-| `enable_pot2()` | 转换 scale、非对称 zero point 和实数范围 |
+| `calibration_context()` | 管理一轮校准，成功退出时完成参数计算，异常时恢复模式 |
+| `finalize_calibration()`、`reset_calibration()` | 完成当前校准会话，或清除校准状态及参数锁 |
+| `enable_pot2()` | 转换已有网格的 scale、非对称 zero point 和实数范围 |
 | `set_quant_params_locked()` | 控制共享校准是否允许覆盖已有参数 |
 | `is_calibrated()`、`calibration_state()` | 查询校准是否完成及会话状态 |
-| `export_quant_params()`、`load_quant_params()` | 导出或加载量化参数 JSON |
+| `export_quant_params()`、`load_quant_params()` | 导出或加载算子独立的原生参数 JSON |
 
 [端到端测试](tools/run_end_to_end_test.sh) 覆盖 CUDA、PyTorch、QAT 和 ONNX；
 [CPU package 测试](tools/run_cpu_only_package_check.sh) 检查 reference、配置、安装和
@@ -177,30 +180,41 @@ tools/run_cpu_only_package_check.sh
 tools/run_end_to_end_test.sh
 ```
 
-当前 [GitHub Actions CI](.github/workflows/ci.yml) 运行 CPU-only 验证。CUDA 测试
-需要可用 GPU，真实网络测试还需要 Speech Commands v0.02 数据集。测试依赖、
-数据规模与通过阈值见[测试说明](tests/README.md)及相应测试脚本。
+CUDA 测试需要可用 GPU，真实网络测试还需要 Speech Commands v0.02 数据集。测试依赖、 数据规模与通过阈值见[测试说明](tests/README.md)及相应测试脚本。
 
 ## 文档与源码
 
-| 路径 | 职责 |
-| --- | --- |
-| [config/defaults/](config/defaults/) | 用户可调整的默认配置，`comment` 解释各量化点 |
-| [schemas/](schemas/) | 配置和参数文件的格式规范，日常使用无需修改 |
-| [docs/configuration.md](docs/configuration.md) | 配置字段、校准流程、参数交换与失效规则 |
-| [docs/lstm-quantization-formula-derivation.md](docs/lstm-quantization-formula-derivation.md) | 逐算子公式、舍入、重缩放与 STE |
-| [docs/quantized-execution-spec.md](docs/quantized-execution-spec.md) | 量化执行语义和约束 |
-| [tests/real_network/](tests/real_network/README.md) | 浮点预训练、PTQ 与固定参数 QAT 质量门禁 |
-| [example/](example/README.md) | C++ 浮点与 int32 reference 示例 |
-| `include/`、`src/` | C++/CUDA 计算、校准和量化实现 |
-| `pytorch/` | Python 模块、autograd 和扩展 binding |
-| [CHANGELOG.md](CHANGELOG.md) | 功能变化与迁移记录 |
 
-完整入口见[文档导航](docs/README.md)。提交问题时请附最小复现和运行环境；
-代码贡献遵循[开发约定](docs/README.md#开发约定)，并运行与改动范围对应的测试。
+| 路径                                                                                           | 职责                             |
+| -------------------------------------------------------------------------------------------- | ------------------------------ |
+| [config/defaults/](config/defaults/)                                                         | 用户可调整的默认配置，`comment` 解释各量化点    |
+| [schemas/](schemas/)                                                                         | 配置和参数文件的格式规范，日常使用无需修改          |
+| [docs/configuration.md](docs/configuration.md)                                               | 配置字段、校准流程、参数交换与失效规则            |
+| [docs/lstm-quantization-formula-derivation.md](docs/lstm-quantization-formula-derivation.md) | 逐算子公式、舍入、重缩放与 STE              |
+| [docs/quantized-execution-spec.md](docs/quantized-execution-spec.md)                         | 量化执行语义和约束                      |
+| [tests/real_network/](tests/real_network/README.md)                                          | 浮点预训练、PTQ 与固定参数 QAT 质量门禁       |
+| [example/](example/README.md)                                                                | C++ 浮点与 int32 reference 示例     |
+| `include/`、`src/`                                                                            | C++/CUDA 计算、校准和量化实现            |
+| `pytorch/`                                                                                   | Python 模块、autograd 和扩展 binding |
+| [CHANGELOG.md](CHANGELOG.md)                                                                 | 功能变化与迁移记录                      |
 
-## 许可证
 
-QuantLSTM 仓库目前尚未提供 `LICENSE` 文件，尚未声明开源许可证。
+完整入口见[文档导航](docs/README.md)。
 
-AIMET/rx-met 接入与通用接口见 [循环算子集成接口](docs/aimet_integration.md)。
+rx-met 的 QuantSim、配置、校准和整模型导出流程见 rx-met 仓库中的
+`docs/QuantLSTM_integration.md`。
+
+算子自身提供的通用接口见 [循环算子集成接口](docs/aimet_integration.md)。
+
+### 固定 bias 网格的训练余量
+
+新校准的输入/循环 bias 在各自粒度下，由观测到的最大绝对值建立 scale
+`max(2 * max_abs_bias, 0.01) / qmax`；Po2 模式再严格向上取整为 2 的幂。
+此策略将观测范围至少扩大一倍，并为零 bias 提供至少 ±0.01 的可训练区间。
+8 位下最小 affine 步长约 7.87e-5、Po2 步长约 1.22e-4，可表示 1e-4 量级的更新。
+位宽、对称零点和部署算术保持原有约定。MinMax、Percentile、SQNR 均对 bias 使用此规则；bias 不使用直方图裁剪或常数 bin 扩展范围。
+
+已加载的编码与 QAT 期间的固定编码不会被扩张。
+
+余量以较粗的 bias 分辨率为代价，不能保证任意学习率/训练时长都不饱和；应同时检查
+偏置饱和、梯度与任务指标。可加载经过独立验证的显式编码以采用其他范围策略。

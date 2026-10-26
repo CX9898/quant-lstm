@@ -205,18 +205,6 @@ CPU wheel 复用 C++ 浮点 reference 的输出与 trace 进行校准，各量�
 zero point 为零。校准范围的保留、文件重载后的处理和方法参数见
 [集成接口中的 Po2 转换](aimet_integration.md#已校准参数的-po2-转换)。
 
-### 4.4 Bias Training Headroom
-
-Newly calibrated `bias_ih` and `bias_hh` grids reserve training range per group:
-`scale = max(2 * max_abs_bias, 0.01) / qmax`. Po2 mode rounds this scale upward
-to a power of two. Bias uses its observed values for MinMax, Percentile and SQNR,
-without histogram clipping or constant-bin expansion. Zero bias can represent
-updates around `1e-4` at 8 bits. Larger range trades off bias resolution and does
-not guarantee that arbitrary training updates avoid saturation.
-
-Imported grids and fixed QAT encodings remain unchanged. Inspect bias saturation,
-gradients and task quality when selecting a calibration or training recipe.
-
 ## 5. 参数保存与加载
 
 校准完成后可以保存算子独立的原生参数文档：

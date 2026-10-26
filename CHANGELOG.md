@@ -5,31 +5,15 @@
 
 ## [Unreleased]
 
-- Add an explicit CPU Python build for FP32 forward, MinMax/Percentile/SQNR
-  calibration and FP32 q-carrier PTQ, including the ONNX Runtime bridge.
-  CPU execution requires `eval()` with no gradients; training and QAT stay CUDA-only.
-- Align CPU per-batch histogram collection and merging with the CUDA collector;
-  calibration returns its existing forward outputs without a second forward.
-
-- Po2 conversion recomputes asymmetric zero points from calibrated ranges and
-  preserves those ranges in memory when copying modules. Rebuild the native
-  extension together with the Python modules when upgrading.
-- Newly calibrated bias grids reserve training headroom from observed values:
-  `max(2 * max_abs_bias, 0.01) / qmax`, rounded up to a power of two in Po2 mode.
-  Imported and locked grids retain their original values.
-- ONNX exports omit the optional bias input for models constructed without bias.
-
 - LSTM 的 AIMET/RX 部署编码对齐 QuantGRU：补充 schema_version 3 和 bitwidth，
   使用字符串 is_symmetric、I/O 端口字典、internal_ops.output 列表及扁平参数数组。
-  双向 h/c 网格在各方向 internal_ops 中保留标量 PER_TENSOR 编码；原生参数与
-  阶段回读格式保持兼容。
-
-- Public encoding records now include `n = round(-log2(scale))`; loaders validate
-  provided exponents and accept legacy single-element I/O lists.
-- Add the standard ONNX LSTM PTQ adapter and optional ONNX Runtime bridge.
-  Set `QUANT_LSTM_ONNXRUNTIME_INCLUDE` when building with external ORT headers.
-- Bundle the default config as a Python package resource so wheels remain
-  relocatable. Optional AIMET logging retains a standalone fallback.
+  双向 h/c 网格以各方向的 PER_TENSOR 标量编码保留，分别使用 output / cell_state
+  量化点；权重和 bias 的部署编码展开为一维 per-channel 数组。公共编码可直接回读，
+  原生参数检查点保留独立格式。
+- 公共编码增加与 scale 同形的 `n = round(-log2(scale))`；加载时校验已提供的 n，
+  并兼容旧版单元素 I/O 编码列表。
+- 显式 CPU Python 构建支持 eval/no-grad FP32 前向、MinMax/Percentile/SQNR 校准和
+  FP32 q-carrier PTQ；训练和 QAT 仍要求 CUDA，CUDA wheel 不提供隐式 CPU fallback。
 
 - 增加与 QuantGRU 对齐的循环算子集成接口，配置、校准生命周期、Po2 和 AIMET/ONNX
   编码处理均由本库负责，无 AIMET 依赖。
@@ -69,6 +53,15 @@
 - POT2 CoverRange 对退化校准范围复用统一 minimum-scale fallback。
 
 ### Fixed
+
+- 校准后执行 `enable_pot2()` 时，按新 scale 重新计算非对称 zero point 和实数范围；
+  内存中保留校准下界以避免额外舍入偏差，深拷贝保留这些信息。文件重载后以现有
+  网格下界转换，导出格式不增加诊断字段。更新需配套重建 `_quant_lstm` extension。
+- rx-met 集成保存与导出时遵守 GRU/LSTM 的量化开关：关闭的层保留浮点 ONNX 节点，
+  不写入量化 encoding。相同配置的阶段恢复保持浮点状态，严格加载仍检查启用层。
+  此开关策略位于 rx-met 公共流程，算子的显式编码导入导出接口保持原有行为。
+- 有符号量化与 QAT 使用完整 INT8/INT16 整数范围；对称校准仍使用 `max_abs/qmax`。
+  `real_min/real_max` 由最终 scale、zero point 和整数上下界计算，保留最小负值。
 
 - CUDA 浮点测试比较器拒绝 NaN、Infinity 和长度不匹配；真实网络 runner 在无
   可用 CUDA GPU 时失败退出，避免将跳过训练误报为验收成功。

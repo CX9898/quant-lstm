@@ -13,11 +13,11 @@ quant-lstm 提供 PyTorch CPU/CUDA 模块和 CMake C++ package。CPU Python 模�
 | `nlohmann_json` | 3.11.2 或更高版本 | 配置与参数 JSON |
 | CUDA Toolkit | 提供 `nvcc`、cuBLAS 和 CUDA Runtime | CUDA C++ 与 Python 模块 |
 | Python | 具有开发头文件 | 构建 PyTorch extension |
-| PyTorch | CPU 或 CUDA 版，且 ABI 与构建环境兼容 | Python 接口 |
+| PyTorch | CPU 或 CUDA 版，与 extension 构建环境 ABI 兼容 | Python 接口 |
 
 CPU-only C++ package 不要求 CUDA Toolkit 或 PyTorch。CPU Python 模块需要 CPU
-PyTorch，通过 `RX_MET_ENABLE_CUDA=0` 选择 CPU extension。CUDA wheel 不会自动
-转换为 CPU wheel。
+PyTorch，不要求 CUDA Toolkit；通过 `RX_MET_ENABLE_CUDA=0` 选择 CPU extension。
+CUDA wheel 不会自动转换为 CPU wheel。
 
 Ubuntu 可以使用系统包提供 CMake、编译器和 `nlohmann_json`：
 
@@ -87,6 +87,22 @@ wheel 绑定构建时的 Python ABI、平台、PyTorch C++ ABI 和 CUDA 依赖�
 环境复用。项目没有让 pip 自动选择 PyTorch CUDA variant，因此 PyTorch 必须由用户
 根据目标环境先行安装。
 
+### CPU Python 模块
+
+先安装 CPU PyTorch，从算子仓库根目录执行：
+
+```bash
+cmake -S . -B build_cpu -DQUANT_LSTM_ENABLE_CUDA=OFF
+cmake --build build_cpu --parallel 2
+RX_MET_ENABLE_CUDA=0 RX_MET_QUANT_LSTM_BUILD_DIR="$PWD/build_cpu" \
+  python -m pip wheel ./pytorch --no-build-isolation --no-deps --wheel-dir dist
+```
+
+安装生成的 CPU wheel 后，模块、输入和状态保持在 CPU，调用 `eval()` 并在
+`torch.no_grad()` 或 `torch.inference_mode()` 内执行校准和 PTQ。CPU 不提供
+训练 checkpoint、反向传播或 QAT。构建 rx-met 发布包时使用 `cpu` 变体，三个
+wheel 的版本与 CPU PyTorch / ONNX Runtime 锁文件配套。
+
 在可访问 CUDA GPU 的环境执行验证：
 
 ```bash
@@ -136,28 +152,12 @@ rx-met 中的副本由工具包发布流程构建；同步源码后也应更新�
 (cd pytorch && python -m unittest -v tests.test_aimet_interface)
 ```
 
-### 2.2 CPU Python 模块
+### 2.2 ONNX Runtime PTQ Bridge
 
-先安装 CPU PyTorch，从仓库根目录构建：
-
-```bash
-cmake -S . -B build_cpu -DQUANT_LSTM_ENABLE_CUDA=OFF
-cmake --build build_cpu --parallel 2
-RX_MET_ENABLE_CUDA=0 RX_MET_QUANT_LSTM_BUILD_DIR="$PWD/build_cpu" \
-  python -m pip wheel ./pytorch --no-build-isolation --no-deps --wheel-dir dist
-```
-
-安装 CPU wheel 后，将模型、输入和状态放在 CPU，调用 `eval()` 并在
-`torch.no_grad()` 或 `torch.inference_mode()` 内执行校准和 PTQ。
-CPU 不支持训练、反向传播或 QAT；CPU 和 CUDA wheel 须在各自兼容环境中构建。
-
-### 2.3 ONNX Runtime PTQ Bridge
-
-The optional `quant_lstm_onnx_runtime` extension is built when ONNX Runtime C/C++
-headers are available in `third_party/onnxruntime/include`. Set
-`QUANT_LSTM_ONNXRUNTIME_INCLUDE` to use another directory containing
-`onnxruntime_cxx_api.h`, then rebuild the wheel. Ordinary PyTorch LSTM execution
-and standard ONNX export do not require this extension.
+可选的 `quant_lstm_onnx_runtime` bridge 在构建时读取 rx-met 公共目录
+`docker/environment/third_party/onnxruntime/include`。独立仓库构建时，通过
+`QUANT_LSTM_ONNXRUNTIME_INCLUDE` 指向包含 `onnxruntime_cxx_api.h` 的目录后重建
+wheel。未提供头文件时不构建 bridge；普通 PyTorch 执行和标准 ONNX 导出不依赖它。
 
 ## 3. 安装 CUDA C++ package
 
@@ -258,8 +258,8 @@ docker run --rm -it --gpus all \
 | 错误 | 原因与处理 |
 | --- | --- |
 | `未找到 CUDA 编译器` | `QUANT_LSTM_ENABLE_CUDA=ON`，但 `nvcc` 不在 `PATH` 或 CUDA Toolkit 未安装 |
-| `未找到 build/libquant_lstm.a` | Python extension 构建前未在固定 `build/` 目录完成 CMake 构建 |
+| `未找到 build/libquant_lstm.a` | Python extension 构建前未在默认 `build/` 或 `RX_MET_QUANT_LSTM_BUILD_DIR` 指定目录完成 CMake 构建 |
 | `_quant_lstm 扩展未找到` | wheel 安装尚未完成、当前 Python 环境错误，或 extension 与 Python ABI 不匹配 |
-| `PyTorch ... 只支持 CUDA input` | 输入或状态位于 CPU；将模块、输入和状态移动到 CUDA |
+| `PyTorch ... 只支持 CUDA input` | CUDA wheel 收到 CPU 输入或状态；将模块、输入和状态移动到 CUDA，或显式构建 CPU wheel 后以 eval/no-grad 执行 |
 | `Could not find quant-lstm` | 下游没有设置安装 prefix 的 `CMAKE_PREFIX_PATH` |
 | `Could not find CUDAToolkit` | 下游正在消费 CUDA package，但 CMake 无法定位 CUDA Toolkit |
