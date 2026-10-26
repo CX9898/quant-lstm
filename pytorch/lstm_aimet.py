@@ -185,7 +185,7 @@ class LSTMAimetIntegration:
             return
         document = self.export_quant_params()
         for field in ("operators", "operators_reverse"):
-            for encoding in document.get(field, {}).values():
+            for name, encoding in document.get(field, {}).items():
                 bitwidth = int(encoding["dtype"].lstrip("UINT"))
                 unsigned = encoding["dtype"].startswith("UINT")
                 qmax = (1 << (bitwidth if unsigned else bitwidth - 1)) - 1
@@ -200,10 +200,20 @@ class LSTMAimetIntegration:
                                       -qmax * scale if symmetric_signed else lo,
                                       qmax * scale if symmetric_signed else hi, tolerance)
                     for scale, lo, hi in zip(values["scale"], values["real_min"], values["real_max"])]
+                # Prefer the calibrated lower bound over the rounded affine
+                # endpoint. Imported encodings have only a grid, so preserve its
+                # lower bound when constructing the new grid. No diagnostics are
+                # added to the public or standalone encoding files.
+                bounds = getattr(self, "_calibration_ranges", {}).get(field, {}).get(name)
+                lower = [bounds[0]] if bounds is not None else values["real_min"]
+                zero_points = ([0] * len(scales) if encoding["symmetric"] else
+                               [max(qmin, min(qmax, round(qmin - lo / scale)))
+                                for lo, scale in zip(lower, scales)])
                 for key, values_out in {
                     "scale": scales,
-                    "real_min": [s * (qmin - z) for s, z in zip(scales, values["zero_point"])],
-                    "real_max": [s * (qmax - z) for s, z in zip(scales, values["zero_point"])],
+                    "zero_point": zero_points,
+                    "real_min": [s * (qmin - z) for s, z in zip(scales, zero_points)],
+                    "real_max": [s * (qmax - z) for s, z in zip(scales, zero_points)],
                 }.items():
                     encoding[key] = values_out if vector else values_out[0]
         document["model_info"]["use_pot2_scale"] = True

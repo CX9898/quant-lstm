@@ -873,6 +873,17 @@ class CalibrationSessionBinding {
         result["safety"] = safetySummary(finalized->execution_params.diagnostics);
         result["batch_count"] = finalized->report.batch_count;
         result["method"] = quant_lstm::calibrationMethodName(finalized->report.method);
+        // Keep adjusted activation ranges in memory for later scale conversion.
+        // These diagnostics are not part of either exported encoding format.
+        py::dict activation_ranges;
+        for (const auto& op : finalized->report.operators) {
+            if (!quant_lstm::isParameterOperator(op.id) && !op.groups.empty()) {
+                const auto& diagnostics = op.groups.front().diagnostics;
+                activation_ranges[py::str(quant_lstm::quantOperatorName(op.id))] =
+                    py::make_tuple(diagnostics.adjusted_min, diagnostics.adjusted_max);
+            }
+        }
+        result["activation_ranges"] = activation_ranges;
         return result;
     }
 

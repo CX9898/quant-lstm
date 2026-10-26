@@ -5,6 +5,14 @@
 
 ## [Unreleased]
 
+- Po2 conversion recomputes asymmetric zero points from calibrated ranges and
+  preserves those ranges in memory when copying modules. Rebuild the native
+  extension together with the Python modules when upgrading.
+- Newly calibrated bias grids reserve training headroom from observed values:
+  `max(2 * max_abs_bias, 0.01) / qmax`, rounded up to a power of two in Po2 mode.
+  Imported and locked grids retain their original values.
+- ONNX exports omit the optional bias input for models constructed without bias.
+
 - LSTM 的 AIMET/RX 部署编码对齐 QuantGRU：补充 schema_version 3 和 bitwidth，
   使用字符串 is_symmetric、I/O 列表、internal_ops.output 列表及扁平参数数组。
   双向 h/c 网格以一维 per-channel 编码保留；原生参数与阶段回读格式保持兼容。

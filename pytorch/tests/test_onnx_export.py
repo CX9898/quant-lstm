@@ -198,7 +198,10 @@ class OnnxExportTest(unittest.TestCase):
         node = lstm_nodes[0]
         actual_weight_ih = tensor_value(model, node.input[1])
         actual_weight_hh = tensor_value(model, node.input[2])
-        actual_bias = tensor_value(model, node.input[3])
+        if bias:
+            actual_bias = tensor_value(model, node.input[3])
+        else:
+            self.assertEqual(node.input[3], "")
         suffixes = ("", "_reverse") if bidirectional else ("",)
         expected_weight_ih = []
         expected_weight_hh = []
@@ -229,17 +232,15 @@ class OnnxExportTest(unittest.TestCase):
                     .detach()
                     .numpy()
                 )
-            else:
-                bias_ih = np.zeros(16, dtype=np.float32)
-                bias_hh = np.zeros(16, dtype=np.float32)
-            expected_bias.append(np.concatenate((bias_ih, bias_hh)))
+                expected_bias.append(np.concatenate((bias_ih, bias_hh)))
         np.testing.assert_array_equal(
             actual_weight_ih, np.stack(expected_weight_ih)
         )
         np.testing.assert_array_equal(
             actual_weight_hh, np.stack(expected_weight_hh)
         )
-        np.testing.assert_array_equal(actual_bias, np.stack(expected_bias))
+        if bias:
+            np.testing.assert_array_equal(actual_bias, np.stack(expected_bias))
 
         session = ort.InferenceSession(
             str(path), providers=["CPUExecutionProvider"]

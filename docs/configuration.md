@@ -87,7 +87,7 @@ INT16 `[-32768,32767]`。`is_symmetric=true` 时校准仍使用
 18 个真实量化点的完整列表见
 [量化执行规格的真实量化点](quantized-execution-spec.md#3-真实量化点)。
 
-将全部量化点设为 INT16：
+将全部量化点设为 16 位，保留各自的 signed/unsigned 设置：
 
 ```python
 from quant_lstm import QuantLSTM
@@ -116,11 +116,13 @@ module.adjust_quant_config(
 默认 JSON 为每个量化点提供一条可选的字符串 `comment`，解释其对应张量，例如：
 
 ```json
-"forget_gate_input": {
-  "bitwidth": 8,
-  "is_unsigned": false,
-  "is_symmetric": true,
-  "comment": "遗忘门 f 经过 sigmoid 之前的输入，两条线性分支对应切片之和。"
+{
+  "forget_gate_input": {
+    "bitwidth": 8,
+    "is_unsigned": false,
+    "is_symmetric": true,
+    "comment": "遗忘门 f 经过 sigmoid 之前的输入，两条线性分支对应切片之和。"
+  }
 }
 ```
 
@@ -190,9 +192,21 @@ input 网格。
 CPU collector 是独立 C++ reference，仅用于 CUDA 校准一致性测试，不属于 Python
 校准路径或运行时 fallback。
 
+校准会话的 `locked` 状态与 `set_quant_params_locked(True)` 的参数锁分开管理。
+`calibration_context()` 默认开始一轮新校准，正常退出时完成 finalization，异常时恢复
+`calibrating` 标志；只有显式参数锁才使该上下文跳过已有网格。`reset_calibration()`
+会同时清除参数、校准范围缓存和参数锁。
+
+### 4.3 校准后转换为 Po2
+
+已校准模块可以在锁定参数前调用 `module.enable_pot2()`。转换同时更新 scale、
+非对称 zero point 和由整数范围派生的 `real_min/real_max`；已校准的对称参数保持
+zero point 为零。校准范围的保留、文件重载后的处理和方法参数见
+[集成接口中的 Po2 转换](aimet_integration.md#已校准参数的-po2-转换)。
+
 ## 5. 参数保存与加载
 
-校准完成后可以保存公共参数文档：
+校准完成后可以保存算子独立的原生参数文档：
 
 ```python
 module.export_quant_params("/path/to/quant_params.json")
@@ -241,7 +255,7 @@ encodings；rx-met 的导出和回读格式见 [通用循环算子集成接口](
   "scale": 0.01,
   "zero_point": 0,
   "enc_type": "PER_TENSOR",
-  "real_min": -1.27,
+  "real_min": -1.28,
   "real_max": 1.27
 }
 ```
@@ -251,8 +265,8 @@ encodings；rx-met 的导出和回读格式见 [通用循环算子集成接口](
 `PER_TENSOR`、`PER_GATE` 或 `PER_CHANNEL` 来源。`bias=False` 时 bias operator
 必须缺失。
 
-公共文档只保存 standard scale/zp，不保存 raw ratio、M+shift、POT2 shift 或 Q31
-编码。加载时 Python adapter 转换为内部 canonical bundle，C++ 随后审计 shape、
+参数文档以 standard scale/zp 定义量化网格，不保存原始校准统计、raw ratio、
+M+shift、POT2 shift 或 Q31 编码。加载时 Python adapter 转换为内部 canonical bundle，C++ 随后审计 shape、
 数值范围、scale、zero point 和执行安全性，并重新派生执行编码。
 
 ## 6. 加载时机与失效规则
@@ -263,9 +277,11 @@ encodings；rx-met 的导出和回读格式见 [通用循环算子集成接口](
 | `adjust_quant_config()` | 调用期间重新运行 resolver | 失效 |
 | `set_all_bitwidth()` | 调用期间重新运行 resolver | 失效 |
 | 修改 `calibration_method` | property 赋值期间验证 | 失效 |
-| `reset_calibration()` | 立即执行 | 清除参数和 safety report |
-| `finalize_calibration()` | finalization 期间派生并审计 | 生成并锁定参数 |
-| `load_quant_params()` | 加载期间完整审计 | 用导入参数替换会话 |
+| `reset_calibration()` | 立即执行 | 清除参数、参数锁、校准范围缓存和 safety report |
+| `finalize_calibration()` | finalization 期间派生并审计 | 生成参数及校准范围缓存，锁定当前收集会话 |
+| `enable_pot2()` | 转换后经原生加载器审计 | 更新已有 scale/zp 和实数范围；受参数锁保护 |
+| `set_quant_params_locked(True)` | 检查已有参数 | 阻止共享校准覆盖及 affine→Po2 转换 |
+| `load_quant_params()` | 加载期间完整审计 | 用导入参数替换会话并清除旧校准范围缓存 |
 
 修改模型 weight 不会自动刷新量化参数。本项目的 QAT 流程沿用首次 PTQ 校准所得的
 scale、zero point 和位宽，不按 epoch 重新校准。浮点主权重继续更新，每次前向按

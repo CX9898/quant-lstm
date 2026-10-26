@@ -42,6 +42,7 @@ int main() {
                 "sigmoid gate output default unsigned");
         for (const auto& value : defaults.operators) {
             require(value.type.bitwidth == 8, "pure INT8 default");
+            require(value.type.is_symmetric, "all operators default to symmetric quantization");
         }
         const auto empty_override = quant_lstm::resolveQuantConfig(
             quant_lstm::toCanonicalJson(defaults), R"({"schema_version":1})");

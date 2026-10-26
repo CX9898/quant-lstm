@@ -470,6 +470,7 @@ class _UnidirectionalQuantLSTM(LSTMAimetIntegration, nn.Module):
         )
         self._calibration_session = None
         self._quant_params_bundle_json: Optional[str] = None
+        self._calibration_ranges: dict[str, dict[str, tuple[float, float]]] = {}
         self._last_safety_report: Optional[dict[str, Any]] = None
         self._qat_saved_state: Optional[dict[str, Any]] = None
 
@@ -507,6 +508,7 @@ class _UnidirectionalQuantLSTM(LSTMAimetIntegration, nn.Module):
         self._quant_params_locked = False
         self._calibration_session = None
         self._quant_params_bundle_json = None
+        self._calibration_ranges = {}
         self._last_safety_report = None
         self._qat_saved_state = None
 
@@ -645,6 +647,7 @@ class _UnidirectionalQuantLSTM(LSTMAimetIntegration, nn.Module):
             self.require_exact_accumulation
         )
         self._quant_params_bundle_json = result["bundle_json"]
+        self._calibration_ranges = {"operators": result["activation_ranges"]}
         self._resolved_config_json = result["resolved_config_json"]
         self._last_safety_report = result["safety"]
         if self._last_safety_report["has_precision_risk"]:
@@ -804,6 +807,7 @@ class _UnidirectionalQuantLSTM(LSTMAimetIntegration, nn.Module):
         self._quant_params_bundle_json = audited["bundle_json"]
         self._resolved_config_json = audited["resolved_config_json"]
         self._override_config = _resolved_override(resolved)
+        self._calibration_ranges = {}
         self._last_safety_report = audited["safety"]
         self._calibration_session = None
         self._qat_saved_state = None
@@ -1021,6 +1025,7 @@ class QuantLSTM(_UnidirectionalQuantLSTM):
         if reverse_result["batch_count"] != forward_report["batch_count"]:
             raise RuntimeError("双向校准 batch 数不一致")
         self._reverse_quant_params_bundle_json = reverse_result["bundle_json"]
+        self._calibration_ranges["operators_reverse"] = reverse_result["activation_ranges"]
         self._reverse_safety_report = reverse_result["safety"]
         forward_safety = self._last_safety_report
         self._last_safety_report = {
@@ -1253,6 +1258,7 @@ class QuantLSTM(_UnidirectionalQuantLSTM):
         self._reverse_quant_params_bundle_json = audited[1]["bundle_json"]
         self._resolved_config_json = audited[0]["resolved_config_json"]
         self._override_config = _resolved_override(resolved)
+        self._calibration_ranges = {}
         self._calibration_session = None
         self._reverse_calibration_session = None
         self._reverse_safety_report = audited[1]["safety"]
@@ -1281,7 +1287,7 @@ class QuantLSTM(_UnidirectionalQuantLSTM):
 
     def _pack_onnx_direction(
         self, input: Tensor, reverse: bool
-    ) -> tuple[Tensor, Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor, Optional[Tensor]]:
         suffix = "_reverse" if reverse else ""
         weight_ih = getattr(self, f"weight_ih_l0{suffix}").detach().to(
             device=input.device, dtype=input.dtype
@@ -1300,10 +1306,11 @@ class QuantLSTM(_UnidirectionalQuantLSTM):
             )
             bias_ih = self._reorder_onnx_gates(bias_ih)
             bias_hh = self._reorder_onnx_gates(bias_hh)
+            packed_bias = torch.cat((bias_ih, bias_hh))
         else:
-            bias_ih = input.new_zeros(4 * self.hidden_size)
-            bias_hh = input.new_zeros(4 * self.hidden_size)
-        return weight_ih, weight_hh, torch.cat((bias_ih, bias_hh))
+            # ONNX B is optional; absent model parameters have no encodings.
+            packed_bias = None
+        return weight_ih, weight_hh, packed_bias
 
     def _forward_onnx(
         self,
@@ -1343,9 +1350,10 @@ class QuantLSTM(_UnidirectionalQuantLSTM):
         self._onnx_export_weight_hh = torch.stack(
             [item[1] for item in packed], dim=0
         ).contiguous()
-        self._onnx_export_bias = torch.stack(
-            [item[2] for item in packed], dim=0
-        ).contiguous()
+        self._onnx_export_bias = (
+            torch.stack([item[2] for item in packed], dim=0).contiguous()
+            if self.bias else None
+        )
 
         output, final_hidden, final_cell = onnx_lstm(
             input_time,

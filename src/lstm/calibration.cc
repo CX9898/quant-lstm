@@ -334,7 +334,9 @@ const FinalizedLstmCalibration& LstmCalibrationSession::finalize(bool require_ex
                                           : quantization::HistogramCalibrationMethod::Percentile;
         for (std::size_t index = 0; index < kQuantOperatorCount; ++index) {
             const auto id = static_cast<QuantOperator>(index);
-            if (!collector_.biasEnabled() && isBiasOperator(id)) {
+            // Bias headroom is derived from observed values, not histogram
+            // clipping/bin expansion (which can dwarf a constant zero bias).
+            if (isBiasOperator(id)) {
                 continue;
             }
             auto& ranges = selected_ranges.operators[index];

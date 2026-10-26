@@ -38,7 +38,7 @@ def ensure_quant_lstm_onnx_registered(opset: int = 18) -> None:
 
     if not getattr(ensure_quant_lstm_onnx_registered, "_runtime_done", False):
         schema = (
-            "(Tensor input, Tensor h0, Tensor c0, Tensor W, Tensor R, Tensor B, "
+            "(Tensor input, Tensor h0, Tensor c0, Tensor W, Tensor R, Tensor? B, "
             "int hidden_size) -> (Tensor, Tensor, Tensor)"
         )
         _QUANT_LSTM_ONNX_LIB.define("lstm" + schema)
@@ -73,7 +73,7 @@ def ensure_quant_lstm_onnx_registered(opset: int = 18) -> None:
             x,
             W,
             R,
-            B,
+            optional(g) if symbolic_helper._is_none(B) else B,
             optional(g),
             h0,
             c0,
@@ -115,7 +115,7 @@ def onnx_lstm(
     initial_cell: Tensor,
     weight_ih: Tensor,
     weight_hh: Tensor,
-    bias: Tensor,
+    bias: Tensor | None,
     hidden_size: int,
     bidirectional: bool,
 ) -> tuple[Tensor, Tensor, Tensor]:

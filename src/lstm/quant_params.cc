@@ -29,11 +29,27 @@ std::size_t checkedChannelCount(std::int64_t hidden_size) {
 
 quantization::CalibrationResult calibrateGroup(const CalibrationRange& range,
                                                const quantization::QuantizationType& type,
-                                               quantization::ScaleMode scale_mode) {
+                                               quantization::ScaleMode scale_mode, bool reserve_bias) {
     quantization::CalibrationResult result =
         quantization::calibrateMinMax(range.minimum, range.maximum, type);
     if (scale_mode == quantization::ScaleMode::Pot2) {
         result.param = quantization::convertScaleToPot2CoverRange(result, type).param;
+    }
+    if (reserve_bias) {
+        // Bias-only calibration headroom; fixed/imported grids remain unchanged.
+        const double extent = std::max(std::abs(static_cast<double>(range.minimum)),
+                                       std::abs(static_cast<double>(range.maximum)));
+        double scale = std::max(2.0 * extent, 0.01) / type.range().maximum;
+        if (scale_mode == quantization::ScaleMode::Pot2) {
+            scale = std::exp2(std::ceil(std::log2(scale)));
+        }
+        if (!std::isfinite(scale) || scale > std::numeric_limits<float>::max()) {
+            throw std::overflow_error("Bias headroom scale exceeds float32 range");
+        }
+        result.param.scale = static_cast<float>(scale);
+        result.param.validate(type);
+        result.diagnostics.adjusted_min = type.range().minimum * result.param.scale;
+        result.diagnostics.adjusted_max = type.range().maximum * result.param.scale;
     }
     return result;
 }
@@ -248,7 +264,7 @@ LstmQuantParams finalizeQuantParams(const LstmOperatorQuantConfig& config,
         destination.group_diagnostics.reserve(group_count);
         for (const CalibrationRange& source_range : source_ranges) {
             const auto calibrated =
-                calibrateGroup(source_range, operator_config.type, config.scale_mode);
+                calibrateGroup(source_range, operator_config.type, config.scale_mode, isBiasOperator(id));
             compact_values.push_back(calibrated.param);
             destination.group_diagnostics.push_back(calibrated.diagnostics);
         }

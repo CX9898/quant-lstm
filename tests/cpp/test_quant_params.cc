@@ -115,12 +115,34 @@ int main() {
 
         const auto& per_channel = params.at(quant_lstm::QuantOperator::BiasInputHidden).values;
         for (std::size_t channel = 0; channel < channel_count; ++channel) {
-            const auto expected = quant_lstm::quantization::calibrateMinMax(
-                ranges.at(quant_lstm::QuantOperator::BiasInputHidden)[channel].minimum,
-                ranges.at(quant_lstm::QuantOperator::BiasInputHidden)[channel].maximum,
-                config.at(quant_lstm::QuantOperator::BiasInputHidden).type);
-            require(per_channel[channel].scale == expected.param.scale,
-                    "per-channel source mapping");
+            const float expected_scale = static_cast<float>(2 * (channel + 1)) / 127.0F;
+            require(per_channel[channel].scale == expected_scale,
+                    "per-channel bias mapping includes training headroom");
+        }
+
+        for (int bitwidth : {8, 16}) {
+            for (const auto scale_mode : {quant_lstm::quantization::ScaleMode::Affine,
+                                          quant_lstm::quantization::ScaleMode::Pot2}) {
+                auto zero_config = config;
+                zero_config.scale_mode = scale_mode;
+                for (const auto id : {quant_lstm::QuantOperator::BiasInputHidden,
+                                      quant_lstm::QuantOperator::BiasHiddenHidden}) {
+                    zero_config.at(id).type.bitwidth = bitwidth;
+                }
+                auto zero_ranges = makeRanges(zero_config, channel_count, true);
+                for (const auto id : {quant_lstm::QuantOperator::BiasInputHidden,
+                                      quant_lstm::QuantOperator::BiasHiddenHidden}) {
+                    for (auto& range : zero_ranges.at(id)) range = {0.0F, 0.0F};
+                }
+                const auto zero_params =
+                    quant_lstm::finalizeQuantParams(zero_config, zero_ranges, hidden_size, true);
+                for (const auto& value : zero_params.at(quant_lstm::QuantOperator::BiasInputHidden).values) {
+                    require(std::round(1e-4F / value.scale) > 0,
+                            "zero bias must represent a small training update");
+                    require(value.scale * ((1 << (bitwidth - 1)) - 1) >= 0.009999F,
+                            "zero bias must retain minimum training range");
+                }
+            }
         }
 
         const auto no_bias_ranges = makeRanges(config, channel_count, false);

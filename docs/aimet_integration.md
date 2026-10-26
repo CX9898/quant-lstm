@@ -8,7 +8,7 @@ QuantGRU 同名的公共方法，不导入 `aimet_torch` 或 `aimet_common`。�
 | --- | --- |
 | `load_bitwidth_config(config_file, verbose=False)` | 从完整阶段 JSON 文件/字典读取 `LSTM_config`，复用原生配置校验 |
 | `calibration_context()` | 开始新一轮收集，成功退出时 finalize，异常恢复标志；跳过锁定参数和未执行分支 |
-| `enable_pot2(method="cover_range", tolerance=0.02)` | 转换 scale/范围，通过原生加载器重建执行参数和数值审计 |
+| `enable_pot2(method="cover_range", tolerance=0.02)` | 转换 scale、重算非对称 zero point 和实数范围，通过原生加载器重建执行参数并做数值审计 |
 | `export_quant_params_to_aimet_format(encodings_dict, module_name=None, verbose=False, for_onnx=True)` | 仅向公共 activation_encodings / param_encodings 合并部署参数 |
 | `load_quant_params_from_aimet_format(encodings_dict, module_name=None, verbose=False)` | 从公共编码恢复量化网格；缺少当前模块时返回 False；不修改量化开关 |
 | `set_module_name(name)` | 设置编码所用模块路径 |
@@ -50,6 +50,59 @@ restored.load_quant_params_from_aimet_format(encodings, module_name="encoder.lst
 restored.use_quantization = True
 restored.set_quant_params_locked(True)
 ```
+
+## 量化开关与阶段恢复
+
+`use_quantization=False` 控制普通前向使用浮点计算。进入 `calibration_context()`
+仍可收集参数，因此“已经校准”和“启用量化”是两个独立状态。
+
+rx-met 的 `save_quantizer_encodings()` 和 `export_onnx_json()` 按量化开关处理：
+
+| 当前模块状态 | 阶段保存 / 部署 encoding | ONNX |
+| --- | --- | --- |
+| 已关闭量化，无论是否校准 | 不写入该层的 activation / parameter encoding | 保留标准浮点 LSTM 节点 |
+| 已启用量化且完成校准 | 写入公共 encoding | 保留标准 LSTM 节点，与 encoding 配套使用 |
+| 已启用量化但未校准 | 尚无可保存参数，部署导出报错 | 校准或加载有效参数后再导出 |
+
+恢复阶段文件时，先创建相同结构、应用相同阶段配置并加载配套权重，再调用
+`load_quantizer_encodings()`。关闭量化且文件中没有该层 encoding 时保持浮点状态；
+`skip_if_not_found=False` 仍会拒绝已启用层缺少 encoding 的情况。
+显式加载文件中已有的有效 encoding 会启用该层量化；传入 `allow_overwrite=False`
+还会锁定加载的参数，使后续共享校准跳过该层。
+
+上述开关策略由 rx-met 公共流程负责。直接调用算子的
+`export_quant_params_to_aimet_format()` 仍可导出已校准但关闭量化的模块；
+`load_quant_params_from_aimet_format()` 只恢复参数，不改变 `use_quantization`。
+算子自身的原生参数接口也保留这种显式导入导出能力。
+
+## 已校准参数的 Po2 转换
+
+`enable_pot2()` 在校准前调用时选择后续校准的 `pot2` 模式；在校准后调用时转换
+已有网格，不重新执行校准前向。已处于 Po2 模式时重复调用不改变参数。
+已用 `set_quant_params_locked(True)` 锁定的 affine 参数不能直接转换，应在锁定前
+完成转换，或在首次配置中指定 `scale_mode: "pot2"`。
+
+默认 `method="cover_range"`、`tolerance=0.02`；校准后转换也支持 `method="round"`。
+这些是 Python 方法参数，不增加 JSON 配置字段。原生 Po2 校准使用固定的
+CoverRange 策略，详见[量化执行规格](quantized-execution-spec.md#62-pot2)。
+
+转换得到新 scale 后，对称量化保持 `zero_point=0`；非对称量化重新计算：
+
+```text
+zero_point = clamp(round_to_nearest_even(qmin - lower / new_scale), qmin, qmax)
+real_min = (qmin - zero_point) * new_scale
+real_max = (qmax - zero_point) * new_scale
+```
+
+`lower` 优先取校准后保留在内存中的调整后下界，避免使用已取整的 affine 下界
+再次引入舍入偏差。深拷贝保留这些范围；重置校准或加载参数文件会清除旧范围。
+从原生或公共 encoding 文件恢复的模块没有原始校准统计，转换时使用已加载量化
+网格的 `real_min`。两条路径均在转换后重新派生执行参数并完成原生数值审计。
+这些诊断范围不写入任何导出 JSON。
+
+例如，INT8 非对称输入校准范围为 `[-1, 9]` 时，affine 的 scale 约为 `10/255`、
+zero point 为 `-103`。默认 Po2 转换后 scale 为 `0.0625`、zero point 为 `-112`，
+对应实数范围为 `[-1, 14.9375]`。
 
 ## 编码与 ONNX
 
@@ -123,5 +176,9 @@ bias，将 ONNX 的 IOFC 顺序还原为 IFGO，结合 `internal_ops` / `interna
 
 从 `pytorch/` 执行 `python3 -m unittest -v tests.test_aimet_interface`，覆盖独立配置、
 校准异常、锁定、Po2、单双向及三种参数粒度的部署 schema、双向门顺序和独立
-h/c 网格、公共编码直接回读、非法记录拒绝及共享 ONNX initializer。
-该测试也已加入 `tools/run_end_to_end_test.sh`。
+h/c 网格、公共编码直接回读、非法记录拒绝及共享 ONNX initializer。Po2 回归包含
+8/16 位有符号/无符号、三种校准方法、双向与深拷贝、文件加载后的舍入及 zero point
+限幅；保留 signed symmetric 校准跨度和完整负端范围的回归。
+该测试也已加入 `tools/run_end_to_end_test.sh`。rx-met 中的
+`tests.test_native_recurrent_state` 另行覆盖 GRU/LSTM 关闭量化、混合启用状态、阶段
+恢复、严格加载、ONNX 配套编码及 GRU 非对称 Po2 对照。

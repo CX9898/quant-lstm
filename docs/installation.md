@@ -116,6 +116,25 @@ python -m pip uninstall quant-lstm
 
 项目尚未发布 PyPI package。wheel 需要按照本节命令从源码构建。
 
+### 2.1 升级已有安装
+
+Python 模块和 `_quant_lstm` extension 必须来自同一版本。Po2 修复增加了校准
+binding 返回的内存范围信息，升级时需要同时重建扩展并安装 Python 模块：
+
+```bash
+cmake -S . -B build
+cmake --build build --parallel 2
+python -m pip install ./pytorch --force-reinstall --no-deps --no-build-isolation
+```
+
+重新生成分发 wheel 时使用上文的 `pip wheel` 命令，并在兼容环境中安装新制品。
+rx-met 中的副本由工具包发布流程构建；同步源码后也应更新配套算子 wheel 或镜像。
+升级后可从本仓库根目录执行接口回归，验证校准 binding、Po2 转换和编码回读：
+
+```bash
+(cd pytorch && python -m unittest -v tests.test_aimet_interface)
+```
+
 ## 3. 安装 CUDA C++ package
 
 使用自定义安装前缀可以避免修改系统目录：
@@ -196,7 +215,9 @@ tools/run_cpu_only_package_check.sh
 
 ## 5. 使用 Docker 构建环境
 
-仓库提供 CUDA、PyTorch、CMake 和测试依赖的开发镜像。以下命令从仓库根目录执行：
+独立 quant-lstm 仓库的 `docker/` 提供 CUDA、PyTorch、CMake 和测试依赖的开发镜像。
+rx-met 的 `operators/quant-lstm/` 副本不包含 `docker/` 和 `.github/`，使用 rx-met
+自身的镜像与构建流程。以下命令仅从包含 `docker/Dockerfile` 的独立仓库根目录执行：
 
 ```bash
 docker build -f docker/Dockerfile -t quant-lstm:cuda .

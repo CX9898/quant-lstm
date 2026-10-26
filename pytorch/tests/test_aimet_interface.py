@@ -239,6 +239,65 @@ class NativeAimetInterfaceTest(unittest.TestCase):
                 module.export_quant_params_to_aimet_format(existing, module_name='rnn', for_onnx=for_onnx)
             self.assertEqual(before, existing)
 
+    def test_pot2_recomputes_asymmetric_zero_points_from_calibration(self):
+        for bits in (8, 16):
+            for unsigned in (False, True):
+                for method in ('minmax', 'percentile', 'sqnr'):
+                    with self.subTest(bits=bits, unsigned=unsigned, method=method):
+                        scale = 2.0 ** (-4 if bits == 8 else -12)
+                        # The original lower bound and the affine grid's lower
+                        # bound fall on opposite sides of a Po2 rounding boundary.
+                        lower = -16.51 * scale
+                        x = torch.tensor([lower, lower + 10], device='cuda').reshape(2, 1, 1)
+                        def make(mode):
+                            return QuantLSTM(1, 1, bidirectional=True, device='cuda',
+                                calibration_method=method, quant_config={
+                                    'schema_version': 1, 'scale_mode': mode,
+                                    'operators': {'input': {'bitwidth': bits,
+                                        'is_symmetric': False, 'is_unsigned': unsigned}}})
+                        affine, native = make('affine'), make('pot2')
+                        native.load_state_dict(affine.state_dict())
+                        for module in (affine, native):
+                            with module.calibration_context():
+                                module(x)
+                        clone = copy.deepcopy(affine)
+                        expected = native.export_quant_params()
+                        for module in (affine, clone):
+                            module.enable_pot2()
+                            actual = module.export_quant_params()
+                            for direction in ('operators', 'operators_reverse'):
+                                self.assertEqual(actual[direction]['input'], expected[direction]['input'])
+                            module.use_quantization = True
+                            self.assertTrue(torch.isfinite(module(x)[0]).all())
+                            module.enable_pot2()  # Conversion remains idempotent.
+                            self.assertEqual(actual, module.export_quant_params())
+
+    def test_pot2_loaded_asymmetric_grids_round_and_clamp(self):
+        module = QuantLSTM(4, 2, batch_first=True).cuda()
+        with module.calibration_context():
+            module(self.x)
+        baseline = module.export_quant_params()
+        for bits in (8, 16):
+            for unsigned in (False, True):
+                qmin = 0 if unsigned else -(1 << (bits - 1))
+                qmax = (1 << (bits if unsigned else bits - 1)) - 1
+                for method, scale in (('round', 0.25), ('cover_range', 0.5)):
+                    for old_zp in (qmin, qmin + 1, qmin + 2, qmax):
+                        with self.subTest(bits=bits, unsigned=unsigned, method=method, zp=old_zp):
+                            doc = copy.deepcopy(baseline)
+                            lo, hi = (qmin - old_zp) * 0.3125, (qmax - old_zp) * 0.3125
+                            doc['operators']['input'].update(
+                                dtype=f"{'U' if unsigned else ''}INT{bits}", symmetric=False,
+                                scale=0.3125, zero_point=old_zp, real_min=lo, real_max=hi)
+                            module.load_quant_params(doc)
+                            module.enable_pot2(method=method, tolerance=0)
+                            enc = module.export_quant_params()['operators']['input']
+                            self.assertEqual(enc['scale'], scale)
+                            zp = max(qmin, min(qmax, round(qmin - lo / scale)))
+                            self.assertEqual(enc['zero_point'], zp)
+                            self.assertEqual(enc['real_min'], (qmin - zp) * scale)
+                            self.assertEqual(enc['real_max'], (qmax - zp) * scale)
+
     def test_pot2_preserves_symmetric_calibration_span(self):
         module = QuantLSTM(4, 2, batch_first=True).cuda()
         with module.calibration_context():
