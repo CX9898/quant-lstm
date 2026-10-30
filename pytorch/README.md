@@ -14,8 +14,9 @@
 | `lib/lstm_onnx_runtime.cc` | ONNX Runtime 与原生 QuantLSTM 之间的传输桥接 |
 | `tests/` | Python 接口、backward、STE、双向和 ONNX 验证 |
 
-Python 层不实现生产 LSTM 公式。CPU 构建仅接受 eval/no-grad 前向与校准；CUDA wheel
-不会自动切换到 CPU backend。普通安装和 wheel 构建见
+Python 层不实现生产 LSTM 公式。CPU 构建要求 `eval()`，普通前向与校准无需额外关闭梯度；
+推荐使用 `torch.no_grad()` / `torch.inference_mode()` 减少推理开销。CPU 不支持训练和 QAT，
+实际跨算子的反向传播会明确报错。CUDA wheel 不会自动切换到 CPU backend。普通安装和 wheel 构建见
 [安装指南](../docs/installation.md#2-安装-pytorch-cuda-模块)，用户配置与校准流程见
 [配置参考](../docs/configuration.md)。
 

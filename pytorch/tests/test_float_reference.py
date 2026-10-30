@@ -8,7 +8,6 @@ import torch
 from torch import nn
 
 import _quant_lstm
-import _quant_lstm_test
 from quant_lstm import QuantLSTM
 
 
@@ -21,6 +20,8 @@ PROFILES = {
 }
 
 def generated(shape, seed, role, *, parameter=False, hidden_size=1):
+    import _quant_lstm_test
+
     return _quant_lstm_test.generate_test_tensor(
         list(shape), seed, role, parameter, hidden_size
     )
@@ -78,6 +79,8 @@ class FloatReferenceTest(unittest.TestCase):
         self.assertTrue(torch.equal(time_cell, batch_cell))
 
     def run_case(self, profile_name, device, bias, batch_first, state_profile):
+        import _quant_lstm_test
+
         (steps, batch, input_size, hidden_size), parameter_seed = PROFILES[profile_name]
         input_time_major = generated(
             (steps, batch, input_size), 0 if "basic" in profile_name else 2001, "input"
@@ -225,15 +228,30 @@ class FloatReferenceTest(unittest.TestCase):
         with torch.no_grad(), self.assertRaisesRegex(RuntimeError, message):
             module(input_tensor)
         module.eval()
-        with self.assertRaisesRegex(RuntimeError, message):
-            module(input_tensor.requires_grad_())
+        input_tensor.requires_grad_()
         if getattr(_quant_lstm, "supports_cuda", True) is False:
+            reference = nn.LSTM(2, 3).eval()
+            reference.load_state_dict(module.state_dict())
             with torch.no_grad():
+                expected = reference(input_tensor)
+            with torch.enable_grad():
                 result = module(input_tensor)
             self.assertEqual(result[0].shape, (4, 1, 3))
-            self.assertFalse(result[0].requires_grad)
+            for actual, target in zip((result[0], *result[1]),
+                                      (expected[0], *expected[1])):
+                torch.testing.assert_close(actual, target, rtol=1e-5, atol=1e-7)
+                self.assertTrue(actual.requires_grad)
+            with self.assertRaisesRegex(RuntimeError, "CPU QuantLSTM.*backward"):
+                result[0].sum().backward()
+            self.assertIsNone(input_tensor.grad)
+            self.assertTrue(all(parameter.grad is None for parameter in module.parameters()))
+            with torch.no_grad():
+                result = module(input_tensor)
+            self.assertTrue(all(not tensor.requires_grad for tensor in (result[0], *result[1])))
             return
         message = "CPU 实现仅用于 C\\+\\+ reference model"
+        with self.assertRaisesRegex(RuntimeError, message):
+            module(input_tensor)
         with self.assertRaisesRegex(RuntimeError, message):
             _quant_lstm.lstm_forward(
                 input_tensor,

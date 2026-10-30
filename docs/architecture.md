@@ -33,8 +33,9 @@ quant_lstm C++ static library
 ```
 
 CPU wheel 通过独立 binding 复用 C++ 浮点、校准和 FP32 q-carrier reference。
-Python 入口限制为 eval/no-grad；训练与 QAT 仍只支持 CUDA，CUDA wheel 不提供
-隐式 CPU fallback。
+Python 入口要求 `eval()`，普通前向无需额外关闭梯度；推荐使用 `torch.no_grad()` /
+`torch.inference_mode()` 减少推理开销。实际跨 CPU 算子的反向传播会明确报错；
+训练与 QAT 仍只支持 CUDA，CUDA wheel 不提供隐式 CPU fallback。
 
 ## 3. 模块与接口
 

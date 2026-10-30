@@ -375,11 +375,25 @@ def _validate_external_document(
             raise ValueError(f"{field} 必须是 object")
 
 
+class _CpuInferenceOnlyLSTM(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, outputs: tuple[Tensor, Tensor, Tensor], *dependencies: Tensor):
+        # Native outputs may be views; the explicit dependencies keep the guard connected.
+        return tuple(output.detach() for output in outputs)
+
+    @staticmethod
+    def backward(ctx, *grad_outputs):
+        raise RuntimeError(
+            "CPU QuantLSTM does not support backward or QAT; "
+            "use the CUDA backend for training"
+        )
+
+
 class _UnidirectionalQuantLSTM(LSTMAimetIntegration, nn.Module):
     """与单层单向 nn.LSTM 对齐的双模式模块。
 
     use_quantization=False 使用浮点路径。校准并设置
-    use_quantization=True 后使用 FP32 q-carrier。CPU 仅支持 eval/no-grad 前向与校准。
+    use_quantization=True 后使用 FP32 q-carrier。CPU 仅支持 eval 前向与校准，不支持反向传播。
     """
 
     def __init__(
@@ -729,19 +743,32 @@ class _UnidirectionalQuantLSTM(LSTMAimetIntegration, nn.Module):
         input: Tensor,
         hx: Optional[tuple[Tensor, Tensor]] = None,
     ) -> tuple[Tensor, tuple[Tensor, Tensor]]:
-        if input.device.type == "cpu":
-            if self.training or torch.is_grad_enabled():
+        is_cpu = input.device.type == "cpu"
+        if is_cpu:
+            if self.training:
                 raise RuntimeError(
                     "CPU QuantLSTM supports calibration and PTQ inference only; "
-                    "call eval() and use torch.no_grad() or torch.inference_mode()"
+                    "call eval(); training and QAT require the CUDA backend"
                 )
         elif not input.is_cuda:
             raise RuntimeError("QuantLSTM supports CPU and CUDA tensors only")
-        if self.calibrating:
-            return self._collect_calibration(input, hx)
-        if self.use_quantization:
-            return self._quantized_forward(input, hx)
-        return self._float_forward(input, hx)
+        with torch.set_grad_enabled(torch.is_grad_enabled() and not is_cpu):
+            if self.calibrating:
+                result = self._collect_calibration(input, hx)
+            elif self.use_quantization:
+                result = self._quantized_forward(input, hx)
+            else:
+                result = self._float_forward(input, hx)
+        if is_cpu and torch.is_grad_enabled():
+            dependencies = (input, *(hx or ()), *self.parameters())
+            if any(tensor is not None and tensor.requires_grad for tensor in dependencies):
+                output, (hidden, cell) = result
+                # A tuple keeps outputs from becoming views of Function inputs.
+                output, hidden, cell = _CpuInferenceOnlyLSTM.apply(
+                    (output, hidden, cell), *dependencies
+                )
+                return output, (hidden, cell)
+        return result
 
     def export_quant_params(
         self, destination: str | Path | None = None

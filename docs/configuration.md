@@ -190,8 +190,9 @@ C++ finalization，原始 tensor 不复制到 CPU，也不会执行第二次 for
 input 网格。
 
 CPU wheel 复用 C++ 浮点 reference 的输出与 trace 进行校准，各量化点先在 batch 内
-收集完整直方图，再合并为会话统计。CPU 调用要求 `eval()` 与 no-grad；不会生成
-训练 checkpoint 或执行 QAT，也不会作为 CUDA wheel 的隐式 fallback。
+收集完整直方图，再合并为会话统计。CPU 调用要求 `eval()`，无需额外关闭梯度；推荐使用
+`torch.no_grad()` / `torch.inference_mode()` 减少推理开销。CPU 不支持训练和 QAT，
+不会生成训练 checkpoint，实际跨算子的反向传播会明确报错，也不会作为 CUDA wheel 的隐式 fallback。
 
 校准会话的 `locked` 状态与 `set_quant_params_locked(True)` 的参数锁分开管理。
 `calibration_context()` 默认开始一轮新校准，正常退出时完成 finalization，异常时恢复
@@ -293,7 +294,8 @@ scale、zero point 和位宽，不按 epoch 重新校准。浮点主权重继续
 以下情况直接报错：
 
 - 量化 forward 前没有完成校准或加载参数；
-- 非 FP32 tensor、设备、shape 或 bias 不匹配，或 CPU 调用仍启用训练/梯度；
+- 非 FP32 tensor、设备、shape 或 bias 不匹配，或 CPU 模块处于训练模式；
+- 在 CPU 算子上执行反向传播；
 - 未知 operator/字段、非法位宽、非法固定值或 compact 参数向量；
 - 双向文档缺失 reverse 参数或两个方向的 input 网格不同；
 - scale 非有限、非正或不是 canonical FP32；

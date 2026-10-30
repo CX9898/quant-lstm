@@ -326,9 +326,10 @@ q_h_new = Clamp(
 GEMM/普通乘积使用 int64，Cell Q31 合并使用 `__int128`。普通 rescale 执行整数 multiplier+shift/POT2 shift。首版真实激活桥接包含浮点函数，因此只冻结整数算术与融合公式，不代表完整硬件 LUT 语义。
 
 CPU int32 实现仅作为显式 C++ reference model。独立构建的 CPU Python wheel 复用
-浮点和 FP32 q-carrier reference，只接受 eval/no-grad 的 CPU FP32 前向、校准与
-PTQ。浮点训练、反向传播和 QAT 仍要求 CUDA；CUDA wheel 不得按设备自动回退到
-CPU reference。
+浮点和 FP32 q-carrier reference，只接受 `eval()` 下的 CPU FP32 前向、校准与 PTQ，
+无需额外关闭梯度；推荐使用 `torch.no_grad()` / `torch.inference_mode()` 减少推理开销。
+实际跨 CPU 算子的反向传播会明确报错，浮点训练、反向传播和 QAT 仍要求 CUDA；
+CUDA wheel 不得按设备自动回退到 CPU reference。
 
 ### 9.4 FP32 q-carrier QAT backward
 

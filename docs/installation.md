@@ -98,9 +98,10 @@ RX_MET_ENABLE_CUDA=0 RX_MET_QUANT_LSTM_BUILD_DIR="$PWD/build_cpu" \
   python -m pip wheel ./pytorch --no-build-isolation --no-deps --wheel-dir dist
 ```
 
-安装生成的 CPU wheel 后，模块、输入和状态保持在 CPU，调用 `eval()` 并在
-`torch.no_grad()` 或 `torch.inference_mode()` 内执行校准和 PTQ。CPU 不提供
-训练 checkpoint、反向传播或 QAT。构建 rx-met 发布包时使用 `cpu` 变体，三个
+安装生成的 CPU wheel 后，模块、输入和状态保持在 CPU，调用 `eval()` 执行校准和 PTQ。
+普通前向无需额外关闭梯度，推荐使用 `torch.no_grad()` 或 `torch.inference_mode()`
+减少推理开销。CPU 不提供训练 checkpoint、反向传播或 QAT；实际跨算子的反向传播会明确报错。
+构建 rx-met 发布包时使用 `cpu` 变体，三个
 wheel 的版本与 CPU PyTorch / ONNX Runtime 锁文件配套。
 
 在可访问 CUDA GPU 的环境执行验证：
@@ -260,6 +261,6 @@ docker run --rm -it --gpus all \
 | `未找到 CUDA 编译器` | `QUANT_LSTM_ENABLE_CUDA=ON`，但 `nvcc` 不在 `PATH` 或 CUDA Toolkit 未安装 |
 | `未找到 build/libquant_lstm.a` | Python extension 构建前未在默认 `build/` 或 `RX_MET_QUANT_LSTM_BUILD_DIR` 指定目录完成 CMake 构建 |
 | `_quant_lstm 扩展未找到` | wheel 安装尚未完成、当前 Python 环境错误，或 extension 与 Python ABI 不匹配 |
-| `PyTorch ... 只支持 CUDA input` | CUDA wheel 收到 CPU 输入或状态；将模块、输入和状态移动到 CUDA，或显式构建 CPU wheel 后以 eval/no-grad 执行 |
+| `PyTorch ... 只支持 CUDA input` | CUDA wheel 收到 CPU 输入或状态；将模块、输入和状态移动到 CUDA，或显式构建 CPU wheel 后以 `eval()` 执行 |
 | `Could not find quant-lstm` | 下游没有设置安装 prefix 的 `CMAKE_PREFIX_PATH` |
 | `Could not find CUDAToolkit` | 下游正在消费 CUDA package，但 CMake 无法定位 CUDA Toolkit |

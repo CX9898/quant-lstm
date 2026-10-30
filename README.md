@@ -10,7 +10,7 @@ QuantLSTM 提供 PyTorch LSTM（长短期记忆网络）的量化实现，支持
 - 模型使用 `num_layers=1`、`dropout=0`，支持单向和双向计算、可选 bias。
 - 输入为三维序列张量，`batch_first=True` 对应 `[B, T, I]`，默认布局为 `[T, B, I]`。
 - 常规前向和校准使用 CPU/CUDA float32 张量，返回 `output, (hidden, cell)`。
-- CPU 要求 `eval()` 与 `torch.no_grad()` / `torch.inference_mode()`，不支持训练和 QAT。
+- CPU 要求 `eval()`，普通前向无需额外关闭梯度；推荐使用 `torch.no_grad()` / `torch.inference_mode()` 减少推理开销。CPU 不支持训练和 QAT，实际跨算子的反向传播会明确报错。
 - 隐藏状态和细胞状态形状均为 `[D, B, H]`，其中单向 `D=1`、双向 `D=2`。
 - 校准方法包括 MinMax、SQNR 和 Percentile，默认使用 MinMax。
 - 权重和偏置采用对称量化，支持 per-tensor、per-gate 和 per-channel 粒度。

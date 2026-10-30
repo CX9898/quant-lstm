@@ -12,8 +12,9 @@
   原生参数检查点保留独立格式。
 - 公共编码增加与 scale 同形的 `n = round(-log2(scale))`；加载时校验已提供的 n，
   并兼容旧版单元素 I/O 编码列表。
-- 显式 CPU Python 构建支持 eval/no-grad FP32 前向、MinMax/Percentile/SQNR 校准和
-  FP32 q-carrier PTQ；训练和 QAT 仍要求 CUDA，CUDA wheel 不提供隐式 CPU fallback。
+- 显式 CPU Python 构建支持 eval FP32 前向、MinMax/Percentile/SQNR 校准和
+  FP32 q-carrier PTQ；普通前向无需额外关闭梯度，实际反向传播明确报错。
+  训练和 QAT 仍要求 CUDA，CUDA wheel 不提供隐式 CPU fallback。
 
 - 增加与 QuantGRU 对齐的循环算子集成接口，配置、校准生命周期、Po2 和 AIMET/ONNX
   编码处理均由本库负责，无 AIMET 依赖。
@@ -54,6 +55,8 @@
 
 ### Fixed
 
+- CPU eval 前向与校准接受默认梯度上下文，覆盖全部输出及输入、状态和参数依赖；
+  不保留原生推理缓存，反向传播明确拒绝，兼容原地激活与混合线性网络。
 - 校准后执行 `enable_pot2()` 时，按新 scale 重新计算非对称 zero point 和实数范围；
   内存中保留校准下界以避免额外舍入偏差，深拷贝保留这些信息。文件重载后以现有
   网格下界转换，导出格式不增加诊断字段。更新需配套重建 `_quant_lstm` extension。
@@ -78,7 +81,7 @@
 ### Known limitations
 
 - Python runtime 只支持 FP32 tensor、单层 LSTM 和 `dropout=0`；CPU 仅支持显式
-  CPU wheel 的 eval/no-grad 校准与 PTQ，浮点训练和 QAT 仍要求 CUDA。
+  CPU wheel 的 eval 校准与 PTQ，浮点训练、反向传播和 QAT 仍要求 CUDA。
 - Python package 尚未发布到 PyPI；wheel 需要在兼容的 Python、PyTorch 和 CUDA
   构建环境中生成。
 - CPU int32 reference 的 sigmoid/tanh 使用浮点函数；CUDA int32 backend 尚未实现。

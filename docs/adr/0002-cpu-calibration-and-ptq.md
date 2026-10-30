@@ -33,3 +33,12 @@ The CPU wheel must also import with its packaged config outside the source tree.
 CPU and CUDA floating point activations may round differently at quantization
 boundaries; no bitwise equality between devices is promised. This decision does
 not introduce an automatic device fallback or a CPU QAT implementation.
+
+## Revision in 1.1.1
+
+CPU execution still requires `eval()`, but forward and calibration also accept
+normal grad-enabled calls. `torch.no_grad()` and `torch.inference_mode()` remain
+recommended for lightweight inference. Any backward traversal through the CPU
+operator raises an explicit error rather than silently detaching gradients.
+CPU training and QAT remain unsupported; the native forward and calibration
+references are unchanged.
