@@ -448,7 +448,6 @@ install(
 install(
     FILES
         README.md
-        CHANGELOG.md
     DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/quant-lstm
 )
 install(

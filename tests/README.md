@@ -38,15 +38,12 @@ CPU Python 校准和 PTQ 另需安装 [CPU wheel](../docs/installation.md#cpu-py
 并在 `pytorch/` 目录执行：
 
 ```bash
-python -m unittest -v tests.test_cpu_ptq tests.test_bitwidth
+python -m unittest -v tests.test_cpu_ptq
 ```
 
 该套件覆盖浮点与 PyTorch 对照、单次校准前向、MinMax/Percentile/SQNR、单双向、
 布局、可选状态、无 bias、参数回读和训练拒绝。ONNX Runtime 测试需要配套 bridge；
 设置 `QUANT_LSTM_ONNXRUNTIME_INCLUDE` 后重建 wheel。
-
-位宽套件覆盖 2-32 位参数编码回读、I8W4 的三种校准与参数粒度、单双向、
-高位宽端点与 zero point、Cell 小比例和非法位宽组合；CUDA 构建另验证 I8W4 QAT。
 
 Speech Commands 测试使用外部数据集，不进入默认 CI。影响校准、QAT、位宽或模型级
 精度的改动应按[真实网络测试说明](real_network/README.md)运行相应 profile。

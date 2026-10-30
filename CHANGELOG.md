@@ -27,7 +27,8 @@
   JSON 字段和版本保持不变。保留 FP32 q-carrier、SGEMM 和 STE，高位宽精度风险
   由 `precision_risk` 记录，`require_exact_accumulation=True` 可明确拒绝。
 - 同步任意位宽配置、原生与公共编码回读、I8W4 校准和 CUDA QAT 回归；独立套件
-  直接校验 Po2 编码，不依赖 rx-met compiler 或 AIMET。
+  直接校验 Po2 编码，不依赖 rx-met compiler 或 AIMET。在 `pytorch/` 目录执行
+  `python -m unittest -v tests.test_bitwidth`，此独立入口不属于共用 E2E 脚本。
 - 不依赖 native checkpoint/mask 的量化前向与 QAT autograd oracle，加入默认 E2E；
   增加配置矩阵、图与状态生命周期、非连续 tensor 和 CUDA stream 正确性验证。
 
@@ -41,6 +42,8 @@
 
 ### Changed
 
+- 第三阶段将共用 CMake、E2E 脚本和测试说明与 rx-met 对齐。CMake 安装不再额外
+  包含独立仓库的 CHANGELOG；保留独立位宽测试文件和上述单独执行入口。
 - 普通源码安装默认构建 Release CUDA 库，测试和示例改为显式开启；安装命令简化为
   `cmake -S . -B build`。已有 CMake 缓存和显式构建选项继续生效。
 
