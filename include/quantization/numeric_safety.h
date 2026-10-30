@@ -36,6 +36,7 @@ struct NumericSafetyInput {
     std::uint64_t cell_rhs_maximum = 0;
     std::uint64_t q31_multiplier_maximum = 0;
     std::uint8_t cell_fractional_bits = 31;
+    bool cell_q31_available = true;
     std::uint64_t cell_target_zero_point_maximum = 0;
     std::uint64_t hidden_lhs_maximum = 0;
     std::uint64_t hidden_rhs_maximum = 0;
@@ -44,7 +45,9 @@ struct NumericSafetyInput {
     EncodedRescaleSafetyInput gate_lhs_rescale;
     EncodedRescaleSafetyInput gate_rhs_rescale;
     std::uint64_t gate_target_zero_point_maximum = 0;
-    std::uint64_t fp32_accumulator_maximum = 0;
+    long double fp32_accumulator_maximum = 0;
+    long double fp32_intermediate_maximum = 0;
+    long double fp32_precision_maximum = 0;
     bool may_produce_non_finite = false;
 };
 
@@ -84,6 +87,11 @@ struct NumericSafetyReport {
     std::string gate_merge_bound;
     std::string gate_boundary_bound;
 
+    bool fpSafe() const noexcept {
+        return encodings_valid &&
+               fp32_accumulation != Fp32AccumulationClass::UnsafeNonFinite;
+    }
+
     bool safe() const noexcept {
         return int64_gemm_safe && bias_rescale_safe && int64_linear_accumulation_safe &&
                linear_output_rescale_safe && int64_linear_boundary_safe &&
@@ -98,5 +106,6 @@ struct NumericSafetyReport {
 NumericSafetyReport buildNumericSafetyReport(const NumericSafetyInput& input);
 
 void enforceNumericSafety(const NumericSafetyReport& report, bool require_exact_accumulation);
+void enforceFpNumericSafety(const NumericSafetyReport& report, bool require_exact_accumulation);
 
 }  // namespace quant_lstm::quantization

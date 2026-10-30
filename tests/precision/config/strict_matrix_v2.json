@@ -2099,7 +2099,7 @@
       "layout_profile": "time_major",
       "batch_first": false,
       "math_mode": "pedantic",
-      "fp32_accumulation_class": "exact_integer_range",
+      "fp32_accumulation_class": "precision_risk",
       "data_seeds": {
         "calibration": [
           0
@@ -2122,7 +2122,7 @@
         "bias_hh": "per_channel"
       },
       "directed_profiles": [
-        "fp32_exact_2pow24"
+        "fp32_precision_risk"
       ],
       "resolved_quant_config": {
         "schema_version": 1,
@@ -7402,7 +7402,7 @@
       },
       "directed_profiles": [
         "signed_asymmetric_minimum_boundary",
-        "fp32_exact_2pow24"
+        "fp32_precision_risk"
       ],
       "resolved_quant_config": {
         "schema_version": 1,
@@ -7496,7 +7496,7 @@
           }
         }
       },
-      "fp32_accumulation_class": "exact_integer_range"
+      "fp32_accumulation_class": "precision_risk"
     },
     {
       "case_id": "stage4_strict_cuda_fp32_short_int16",

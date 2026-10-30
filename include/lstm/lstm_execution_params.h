@@ -50,6 +50,10 @@ struct Q31Scale {
     static constexpr std::uint8_t kFractionalBits = 31;
 
     std::int64_t multiplier = 0;
+    // Q31 无法表示的比例只供 FP 执行使用，不属于公共序列化格式。
+    double fp_mantissa = 0.0;
+    std::int16_t fp_exponent = 0;
+    bool uses_fp_scale = false;
 };
 
 struct CellExecutionParams {
@@ -89,7 +93,7 @@ struct LstmExecutionParams {
 };
 
 // 从已完成校准的参数一次性派生全部 Linear、四门、Cell 与 Hidden 执行编码。
-// 无法证明整数边界安全时立即抛出；exact 模式还拒绝 FP32 精度风险。
+// FP 执行拒绝非有限上界；整数 reference 的安全性单独记录，exact 模式拒绝精度风险。
 LstmExecutionParams deriveLstmExecutionParams(const LstmOperatorQuantConfig& config,
                                               const LstmQuantParams& quant_params,
                                               std::int64_t input_size,

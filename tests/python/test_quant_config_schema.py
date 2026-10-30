@@ -103,7 +103,7 @@ class QuantConfigSchemaTest(unittest.TestCase):
             {"schema_version": 1, "pot_scale_tolerance": 0.02},
             {
                 "schema_version": 1,
-                "operators": {"input": {"bitwidth": 4}},
+                "operators": {"input": {"bitwidth": 33}},
             },
             {
                 "schema_version": 1,
@@ -142,6 +142,33 @@ class QuantConfigSchemaTest(unittest.TestCase):
         self.assertFalse(validator.is_valid(missing_operator))
         self.assertFalse(validator.is_valid(missing_field))
         self.assertFalse(validator.is_valid(extra_field))
+
+    def test_arbitrary_bitwidth_ranges_preserve_signedness_rules(self) -> None:
+        override_validator = StrictDraft202012Validator(self.override_schema)
+        resolved_validator = StrictDraft202012Validator(self.resolved_schema)
+        for bits in range(1, 34):
+            for unsigned in (False, True):
+                for symmetric in (False, True):
+                    config = {"bitwidth": bits, "is_unsigned": unsigned,
+                              "is_symmetric": symmetric}
+                    expected = bits <= (31 if unsigned else 32) and not (
+                        bits == 1 and not unsigned and symmetric)
+                    with self.subTest(**config):
+                        sparse = {"schema_version": 1, "operators": {"input": config}}
+                        resolved = copy.deepcopy(self.default)
+                        resolved["operators"]["input"].update(config)
+                        self.assertEqual(override_validator.is_valid(sparse), expected)
+                        self.assertEqual(resolved_validator.is_valid(resolved), expected)
+
+        for name in ("weight_ih", "weight_hh", "bias_ih", "bias_hh"):
+            for bits in (0, 1, 2, 3, 4, 7, 12, 31, 32, 33):
+                with self.subTest(operator=name, bitwidth=bits):
+                    sparse = {"schema_version": 1,
+                              "operators": {name: {"bitwidth": bits}}}
+                    resolved = copy.deepcopy(self.default)
+                    resolved["operators"][name]["bitwidth"] = bits
+                    self.assertEqual(override_validator.is_valid(sparse), 2 <= bits <= 32)
+                    self.assertEqual(resolved_validator.is_valid(resolved), 2 <= bits <= 32)
 
 
 if __name__ == "__main__":

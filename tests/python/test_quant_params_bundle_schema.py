@@ -79,6 +79,24 @@ class QuantParamsBundleSchemaTest(unittest.TestCase):
         float_zero_point["operators"]["input"]["zero_points"][0] = 0.0
         self.assertFalse(validator.is_valid(float_zero_point))
 
+    def test_arbitrary_bitwidth_bundle_types(self) -> None:
+        validator = StrictDraft202012Validator(self.schema)
+        for bits in (0, 1, 2, 3, 4, 7, 12, 24, 31, 32, 33):
+            for unsigned, symmetric in ((False, False), (False, True),
+                                        (True, False), (True, True)):
+                with self.subTest(bitwidth=bits, unsigned=unsigned, symmetric=symmetric):
+                    bundle = self.make_bundle()
+                    bundle["operators"]["input"].update(
+                        bitwidth=bits, is_unsigned=unsigned, is_symmetric=symmetric)
+                    expected = 1 <= bits <= (31 if unsigned else 32) and not (
+                        bits == 1 and not unsigned and symmetric)
+                    self.assertEqual(validator.is_valid(bundle), expected)
+            for name in ("weight_ih", "weight_hh", "bias_ih", "bias_hh"):
+                with self.subTest(operator=name, bitwidth=bits):
+                    bundle = self.make_bundle()
+                    bundle["operators"][name]["bitwidth"] = bits
+                    self.assertEqual(validator.is_valid(bundle), 2 <= bits <= 32)
+
 
 if __name__ == "__main__":
     unittest.main()

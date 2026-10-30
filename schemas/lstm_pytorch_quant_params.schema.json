@@ -78,14 +78,20 @@
         "real_max"
       ],
       "properties": {
-        "dtype": {"enum": ["INT8", "UINT8", "INT16", "UINT16"]},
+        "dtype": {"type": "string", "pattern": "^(?:INT(?:[1-9]|[12][0-9]|3[0-2])|UINT(?:[1-9]|[12][0-9]|3[01]))$"},
         "symmetric": {"type": "boolean"},
         "scale": {"$ref": "#/$defs/number_or_array"},
         "zero_point": {"$ref": "#/$defs/integer_or_array"},
         "enc_type": {"enum": ["PER_TENSOR", "PER_GATE", "PER_CHANNEL"]},
         "real_min": {"$ref": "#/$defs/number_or_array"},
         "real_max": {"$ref": "#/$defs/number_or_array"}
-      }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"dtype": {"const": "INT1"}}},
+          "then": {"properties": {"symmetric": {"const": false}}}
+        }
+      ]
     },
     "operators": {
       "type": "object",

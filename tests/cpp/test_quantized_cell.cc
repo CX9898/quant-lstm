@@ -99,6 +99,23 @@ int main() {
             fp.value == static_cast<float>(integer.value) && fp.diagnostics.pre_round_sum == 12.0F,
             "Cell FP 模拟相同 Q31 编码");
 
+        auto tiny_ratio = makeCellParams();
+        tiny_ratio.old_cell = signedPoint(1.0F);
+        tiny_ratio.new_cell = signedPoint(1.0F);
+        tiny_ratio.input_gate = {{std::ldexp(1.0F, -20), 0}, {22, false, false}};
+        tiny_ratio.cell_gate = tiny_ratio.input_gate;
+        tiny_ratio.input_scale = {0, 0.5, -39, true};
+        const auto tiny_fp = quant_lstm::computeQuantizedCellFp(
+            0.0F, 0.0F, 1048576.0F, 1048576.0F, tiny_ratio);
+        require(tiny_fp.value == 1.0F && !tiny_fp.diagnostics.input_contribution_vanished,
+                "FP Cell must preserve a 2^-40 contribution beyond fixed Q31 resolution");
+        requireThrows(
+            [&] {
+                static_cast<void>(quant_lstm::computeQuantizedCellInt(
+                    0, 0, 1048576, 1048576, tiny_ratio));
+            },
+            "integer reference must reject FP-only cell scaling");
+
         auto delayed_round = makeCellParams();
         delayed_round.forget_gate = signedPoint(1.0F);
         delayed_round.old_cell = signedPoint(1.0F);
@@ -161,6 +178,39 @@ int main() {
                         execution.diagnostics.cell.safe() && execution.diagnostics.hidden.safe(),
                     "集中派生 Q31 与 NumericSafety diagnostics");
         }
+
+        auto wide_config = makeConfig(quant_lstm::quantization::ScaleMode::Affine);
+        for (auto& value : wide_config.operators) {
+            value.type.bitwidth = value.type.is_unsigned ? 31 : 32;
+        }
+        const auto wide_params = makeQuantParams(wide_config);
+        const auto wide_execution = quant_lstm::deriveLstmExecutionParams(wide_config, wide_params, 16);
+        const auto& wide_report = wide_execution.diagnostics.input_hidden_linear.front();
+        require(wide_report.fpSafe() && !wide_report.safe() && !wide_report.int64_gemm_safe,
+                "finite FP GEMM must not require a false INT64 safety proof");
+        requireThrows(
+            [&] {
+                static_cast<void>(quant_lstm::deriveLstmExecutionParams(
+                    wide_config, wide_params, 16, true));
+            },
+            "exact accumulation mode still rejects wide FP precision risk");
+
+        auto asymmetric_config = makeConfig(quant_lstm::quantization::ScaleMode::Pot2);
+        asymmetric_config.at(quant_lstm::QuantOperator::Input).type = {8, true, false};
+        auto asymmetric_params = makeQuantParams(asymmetric_config);
+        asymmetric_params.operators[static_cast<std::size_t>(quant_lstm::QuantOperator::Input)]
+            .values[0].zero_point = 128;
+        const auto asymmetric_execution =
+            quant_lstm::deriveLstmExecutionParams(asymmetric_config, asymmetric_params, 1000);
+        require(asymmetric_execution.diagnostics.input_hidden_linear.front().fp32_accumulation ==
+                    quant_lstm::quantization::Fp32AccumulationClass::PrecisionRisk,
+                "FP safety must include raw SGEMM before zero-point compensation");
+        requireThrows(
+            [&] {
+                static_cast<void>(quant_lstm::deriveLstmExecutionParams(
+                    asymmetric_config, asymmetric_params, 1000, true));
+            },
+            "exact mode must reject imprecise raw SGEMM even if centered bounds fit");
 
         const auto config = makeConfig(quant_lstm::quantization::ScaleMode::Affine);
         const auto params = makeQuantParams(config);

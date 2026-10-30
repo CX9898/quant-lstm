@@ -200,11 +200,7 @@ std::uint8_t readBitwidth(const Json& value) {
     if (!value.is_number_integer()) {
         throw std::invalid_argument("bitwidth 必须是 JSON integer");
     }
-    const auto bitwidth = value.get<std::int64_t>();
-    if (bitwidth != 8 && bitwidth != 16) {
-        throw std::invalid_argument("bitwidth 只允许 8 或 16");
-    }
-    return static_cast<std::uint8_t>(bitwidth);
+    return quantization::QuantizationType::checkedBitwidth(value.get<std::int64_t>());
 }
 
 bool readBoolean(const Json& value, std::string_view field) {

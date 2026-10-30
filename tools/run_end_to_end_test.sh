@@ -137,6 +137,7 @@ printf '\n==> Run PyTorch functional and strict suites\n'
     "${python_bin}" tests/test_float_reference.py
   "${python_bin}" -m unittest -v \
     tests.test_quantized_interface \
+    tests.test_bitwidth \
     tests.test_aimet_interface \
     tests.test_bias_headroom \
     tests.test_bidirectional_interface \

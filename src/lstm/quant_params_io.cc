@@ -102,11 +102,8 @@ OperatorQuantConfig parseOperatorConfig(QuantOperator id, const Json& value) {
         value, {"bitwidth", "is_unsigned", "is_symmetric", "granularity", "scales", "zero_points"},
         quantOperatorName(id));
     OperatorQuantConfig result;
-    const auto bitwidth = requiredInteger<std::int32_t>(value, "bitwidth");
-    if (bitwidth != 8 && bitwidth != 16) {
-        throw std::invalid_argument("bitwidth 只允许 8 或 16");
-    }
-    result.type.bitwidth = static_cast<std::uint8_t>(bitwidth);
+    result.type.bitwidth = quantization::QuantizationType::checkedBitwidth(
+        requiredInteger<std::int64_t>(value, "bitwidth"));
     result.type.is_unsigned = requiredBoolean(value, "is_unsigned");
     result.type.is_symmetric = requiredBoolean(value, "is_symmetric");
     result.granularity = parseGranularity(requiredString(value, "granularity"));

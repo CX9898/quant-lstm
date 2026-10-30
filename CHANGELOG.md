@@ -23,11 +23,16 @@
 
 ### Added
 
+- 各量化点独立支持 signed 1-32 位、unsigned 1-31 位，权重和偏置支持 2-32 位；
+  JSON 字段和版本保持不变。保留 FP32 q-carrier、SGEMM 和 STE，高位宽精度风险
+  由 `precision_risk` 记录，`require_exact_accumulation=True` 可明确拒绝。
+- 同步任意位宽配置、原生与公共编码回读、I8W4 校准和 CUDA QAT 回归；独立套件
+  直接校验 Po2 编码，不依赖 rx-met compiler 或 AIMET。
 - 不依赖 native checkpoint/mask 的量化前向与 QAT autograd oracle，加入默认 E2E；
   增加配置矩阵、图与状态生命周期、非连续 tensor 和 CUDA stream 正确性验证。
 
 - 单层单向和双向 `QuantLSTM` CUDA FP32 forward/backward。
-- CUDA FP32 q-carrier INT8、INT16 和混合位宽量化前向与 QAT backward。
+- CUDA FP32 q-carrier 任意合法位宽和混合位宽量化前向与 QAT backward。
 - CUDA MinMax、SQNR 和 Percentile 校准，以及 GRU-compatible v1 参数交换格式。
 - CPU FP32 q-carrier 与 CPU int32 carrier reference。
 - 标准 ONNX `LSTM` 导出、CMake package 和 CPU-only 外部 consumer 验证。
@@ -55,6 +60,8 @@
 
 ### Fixed
 
+- 高位宽 FP32 端点和大 zero point 保持在数学量化域内；Cell 比例超出 Q31
+  表示范围时使用内部浮点编码，整数 reference 明确拒绝仅 FP 可执行的配置。
 - CPU eval 前向与校准接受默认梯度上下文，覆盖全部输出及输入、状态和参数依赖；
   不保留原生推理缓存，反向传播明确拒绝，兼容原地激活与混合线性网络。
 - 校准后执行 `enable_pot2()` 时，按新 scale 重新计算非对称 zero point 和实数范围；

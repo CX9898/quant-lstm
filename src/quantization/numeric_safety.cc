@@ -1,5 +1,6 @@
 #include "quantization/numeric_safety.h"
 
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 
@@ -83,8 +84,7 @@ RescaleAnalysis analyzeRescale(const EncodedRescaleSafetyInput& input) {
         return analysis;
     }
     if (input.shift < std::numeric_limits<std::int8_t>::min() ||
-        input.shift > std::numeric_limits<std::int8_t>::max() || input.shift <= -127 ||
-        input.source_maximum > kInt64Limit) {
+        input.shift > std::numeric_limits<std::int8_t>::max() || input.shift <= -127) {
         return analysis;
     }
 
@@ -103,6 +103,9 @@ RescaleAnalysis analyzeRescale(const EncodedRescaleSafetyInput& input) {
         }
         analysis.encoding_valid = true;
     } else {
+        return analysis;
+    }
+    if (input.source_maximum > kInt64Limit) {
         return analysis;
     }
 
@@ -128,9 +131,13 @@ RescaleAnalysis analyzeRescale(const EncodedRescaleSafetyInput& input) {
 
 RescaleAnalysis analyzeChainedRescale(const EncodedRescaleSafetyInput& input,
                                       Unsigned128 source_bound) {
-    if (source_bound > kInt64Limit ||
-        (input.source_maximum != 0 && input.source_maximum != source_bound)) {
+    if (input.source_maximum != 0 && input.source_maximum != source_bound) {
         return {};
+    }
+    if (source_bound > kInt64Limit) {
+        auto result = analyzeRescale(input);
+        result.safe = false;
+        return result;
     }
     EncodedRescaleSafetyInput chained = input;
     chained.source_maximum = static_cast<std::uint64_t>(source_bound);
@@ -193,7 +200,7 @@ NumericSafetyReport buildNumericSafetyReport(const NumericSafetyInput& input) {
     Unsigned128 cell_q31_bound = cell_product.bound;
     const bool q31_multiplier_safe = input.q31_multiplier_maximum <= kInt64Limit;
     const bool cell_q31_representable =
-        cell_product.safe && q31_multiplier_safe &&
+        input.cell_q31_available && cell_product.safe && q31_multiplier_safe &&
         checkedMultiply(cell_q31_bound, input.q31_multiplier_maximum, kInt128Limit,
                         &cell_q31_bound) &&
         checkedMultiply(cell_q31_bound, 2U, kInt128Limit, &cell_q31_bound);
@@ -268,9 +275,14 @@ NumericSafetyReport buildNumericSafetyReport(const NumericSafetyInput& input) {
     report.gate_boundary_bound = "unsupported";
 #endif
 
-    if (input.may_produce_non_finite) {
+    if (input.may_produce_non_finite || !std::isfinite(input.fp32_accumulator_maximum) ||
+        !std::isfinite(input.fp32_intermediate_maximum) ||
+        !std::isfinite(input.fp32_precision_maximum) ||
+        input.fp32_accumulator_maximum > std::numeric_limits<float>::max() ||
+        input.fp32_intermediate_maximum > std::numeric_limits<float>::max()) {
         report.fp32_accumulation = Fp32AccumulationClass::UnsafeNonFinite;
-    } else if (input.fp32_accumulator_maximum < (std::uint64_t{1} << 24U)) {
+    } else if (input.fp32_accumulator_maximum < (std::uint64_t{1} << 24U) &&
+               input.fp32_precision_maximum < (std::uint64_t{1} << 24U)) {
         report.fp32_accumulation = Fp32AccumulationClass::ExactIntegerRange;
     } else {
         report.fp32_accumulation = Fp32AccumulationClass::PrecisionRisk;
@@ -281,6 +293,16 @@ NumericSafetyReport buildNumericSafetyReport(const NumericSafetyInput& input) {
 void enforceNumericSafety(const NumericSafetyReport& report, bool require_exact_accumulation) {
     if (!report.safe()) {
         throw std::overflow_error("NumericSafetyReport 无法证明执行安全");
+    }
+    if (require_exact_accumulation &&
+        report.fp32_accumulation != Fp32AccumulationClass::ExactIntegerRange) {
+        throw std::overflow_error("require_exact_accumulation 拒绝 FP32 precision_risk");
+    }
+}
+
+void enforceFpNumericSafety(const NumericSafetyReport& report, bool require_exact_accumulation) {
+    if (!report.fpSafe()) {
+        throw std::overflow_error("NumericSafetyReport 无法证明 FP 执行安全");
     }
     if (require_exact_accumulation &&
         report.fp32_accumulation != Fp32AccumulationClass::ExactIntegerRange) {

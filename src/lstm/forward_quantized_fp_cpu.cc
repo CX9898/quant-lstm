@@ -24,21 +24,22 @@ float linearValue(const float* vector, const float* weights, const float* bias, 
         const float value = vector[column];
         requireGrid(weight, weight_point);
         requireGrid(value, params.input);
-        accumulator += (weight - static_cast<float>(weight_point.param.zero_point)) *
-                       (value - static_cast<float>(params.input.param.zero_point));
+        accumulator += quantization::centerFloatCarrierCore(weight, weight_point.param.zero_point) *
+                       quantization::centerFloatCarrierCore(value, params.input.param.zero_point);
     }
     if (!std::isfinite(accumulator)) {
         throw std::overflow_error("FP carrier GEMM 产生 Inf/NaN");
     }
     if (bias != nullptr) {
         requireGrid(bias[channel], params.biases.at(channel));
-        const float centered_bias =
-            bias[channel] - static_cast<float>(params.biases.at(channel).param.zero_point);
+        const float centered_bias = quantization::centerFloatCarrierCore(
+            bias[channel], params.biases.at(channel).param.zero_point);
         accumulator += applyExecutionRescale(centered_bias, params.bias_to_accumulator.at(channel));
     }
-    const float output =
-        applyExecutionRescale(accumulator, params.accumulator_to_output.at(channel)) +
-        static_cast<float>(params.output.param.zero_point);
+    const double output =
+        static_cast<double>(
+            applyExecutionRescale(accumulator, params.accumulator_to_output.at(channel))) +
+        params.output.param.zero_point;
     return clampFp(output, params.output);
 }
 
@@ -90,8 +91,10 @@ void lstmForwardQuantizedFpCpuReference(
     std::vector<float> linear_hh(batch * channels);
     std::vector<float> gate_inputs(batch * channels);
     std::vector<float> gate_outputs(batch * channels);
-    const float hidden_zero = static_cast<float>(execution_params.hidden.output.param.zero_point);
-    const float cell_zero = static_cast<float>(execution_params.cell.old_cell.param.zero_point);
+    const float hidden_zero = quantization::quantizeFp(
+        0.0F, execution_params.hidden.output.param, execution_params.hidden.output.type);
+    const float cell_zero = quantization::quantizeFp(
+        0.0F, execution_params.cell.old_cell.param, execution_params.cell.old_cell.type);
     for (std::size_t index = 0; index < batch * hidden; ++index) {
         hidden_state[index] = initial_hidden == nullptr ? hidden_zero : initial_hidden[index];
         cell_state[index] = initial_cell == nullptr ? cell_zero : initial_cell[index];
@@ -114,15 +117,15 @@ void lstmForwardQuantizedFpCpuReference(
                 const std::size_t gate = channel / hidden;
                 const GateExecutionParams& gate_params = execution_params.gates.at(gate);
                 const float lhs = applyExecutionRescale(
-                    linear_ih[index] -
-                        static_cast<float>(gate_params.input_hidden_linear.param.zero_point),
+                    quantization::centerFloatCarrierCore(
+                        linear_ih[index], gate_params.input_hidden_linear.param.zero_point),
                     gate_params.input_hidden_to_gate);
                 const float rhs = applyExecutionRescale(
-                    linear_hh[index] -
-                        static_cast<float>(gate_params.hidden_hidden_linear.param.zero_point),
+                    quantization::centerFloatCarrierCore(
+                        linear_hh[index], gate_params.hidden_hidden_linear.param.zero_point),
                     gate_params.hidden_hidden_to_gate);
                 gate_inputs[index] =
-                    clampFp(lhs + rhs + static_cast<float>(gate_params.gate_input.param.zero_point),
+                    clampFp(static_cast<double>(lhs + rhs) + gate_params.gate_input.param.zero_point,
                             gate_params.gate_input);
                 const auto activation = gate == static_cast<std::size_t>(GateKind::Cell)
                                             ? quantization::RealActivationKind::Tanh
@@ -140,13 +143,13 @@ void lstmForwardQuantizedFpCpuReference(
                     return row * channels + gateOffset(gate, hidden) + column;
                 };
                 const auto centeredGate = [&](GateKind gate, const QuantizedPoint& point) {
-                    return gate_outputs[gateIndex(gate)] -
-                           static_cast<float>(point.param.zero_point);
+                    return quantization::centerFloatCarrierCore(
+                        gate_outputs[gateIndex(gate)], point.param.zero_point);
                 };
                 const float p_forget =
                     centeredGate(GateKind::Forget, execution_params.cell.forget_gate) *
-                    (cell_state[state_index] -
-                     static_cast<float>(execution_params.cell.old_cell.param.zero_point));
+                    quantization::centerFloatCarrierCore(
+                        cell_state[state_index], execution_params.cell.old_cell.param.zero_point);
                 const float p_input =
                     centeredGate(GateKind::Input, execution_params.cell.input_gate) *
                     centeredGate(GateKind::Cell, execution_params.cell.cell_gate);

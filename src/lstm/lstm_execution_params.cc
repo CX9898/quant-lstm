@@ -33,6 +33,11 @@ std::uint64_t centeredMaximum(const QuantizedPoint& point) {
                     magnitude(static_cast<std::int64_t>(range.maximum) - point.param.zero_point));
 }
 
+std::uint64_t uncenteredMaximum(const QuantizedPoint& point) {
+    const auto range = point.type.range();
+    return std::max(magnitude(range.minimum), magnitude(range.maximum));
+}
+
 QuantizedPoint point(const LstmOperatorQuantConfig& config, const LstmQuantParams& params,
                      QuantOperator id, std::size_t channel = 0) {
     const auto& values = params.at(id).values;
@@ -50,12 +55,21 @@ float productScale(float lhs, float rhs) {
     return result;
 }
 
-Q31Scale encodeQ31(double ratio) {
+Q31Scale encodeCellScale(double ratio) {
     if (!std::isfinite(ratio) || ratio <= 0.0) {
         throw std::invalid_argument("Cell Q31 ratio 必须是有限正数");
     }
-    return {
-        quantization::roundToInteger<std::int64_t>(std::ldexp(ratio, Q31Scale::kFractionalBits))};
+    const double scaled = std::ldexp(ratio, Q31Scale::kFractionalBits);
+    if (std::isfinite(scaled) && scaled > 0.5 &&
+        scaled < static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
+        return {quantization::roundToInteger<std::int64_t>(scaled)};
+    }
+    Q31Scale result;
+    int exponent = 0;
+    result.fp_mantissa = std::frexp(ratio, &exponent);
+    result.fp_exponent = static_cast<std::int16_t>(exponent);
+    result.uses_fp_scale = true;
+    return result;
 }
 
 ExecutionRescale encode(quantization::ScaleMode mode, float source, float destination) {
@@ -84,51 +98,32 @@ quantization::EncodedRescaleSafetyInput safetyEncoding(const ExecutionRescale& v
     throw std::invalid_argument("ExecutionRescaleKind 枚举值非法");
 }
 
-std::uint64_t checkedMul(std::uint64_t lhs, std::uint64_t rhs) {
-    if (lhs != 0 && rhs > std::numeric_limits<std::uint64_t>::max() / lhs) {
-        throw std::overflow_error("执行上界乘法超出 uint64");
-    }
-    return lhs * rhs;
+long double cellScaleRatio(const Q31Scale& scale) {
+    return scale.uses_fp_scale
+               ? std::ldexp(static_cast<long double>(scale.fp_mantissa), scale.fp_exponent)
+               : std::ldexp(static_cast<long double>(scale.multiplier),
+                            -Q31Scale::kFractionalBits);
 }
 
-std::uint64_t checkedAdd(std::uint64_t lhs, std::uint64_t rhs) {
-    if (rhs > std::numeric_limits<std::uint64_t>::max() - lhs) {
-        throw std::overflow_error("执行上界加法超出 uint64");
+long double rescaleBound(long double source, const ExecutionRescale& value,
+                         long double* maximum, long double* precision_maximum) {
+    const bool m_shift = value.kind == ExecutionRescaleKind::MShift;
+    unsigned int effective_multiplier = m_shift ? value.m_shift.multiplier : 1U;
+    const long double intermediate = source * effective_multiplier;
+    while ((effective_multiplier & 1U) == 0U && effective_multiplier != 0) {
+        effective_multiplier >>= 1U;
     }
-    return lhs + rhs;
-}
-
-std::uint64_t cellFpBound(std::uint64_t product, std::int64_t forget_multiplier,
-                          std::int64_t input_multiplier) {
-    if (forget_multiplier < 0 || input_multiplier < 0) {
-        throw std::invalid_argument("Cell Q31 multiplier 不能为负");
-    }
-    const long double multiplier_sum =
-        static_cast<long double>(forget_multiplier) + static_cast<long double>(input_multiplier);
-    const long double bound =
-        std::ldexp(static_cast<long double>(product) * multiplier_sum, -Q31Scale::kFractionalBits);
-    if (!std::isfinite(bound) ||
-        bound > static_cast<long double>(std::numeric_limits<std::uint64_t>::max())) {
-        return std::numeric_limits<std::uint64_t>::max();
-    }
-    return static_cast<std::uint64_t>(std::ceil(bound));
-}
-
-std::uint64_t rescaleBound(std::uint64_t source, const ExecutionRescale& value) {
-    if (source > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
-        throw std::overflow_error("执行 rescale 上界超出 int64");
-    }
-    const auto result = applyExecutionRescale(static_cast<std::int64_t>(source), value);
-    if (result < 0) {
-        throw std::runtime_error("正数上界 rescale 不应产生负数");
-    }
-    return static_cast<std::uint64_t>(result);
+    *precision_maximum = std::max(*precision_maximum, source * effective_multiplier);
+    const int shift = m_shift ? value.m_shift.shift : value.pot2.shift;
+    const long double result = std::ceil(std::ldexp(intermediate, -shift));
+    *maximum = std::max({*maximum, intermediate, result});
+    return result;
 }
 
 quantization::NumericSafetyReport enforce(const quantization::NumericSafetyInput& input,
                                           bool exact) {
     auto report = quantization::buildNumericSafetyReport(input);
-    quantization::enforceNumericSafety(report, exact);
+    quantization::enforceFpNumericSafety(report, exact);
     return report;
 }
 
@@ -159,20 +154,33 @@ void buildLinear(const LstmOperatorQuantConfig& config, const LstmQuantParams& p
         safety.gemm_reduction = reduction;
         safety.gemm_lhs_maximum = centeredMaximum(result->input);
         safety.gemm_rhs_maximum = centeredMaximum(result->weights.back());
-        std::uint64_t bound =
-            checkedMul(checkedMul(reduction, safety.gemm_lhs_maximum), safety.gemm_rhs_maximum);
+        long double bound = static_cast<long double>(reduction) * safety.gemm_lhs_maximum *
+                            safety.gemm_rhs_maximum;
+        const long double weight_sum_bound =
+            static_cast<long double>(reduction) * uncenteredMaximum(result->weights.back());
+        const long double raw_gemm_bound = weight_sum_bound * uncenteredMaximum(result->input);
+        const long double zero_point_correction_bound =
+            weight_sum_bound * magnitude(result->input.param.zero_point);
+        long double maximum = std::max(bound, raw_gemm_bound + zero_point_correction_bound);
+        long double precision_maximum = 0;
         if (params.bias_enabled) {
             result->biases.push_back(point(config, params, bias_id, channel));
             result->bias_to_accumulator.push_back(
                 encode(config.scale_mode, result->biases.back().param.scale, accumulator_scale));
             const auto bias_bound = centeredMaximum(result->biases.back());
             safety.bias_rescale = safetyEncoding(result->bias_to_accumulator.back(), bias_bound);
-            bound = checkedAdd(bound, rescaleBound(bias_bound, result->bias_to_accumulator.back()));
+            bound += rescaleBound(bias_bound, result->bias_to_accumulator.back(), &maximum,
+                                   &precision_maximum);
         }
         safety.linear_output_rescale = safetyEncoding(result->accumulator_to_output.back(), 0);
         safety.linear_target_zero_point_maximum = magnitude(result->output.param.zero_point);
+        const auto output_bound =
+            rescaleBound(bound, result->accumulator_to_output.back(), &maximum, &precision_maximum);
         safety.fp32_accumulator_maximum =
-            std::max(bound, rescaleBound(bound, result->accumulator_to_output.back()));
+            std::max({bound, raw_gemm_bound, zero_point_correction_bound,
+                      output_bound + safety.linear_target_zero_point_maximum});
+        safety.fp32_intermediate_maximum = maximum;
+        safety.fp32_precision_maximum = precision_maximum;
         reports->push_back(enforce(safety, exact));
     }
 }
@@ -245,9 +253,16 @@ LstmExecutionParams deriveLstmExecutionParams(const LstmOperatorQuantConfig& con
         safety.gate_lhs_rescale = safetyEncoding(output.input_hidden_to_gate, lhs);
         safety.gate_rhs_rescale = safetyEncoding(output.hidden_hidden_to_gate, rhs);
         safety.gate_target_zero_point_maximum = magnitude(output.gate_input.param.zero_point);
+        long double maximum = 0;
+        long double precision_maximum = 0;
+        const auto lhs_bound =
+            rescaleBound(lhs, output.input_hidden_to_gate, &maximum, &precision_maximum);
+        const auto rhs_bound =
+            rescaleBound(rhs, output.hidden_hidden_to_gate, &maximum, &precision_maximum);
         safety.fp32_accumulator_maximum =
-            checkedAdd(rescaleBound(lhs, output.input_hidden_to_gate),
-                       rescaleBound(rhs, output.hidden_hidden_to_gate));
+            lhs_bound + rhs_bound + safety.gate_target_zero_point_maximum;
+        safety.fp32_intermediate_maximum = maximum;
+        safety.fp32_precision_maximum = precision_maximum;
         result.diagnostics.gates[gate] = enforce(safety, require_exact_accumulation);
     }
 
@@ -257,10 +272,10 @@ LstmExecutionParams deriveLstmExecutionParams(const LstmOperatorQuantConfig& con
     result.cell.cell_gate = result.gates[2].gate_output;
     result.cell.new_cell = result.cell.old_cell;
     result.cell.forget_scale =
-        encodeQ31(static_cast<double>(result.cell.forget_gate.param.scale) *
+        encodeCellScale(static_cast<double>(result.cell.forget_gate.param.scale) *
                   result.cell.old_cell.param.scale / result.cell.new_cell.param.scale);
     result.cell.input_scale =
-        encodeQ31(static_cast<double>(result.cell.input_gate.param.scale) *
+        encodeCellScale(static_cast<double>(result.cell.input_gate.param.scale) *
                   result.cell.cell_gate.param.scale / result.cell.new_cell.param.scale);
     quantization::NumericSafetyInput cell_safety;
     cell_safety.cell_lhs_maximum =
@@ -269,11 +284,16 @@ LstmExecutionParams deriveLstmExecutionParams(const LstmOperatorQuantConfig& con
         std::max(centeredMaximum(result.cell.old_cell), centeredMaximum(result.cell.cell_gate));
     cell_safety.q31_multiplier_maximum = static_cast<std::uint64_t>(
         std::max(result.cell.forget_scale.multiplier, result.cell.input_scale.multiplier));
+    cell_safety.cell_q31_available =
+        !result.cell.forget_scale.uses_fp_scale && !result.cell.input_scale.uses_fp_scale;
     cell_safety.cell_fractional_bits = Q31Scale::kFractionalBits;
     cell_safety.cell_target_zero_point_maximum = magnitude(result.cell.new_cell.param.zero_point);
-    cell_safety.fp32_accumulator_maximum =
-        cellFpBound(checkedMul(cell_safety.cell_lhs_maximum, cell_safety.cell_rhs_maximum),
-                    result.cell.forget_scale.multiplier, result.cell.input_scale.multiplier);
+    const long double cell_product = static_cast<long double>(cell_safety.cell_lhs_maximum) *
+                                     cell_safety.cell_rhs_maximum;
+    cell_safety.fp32_accumulator_maximum = std::max(
+        cell_product, std::ceil(cell_product * (cellScaleRatio(result.cell.forget_scale) +
+                                               cellScaleRatio(result.cell.input_scale))) +
+                          cell_safety.cell_target_zero_point_maximum);
     result.diagnostics.cell = enforce(cell_safety, require_exact_accumulation);
 
     result.hidden.output_gate = result.gates[3].gate_output;
@@ -286,13 +306,20 @@ LstmExecutionParams deriveLstmExecutionParams(const LstmOperatorQuantConfig& con
     quantization::NumericSafetyInput hidden_safety;
     hidden_safety.hidden_lhs_maximum = centeredMaximum(result.hidden.output_gate);
     hidden_safety.hidden_rhs_maximum = centeredMaximum(result.hidden.cell_tanh);
-    const auto hidden_product =
-        checkedMul(hidden_safety.hidden_lhs_maximum, hidden_safety.hidden_rhs_maximum);
+    const long double hidden_product =
+        static_cast<long double>(hidden_safety.hidden_lhs_maximum) * hidden_safety.hidden_rhs_maximum;
     hidden_safety.hidden_rescale = safetyEncoding(result.hidden.product_to_output, 0);
     hidden_safety.hidden_target_zero_point_maximum =
         magnitude(result.hidden.output.param.zero_point);
+    long double hidden_maximum = hidden_product;
+    long double hidden_precision_maximum = 0;
+    const auto hidden_rescaled =
+        rescaleBound(hidden_product, result.hidden.product_to_output, &hidden_maximum,
+                      &hidden_precision_maximum);
     hidden_safety.fp32_accumulator_maximum =
-        std::max(hidden_product, rescaleBound(hidden_product, result.hidden.product_to_output));
+        std::max(hidden_product, hidden_rescaled + hidden_safety.hidden_target_zero_point_maximum);
+    hidden_safety.fp32_intermediate_maximum = hidden_maximum;
+    hidden_safety.fp32_precision_maximum = hidden_precision_maximum;
     result.diagnostics.hidden = enforce(hidden_safety, require_exact_accumulation);
     return result;
 #endif

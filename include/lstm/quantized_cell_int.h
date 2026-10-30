@@ -72,6 +72,9 @@ inline QuantizedCellIntResult computeQuantizedCellInt(std::int32_t forget_gate,
                                                       std::int32_t input_gate,
                                                       std::int32_t cell_gate,
                                                       const CellExecutionParams& params) {
+    if (params.forget_scale.uses_fp_scale || params.input_scale.uses_fp_scale) {
+        throw std::invalid_argument("整数 reference 不支持 Cell FP scale 编码");
+    }
     QuantizedCellIntResult result;
     const std::int64_t centered_forget = detail::centeredValue(forget_gate, params.forget_gate);
     const std::int64_t centered_old_cell = detail::centeredValue(old_cell, params.old_cell);

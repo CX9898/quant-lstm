@@ -10,6 +10,7 @@
 #include "lstm/forward_cpu.h"
 #include "lstm/gate_layout.h"
 #include "lstm/lstm_execution_params.h"
+#include "quantization/float_carrier_ops.h"
 #include "quantization/rounding.h"
 
 namespace quant_lstm::reference_detail {
@@ -34,20 +35,16 @@ inline std::int32_t clampInt(std::int64_t value, const QuantizedPoint& point) {
     return static_cast<std::int32_t>(std::clamp<std::int64_t>(value, range.minimum, range.maximum));
 }
 
-inline float clampFp(float value, const QuantizedPoint& point) {
+inline float clampFp(double value, const QuantizedPoint& point) {
     if (!std::isfinite(value)) {
         throw std::overflow_error("FP carrier 边界值产生 Inf/NaN");
     }
     const auto range = point.type.range();
-    return std::clamp(value, static_cast<float>(range.minimum), static_cast<float>(range.maximum));
+    return quantization::clampFloatCarrierCore(value, range.minimum, range.maximum);
 }
 
 inline void requireGrid(float value, const QuantizedPoint& point) {
-    const auto range = point.type.range();
-    if (!std::isfinite(value) || quantization::roundToNearestEven(value) != value ||
-        value < static_cast<float>(range.minimum) || value > static_cast<float>(range.maximum)) {
-        throw std::invalid_argument("FP carrier 输入必须位于合法整数网格");
-    }
+    quantization::validateFloatCarrierValue(value, point.type);
 }
 
 inline std::int64_t checkedAdd(std::int64_t lhs, std::int64_t rhs) {

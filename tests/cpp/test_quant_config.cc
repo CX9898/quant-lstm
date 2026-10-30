@@ -159,6 +159,46 @@ int main() {
         }
 
         const std::string defaults_json = quant_lstm::toCanonicalJson(defaults);
+        for (int bits = 2; bits <= 32; ++bits) {
+            const std::string arbitrary_override =
+                "{\"schema_version\":1,\"operators\":{\"input\":{\"bitwidth\":" +
+                std::to_string(bits) + "},\"weight_ih\":{\"bitwidth\":" +
+                std::to_string(bits) + "},\"weight_hh\":{\"bitwidth\":" +
+                std::to_string(bits) + "}}}";
+            const auto arbitrary = quant_lstm::resolveQuantConfig(defaults_json, arbitrary_override);
+            for (const auto id : {quant_lstm::QuantOperator::Input,
+                                  quant_lstm::QuantOperator::WeightInputHidden,
+                                  quant_lstm::QuantOperator::WeightHiddenHidden}) {
+                require(arbitrary.at(id).type.bitwidth == bits,
+                        "arbitrary signed bitwidth must resolve without rounding");
+            }
+            const std::string serialized = quant_lstm::toCanonicalJson(arbitrary);
+            require(quant_lstm::toCanonicalJson(quant_lstm::parseResolvedQuantConfig(serialized)) ==
+                        serialized,
+                    "arbitrary signed bitwidth canonical round-trip");
+        }
+        for (int bits = 1; bits <= 31; ++bits) {
+            const auto arbitrary = quant_lstm::resolveQuantConfig(
+                defaults_json,
+                "{\"schema_version\":1,\"operators\":{\"input\":{\"bitwidth\":" +
+                    std::to_string(bits) + ",\"is_unsigned\":true,\"is_symmetric\":false}}}");
+            const auto& type = arbitrary.at(quant_lstm::QuantOperator::Input).type;
+            require(type.bitwidth == bits && type.is_unsigned && !type.is_symmetric,
+                    "arbitrary unsigned bitwidth must resolve without rounding");
+            require(type.range().minimum == 0 &&
+                        type.range().maximum == (std::int64_t{1} << bits) - 1,
+                    "arbitrary unsigned integer range");
+            const std::string serialized = quant_lstm::toCanonicalJson(arbitrary);
+            require(quant_lstm::toCanonicalJson(quant_lstm::parseResolvedQuantConfig(serialized)) ==
+                        serialized,
+                    "arbitrary unsigned bitwidth canonical round-trip");
+        }
+        const auto int1 = quant_lstm::resolveQuantConfig(
+            defaults_json,
+            R"({"schema_version":1,"operators":{"input":{"bitwidth":1,"is_unsigned":false,"is_symmetric":false}}})");
+        const auto int1_range = int1.at(quant_lstm::QuantOperator::Input).type.range();
+        require(int1_range.minimum == -1 && int1_range.maximum == 0,
+                "signed asymmetric INT1 range");
         std::string pure_int16_override =
             R"({"schema_version":1,"scale_mode":"affine","operators":{)";
         for (std::size_t index = 0; index < quant_lstm::kQuantOperatorCount; ++index) {
@@ -218,7 +258,13 @@ int main() {
             R"({"schema_version":1,"operators":{"input":{"bitwidth":8,"bitwidth":16}}})");
         reject_override(R"({"schema_version":1,"unknown":1})");
         reject_override(R"({"schema_version":1,"scale_mode":null})");
-        reject_override(R"({"schema_version":1,"operators":{"input":{"bitwidth":7}}})");
+        for (int bits : {-1, 0, 33, 256, 264}) {
+            reject_override("{\"schema_version\":1,\"operators\":{\"input\":{\"bitwidth\":" +
+                            std::to_string(bits) + "}}}");
+        }
+        reject_override(R"({"schema_version":1,"operators":{"input":{"bitwidth":1}}})");
+        reject_override(R"({"schema_version":1,"operators":{"weight_ih":{"bitwidth":1}}})");
+        reject_override(R"({"schema_version":1,"operators":{"input":{"bitwidth":32,"is_unsigned":true}}})");
         reject_override(R"({"schema_version":1,"operators":{"input":{"bitwidth":8.0}}})");
         reject_override(R"({"schema_version":1,"operators":{"input":{"bitwidth":"8"}}})");
         reject_override(R"({"schema_version":1,"operators":{"input":null}})");

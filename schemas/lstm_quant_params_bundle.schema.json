@@ -98,7 +98,7 @@
         "zero_points"
       ],
       "properties": {
-        "bitwidth": {"type": "integer", "enum": [8, 16]},
+        "bitwidth": {"type": "integer", "minimum": 1, "maximum": 32},
         "is_unsigned": {"type": "boolean"},
         "is_symmetric": {"type": "boolean"},
         "granularity": {
@@ -112,7 +112,17 @@
           "type": "array",
           "items": {"type": "integer"}
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"is_unsigned": {"const": true}}},
+          "then": {"properties": {"bitwidth": {"maximum": 31}}}
+        },
+        {
+          "if": {"properties": {"is_unsigned": {"const": false}, "is_symmetric": {"const": true}}},
+          "then": {"properties": {"bitwidth": {"minimum": 2}}}
+        }
+      ]
     },
     "non_parameter": {
       "allOf": [

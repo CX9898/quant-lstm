@@ -57,7 +57,7 @@ Python 不补充默认值。`QuantLSTM` 构造函数把 override 原文交给 C+
 
 | 字段 | 类型 | 取值 | 默认值 |
 | --- | --- | --- | --- |
-| `bitwidth` | integer | `8` 或 `16` | `8` |
+| `bitwidth` | integer | signed `1–32`、unsigned `1–31`；signed symmetric 从 `2` 起 | `8` |
 | `is_unsigned`（仅非参数量化点） | boolean | `true` 或 `false` | 见下表 |
 | `is_symmetric`（仅非参数量化点） | boolean | `true` 或 `false` | `true` |
 | `granularity`（仅权重和偏置） | string | `per_tensor`、`per_gate`、`per_channel` | `per_channel` |
@@ -69,6 +69,11 @@ Python 不补充默认值。`QuantLSTM` 构造函数把 override 原文交给 C+
 旧 resolved 配置需要删除非参数 `granularity` 和权重、偏置的
 `is_unsigned/is_symmetric` 字段后再加载。
 校准参数交换文档中的类型和粒度元数据仍保留，用于解释整数编码及 scale 分组。
+
+例如两组权重可设为 `4`，而输入、状态和内部激活保持 `8`，无需更换计算后端。
+权重和偏置固定 signed symmetric，所以支持 `2–32` 位；INT1 对称校准的正端点为
+零，UINT32 超出现有整数范围元数据，两者均在配置阶段拒绝。失败的配置不改变原模块。
+原 JSON 字段、结构和版本不变，`dtype` 仍使用 `INTn` / `UINTn`。
 
 Signed 量化在 CPU/CUDA 和 QAT 中均使用完整范围：INT8 `[-128,127]`、
 INT16 `[-32768,32767]`。`is_symmetric=true` 时校准仍使用

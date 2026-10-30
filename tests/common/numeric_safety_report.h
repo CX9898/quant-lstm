@@ -25,7 +25,7 @@ inline std::string_view fp32AccumulationClassName(quantization::Fp32Accumulation
 inline nlohmann::json numericSafetyReportJson(const quantization::NumericSafetyReport& report) {
     return {
         {"classification", fp32AccumulationClassName(report.fp32_accumulation)},
-        {"safe", report.safe()},
+        {"safe", report.fpSafe()},
         {"proofs",
          {
              {"int64_gemm_safe", report.int64_gemm_safe},

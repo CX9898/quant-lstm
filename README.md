@@ -14,12 +14,17 @@ QuantLSTM 提供 PyTorch LSTM（长短期记忆网络）的量化实现，支持
 - 隐藏状态和细胞状态形状均为 `[D, B, H]`，其中单向 `D=1`、双向 `D=2`。
 - 校准方法包括 MinMax、SQNR 和 Percentile，默认使用 MinMax。
 - 权重和偏置采用对称量化，支持 per-tensor、per-gate 和 per-channel 粒度。
-- 位宽支持 8 和 16，各量化点可独立配置；激活和状态固定使用 per-tensor 粒度。
+- 各量化点可独立配置位宽：有符号 1–32 位、无符号 1–31 位；有符号对称量化从 2 位起，因此权重和偏置支持 2–32 位。激活和状态固定使用 per-tensor 粒度。
 
 当前 CUDA 量化路径使用 FP32 承载量化后的整数网格值（q-carrier），线性运算由
 cuBLAS SGEMM 执行，sigmoid/tanh 使用浮点计算。CPU Python 接口复用浮点参考校准和
 FP32 q-carrier reference，并在实值 tensor 与整数网格之间转换；C++ 仍提供 int32
 reference，CUDA int32 后端尚未实现。CPU 与 CUDA 使用各自构建的 wheel。
+
+位宽控制量化网格，不改变 FP32 载体或执行后端，也不进行低位打包。FP32 无法精确
+表示所有高位宽量化码或大归约结果，相关配置会记录 `precision_risk`；
+`require_exact_accumulation=True` 拒绝该风险。INT1 对称量化与 UINT32 会明确拒绝。
+JSON 字段、层次和 schema 版本保持不变，仅扩展合法位宽与 dtype 取值。
 
 ## 环境与安装
 

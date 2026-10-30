@@ -224,8 +224,14 @@ class QuantizedInterfaceTest(unittest.TestCase):
         self.assertEqual(module.get_quant_config("input")["bitwidth"], 8)
         self.assertTrue(module.get_quant_config("input")["is_unsigned"])
 
-        with self.assertRaises(ValueError):
-            module.set_all_bitwidth(7)
+        module.set_all_bitwidth(7)
+        self.assertTrue(all(value["bitwidth"] == 7
+                            for value in module.get_quant_config()["operators"].values()))
+        for invalid_bits in (0, 1, 33, 264):
+            with self.subTest(bitwidth=invalid_bits), self.assertRaises(ValueError):
+                module.set_all_bitwidth(invalid_bits)
+        self.assertTrue(all(value["bitwidth"] == 7
+                            for value in module.get_quant_config()["operators"].values()))
         with self.assertRaises(ValueError):
             module.adjust_quant_config("missing", bitwidth=8)
         with self.assertRaises(ValueError):
@@ -241,6 +247,50 @@ class QuantizedInterfaceTest(unittest.TestCase):
                 module(torch.zeros((2, 1, 3), device="cuda"))
         with self.assertRaisesRegex(RuntimeError, "未收集校准数据"):
             module.finalize_calibration()
+
+    def test_arbitrary_dtype_native_and_aimet_roundtrip(self):
+        cpu_only = not getattr(_quant_lstm, "supports_cuda", True)
+        if not cpu_only and not torch.cuda.is_available():
+            self.skipTest("CUDA LSTM extension requires a CUDA device")
+        device = "cpu" if cpu_only else "cuda"
+        module = QuantLSTM(2, 3, device=device).eval()
+        module.set_all_bitwidth(6)
+        module.adjust_quant_config("input", bitwidth=3, is_unsigned=True, is_symmetric=False)
+        module.adjust_quant_config("weight_ih", bitwidth=4, granularity="per_gate")
+        module.adjust_quant_config("weight_hh", bitwidth=4, granularity="per_channel")
+        module.adjust_quant_config("bias_ih", bitwidth=12)
+        module.adjust_quant_config("bias_hh", bitwidth=12)
+        initialize_module(module)
+        calibrate(module, deterministic_tensor((2, 1, 2), device=device), None)
+        document = module.export_quant_params()
+        jsonschema.Draft202012Validator(MANIFEST_SCHEMA).validate(document)
+        expected_dtypes = {"input": "UINT3", "weight_ih": "INT4", "weight_hh": "INT4",
+                           "bias_ih": "INT12", "bias_hh": "INT12"}
+        for name, dtype in expected_dtypes.items():
+            self.assertEqual(document["operators"][name]["dtype"], dtype)
+        for name, encoding in document["operators"].items():
+            config = module.get_quant_config(name)
+            expected_dtype = f'{"U" if config.get("is_unsigned", False) else ""}INT{config["bitwidth"]}'
+            self.assertEqual(encoding["dtype"], expected_dtype)
+            self.assertEqual(set(encoding), {"dtype", "symmetric", "scale", "zero_point",
+                                             "enc_type", "real_min", "real_max"})
+        imported = QuantLSTM(2, 3)
+        imported.load_quant_params(json.loads(json.dumps(document)))
+        self.assertEqual(imported.get_quant_config(), module.get_quant_config())
+        self.assertEqual(imported.export_quant_params(), document)
+
+        encodings = module.export_quant_params_to_aimet_format({}, module_name="lstm")
+        self.assertEqual(encodings["param_encodings"]["lstm.weight_ih.weight"]["dtype"], "INT4")
+        self.assertEqual(encodings["param_encodings"]["lstm.weight_ih.weight"]["bitwidth"], 4)
+        self.assertEqual(encodings["activation_encodings"]["lstm"]["input"]["0"]["dtype"], "UINT3")
+        restored = QuantLSTM(2, 3)
+        restored.load_quant_params_from_aimet_format(encodings, module_name="lstm")
+        restored_operators = restored.export_quant_params()["operators"]
+        for name, encoding in document["operators"].items():
+            for field, value in encoding.items():
+                expected = "PER_CHANNEL" if field == "enc_type" and name in {
+                    "weight_ih", "weight_hh", "bias_ih", "bias_hh"} else value
+                self.assertEqual(restored_operators[name][field], expected)
 
     @unittest.skipUnless(torch.cuda.is_available(), "需要 CUDA")
     def test_all_calibration_methods_and_manifest_contract(self):

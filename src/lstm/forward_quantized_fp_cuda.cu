@@ -183,6 +183,11 @@ bool sameRescale(const ExecutionRescale& lhs, const ExecutionRescale& rhs) {
     return lhs.pot2.shift == rhs.pot2.shift;
 }
 
+bool sameCellScale(const Q31Scale& lhs, const Q31Scale& rhs) {
+    return lhs.multiplier == rhs.multiplier && lhs.fp_mantissa == rhs.fp_mantissa &&
+           lhs.fp_exponent == rhs.fp_exponent && lhs.uses_fp_scale == rhs.uses_fp_scale;
+}
+
 bool sameLinear(const LinearExecutionParams& lhs, const LinearExecutionParams& rhs) {
     if (!samePoint(lhs.input, rhs.input) || !samePoint(lhs.output, rhs.output) ||
         lhs.weights.size() != rhs.weights.size() || lhs.biases.size() != rhs.biases.size() ||
@@ -240,9 +245,9 @@ void validateExecutionParams(const LstmShape& shape, const LstmOperatorQuantConf
         !samePoint(lhs_cell.input_gate, rhs_cell.input_gate) ||
         !samePoint(lhs_cell.cell_gate, rhs_cell.cell_gate) ||
         !samePoint(lhs_cell.new_cell, rhs_cell.new_cell) ||
-        lhs_cell.forget_scale.multiplier != rhs_cell.forget_scale.multiplier ||
-        lhs_cell.input_scale.multiplier != rhs_cell.input_scale.multiplier) {
-        throw std::invalid_argument("Cell Q31 执行参数不是 resolved 参数的派生结果");
+        !sameCellScale(lhs_cell.forget_scale, rhs_cell.forget_scale) ||
+        !sameCellScale(lhs_cell.input_scale, rhs_cell.input_scale)) {
+        throw std::invalid_argument("Cell 执行参数不是 resolved 参数的派生结果");
     }
     if (!samePoint(actual.hidden.output_gate, expected.hidden.output_gate) ||
         !samePoint(actual.hidden.cell_tanh, expected.hidden.cell_tanh) ||
@@ -255,8 +260,9 @@ void validateExecutionParams(const LstmShape& shape, const LstmOperatorQuantConf
 DeviceQuantPoint packPoint(const QuantizedPoint& point) {
     point.param.validate(point.type);
     const auto range = point.type.range();
-    return {point.param.scale, static_cast<float>(point.param.zero_point),
-            static_cast<float>(range.minimum), static_cast<float>(range.maximum)};
+    return {point.param.scale, point.param.zero_point,
+            quantization::floatCarrierMinimum(range.minimum),
+            quantization::floatCarrierMaximum(range.maximum), range.minimum, range.maximum};
 }
 
 DeviceRescale packRescale(const ExecutionRescale& value) {
@@ -294,8 +300,8 @@ std::vector<DeviceLinearChannelParams> packLinearParameters(const LstmExecutionP
             destination.bias_hh_to_accumulator =
                 packRescale(params.hidden_hidden_linear.bias_to_accumulator[channel]);
         } else {
-            destination.bias_ih = {1.0F, 0.0F, 0.0F, 0.0F};
-            destination.bias_hh = {1.0F, 0.0F, 0.0F, 0.0F};
+            destination.bias_ih = {1.0F, 0, 0.0F, 0.0F, 0, 0};
+            destination.bias_hh = {1.0F, 0, 0.0F, 0.0F, 0, 0};
             destination.bias_ih_to_accumulator = {DeviceRescaleKind::Pot2, 0, 0};
             destination.bias_hh_to_accumulator = {DeviceRescaleKind::Pot2, 0, 0};
         }
@@ -324,6 +330,8 @@ void appendPointSignature(std::uint64_t* result, const DeviceQuantPoint& point) 
     appendSignatureValue(result, point.zero_point);
     appendSignatureValue(result, point.minimum);
     appendSignatureValue(result, point.maximum);
+    appendSignatureValue(result, point.quantized_minimum);
+    appendSignatureValue(result, point.quantized_maximum);
 }
 
 void appendRescaleSignature(std::uint64_t* result, const DeviceRescale& rescale) {
@@ -391,6 +399,12 @@ DeviceScalarParams packScalarParameters(const LstmExecutionParams& params, bool 
     }
     result.cell_forget_q31 = params.cell.forget_scale.multiplier;
     result.cell_input_q31 = params.cell.input_scale.multiplier;
+    result.cell_forget_mantissa = params.cell.forget_scale.fp_mantissa;
+    result.cell_input_mantissa = params.cell.input_scale.fp_mantissa;
+    result.cell_forget_exponent = params.cell.forget_scale.fp_exponent;
+    result.cell_input_exponent = params.cell.input_scale.fp_exponent;
+    result.cell_forget_uses_fp_scale = params.cell.forget_scale.uses_fp_scale;
+    result.cell_input_uses_fp_scale = params.cell.input_scale.uses_fp_scale;
     result.bias_enabled = bias_enabled ? 1 : 0;
     return result;
 }
@@ -497,12 +511,24 @@ unsigned int oneDimensionalBlocks(std::size_t elements) {
     return static_cast<unsigned int>(std::min<std::size_t>(needed, kMaximumOneDimensionalBlocks));
 }
 
-__device__ __forceinline__ float clampDevice(float value, const DeviceQuantPoint& point,
+__device__ __forceinline__ float clampDevice(double value, const DeviceQuantPoint& point,
                                              std::uint8_t* clamped = nullptr) {
     if (clamped != nullptr) {
-        *clamped = value < point.minimum || value > point.maximum;
+        *clamped = static_cast<double>(value) < point.quantized_minimum ||
+                   static_cast<double>(value) > point.quantized_maximum;
     }
-    return fminf(point.maximum, fmaxf(point.minimum, value));
+    return quantization::clampFloatCarrierCore(
+        value, point.quantized_minimum, point.quantized_maximum);
+}
+
+__device__ __forceinline__ float centerGemmDevice(float value, float weight_sum,
+                                                 std::int32_t zero_point) {
+    const float fp_zero_point = static_cast<float>(zero_point);
+    if (static_cast<double>(fp_zero_point) == static_cast<double>(zero_point)) {
+        return value - weight_sum * fp_zero_point;
+    }
+    return static_cast<float>(static_cast<double>(value) -
+                              static_cast<double>(weight_sum) * zero_point);
 }
 
 __device__ __forceinline__ float quantizeMasterDevice(float value, const DeviceQuantPoint& point,
@@ -511,8 +537,8 @@ __device__ __forceinline__ float quantizeMasterDevice(float value, const DeviceQ
                                                             static_cast<double>(point.scale)) +
                            static_cast<double>(point.zero_point);
     if (clamped != nullptr) {
-        *clamped = rounded < static_cast<double>(point.minimum) ||
-                   rounded > static_cast<double>(point.maximum);
+        *clamped = rounded < static_cast<double>(point.quantized_minimum) ||
+                   rounded > static_cast<double>(point.quantized_maximum);
     }
     if (rounded <= static_cast<double>(point.minimum)) {
         return point.minimum;
@@ -524,7 +550,7 @@ __device__ __forceinline__ float quantizeMasterDevice(float value, const DeviceQ
 }
 
 __device__ __forceinline__ float dequantizeDevice(float value, const DeviceQuantPoint& point) {
-    return static_cast<float>(static_cast<double>(value - point.zero_point) *
+    return static_cast<float>((static_cast<double>(value) - point.zero_point) *
                               static_cast<double>(point.scale));
 }
 
@@ -539,10 +565,9 @@ __device__ __forceinline__ float realActivationDevice(float quantized_input,
                                                       std::uint8_t* clamped = nullptr) {
     bool activation_clamped = false;
     const float result = cuda_detail::realActivationCore(
-        quantized_input, params.input.scale, static_cast<std::int32_t>(params.input.zero_point),
-        params.output.scale, static_cast<std::int32_t>(params.output.zero_point),
-        static_cast<std::int32_t>(params.output.minimum),
-        static_cast<std::int32_t>(params.output.maximum),
+        quantized_input, params.input.scale, params.input.zero_point,
+        params.output.scale, params.output.zero_point, params.output.quantized_minimum,
+        params.output.quantized_maximum,
         tanh_activation ? quantization::RealActivationKind::Tanh
                         : quantization::RealActivationKind::Sigmoid,
         &activation_clamped);
@@ -578,7 +603,7 @@ __global__ void quantizeInitialStateKernel(const float* source, float* destinati
          index < count; index += stride) {
         std::uint8_t value_clamped = 0;
         const float quantized = source == nullptr
-                                    ? point.zero_point
+                                    ? quantizeMasterDevice(0.0F, point)
                                     : quantizeMasterDevice(source[index], point, &value_clamped);
         destination[index] = quantized;
         if (saved != nullptr) {
@@ -634,15 +659,16 @@ __global__ void quantizeBiasKernel(const float* source, float* destination, std:
     }
 }
 
+template <typename ZeroPoint>
 __global__ void dequantizeQCarrierKernel(const float* source, float* destination, std::size_t count,
                                          std::size_t elements_per_channel, const float* scales,
-                                         const float* zero_points, std::size_t parameter_count) {
+                                         const ZeroPoint* zero_points, std::size_t parameter_count) {
     const std::size_t stride = static_cast<std::size_t>(gridDim.x) * blockDim.x;
     for (std::size_t index = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
          index < count; index += stride) {
         const std::size_t parameter_index = parameter_count == 1 ? 0 : index / elements_per_channel;
         destination[index] =
-            static_cast<float>(static_cast<double>(source[index] - zero_points[parameter_index]) *
+            static_cast<float>((static_cast<double>(source[index]) - zero_points[parameter_index]) *
                                static_cast<double>(scales[parameter_index]));
     }
 }
@@ -706,16 +732,18 @@ __global__ void fusedLstmPointwiseKernel(std::size_t batch, std::size_t hidden, 
             const std::size_t linear_index = batch_index * channels + channel;
             const DeviceLinearChannelParams& linear = channel_params[channel];
 
-            float input_accumulator =
-                input_gemm[linear_index] - weight_ih_sums[channel] * scalar_params.input.zero_point;
-            float recurrent_accumulator = recurrent_gemm[linear_index] -
-                                          weight_hh_sums[channel] * scalar_params.hidden.zero_point;
+            float input_accumulator = centerGemmDevice(
+                input_gemm[linear_index], weight_ih_sums[channel], scalar_params.input.zero_point);
+            float recurrent_accumulator = centerGemmDevice(
+                recurrent_gemm[linear_index], weight_hh_sums[channel], scalar_params.hidden.zero_point);
             if (scalar_params.bias_enabled != 0) {
                 input_accumulator += applyRescaleDevice(
-                    shared_bias_ih[threadIdx.x][gate] - linear.bias_ih.zero_point,
+                    quantization::centerFloatCarrierCore(
+                        shared_bias_ih[threadIdx.x][gate], linear.bias_ih.zero_point),
                     linear.bias_ih_to_accumulator);
                 recurrent_accumulator += applyRescaleDevice(
-                    shared_bias_hh[threadIdx.x][gate] - linear.bias_hh.zero_point,
+                    quantization::centerFloatCarrierCore(
+                        shared_bias_hh[threadIdx.x][gate], linear.bias_hh.zero_point),
                     linear.bias_hh_to_accumulator);
             }
 
@@ -724,19 +752,24 @@ __global__ void fusedLstmPointwiseKernel(std::size_t batch, std::size_t hidden, 
             std::uint8_t gate_input_clamped = 0;
             std::uint8_t gate_output_clamped = 0;
             const float input_linear = clampDevice(
-                applyRescaleDevice(input_accumulator, linear.input_accumulator_to_linear) +
+                static_cast<double>(
+                    applyRescaleDevice(input_accumulator, linear.input_accumulator_to_linear)) +
                     linear.input_linear.zero_point,
                 linear.input_linear, &input_linear_clamped);
             const float recurrent_linear = clampDevice(
-                applyRescaleDevice(recurrent_accumulator, linear.recurrent_accumulator_to_linear) +
+                static_cast<double>(
+                    applyRescaleDevice(recurrent_accumulator, linear.recurrent_accumulator_to_linear)) +
                     linear.recurrent_linear.zero_point,
                 linear.recurrent_linear, &recurrent_linear_clamped);
             const DeviceGateParams& gate_params = scalar_params.gates[gate];
             const float gate_input = clampDevice(
-                applyRescaleDevice(input_linear - linear.input_linear.zero_point,
-                                   gate_params.input_linear_to_gate) +
-                    applyRescaleDevice(recurrent_linear - linear.recurrent_linear.zero_point,
-                                       gate_params.recurrent_linear_to_gate) +
+                static_cast<double>(
+                    applyRescaleDevice(quantization::centerFloatCarrierCore(
+                                           input_linear, linear.input_linear.zero_point),
+                                       gate_params.input_linear_to_gate) +
+                    applyRescaleDevice(quantization::centerFloatCarrierCore(
+                                           recurrent_linear, linear.recurrent_linear.zero_point),
+                                       gate_params.recurrent_linear_to_gate)) +
                     gate_params.input.zero_point,
                 gate_params.input, &gate_input_clamped);
             const float gate_output =
@@ -781,14 +814,21 @@ __global__ void fusedLstmPointwiseKernel(std::size_t batch, std::size_t hidden, 
             scalar_params.cell_input_q31,
             scalar_params.cell.zero_point,
             scalar_params.cell.minimum,
-            scalar_params.cell.maximum};
+            scalar_params.cell.maximum,
+            scalar_params.cell_forget_mantissa,
+            scalar_params.cell_input_mantissa,
+            scalar_params.cell_forget_exponent,
+            scalar_params.cell_input_exponent,
+            scalar_params.cell_forget_uses_fp_scale,
+            scalar_params.cell_input_uses_fp_scale};
         const auto cell_result = cuda_detail::computeQuantizedCellFpCore(
             gate_outputs[1], old_cell, gate_outputs[0], gate_outputs[2], cell_params);
-        const float cell_pre_clamp =
-            quantization::roundToNearestEven(cell_result.diagnostics.pre_round_sum) +
+        const double cell_pre_clamp =
+            static_cast<double>(quantization::roundToNearestEven(cell_result.diagnostics.pre_round_sum)) +
             scalar_params.cell.zero_point;
-        const std::uint8_t cell_clamped = cell_pre_clamp < scalar_params.cell.minimum ||
-                                          cell_pre_clamp > scalar_params.cell.maximum;
+        const std::uint8_t cell_clamped =
+            static_cast<double>(cell_pre_clamp) < scalar_params.cell.quantized_minimum ||
+            static_cast<double>(cell_pre_clamp) > scalar_params.cell.quantized_maximum;
         const float next_cell = cell_result.value;
         cell_state[state_index] = next_cell;
 
@@ -806,11 +846,13 @@ __global__ void fusedLstmPointwiseKernel(std::size_t batch, std::size_t hidden, 
             scalar_params.hidden_product_to_output.multiplier,
             scalar_params.hidden_product_to_output.shift, scalar_params.hidden.zero_point,
             scalar_params.hidden.minimum, scalar_params.hidden.maximum);
-        const float hidden_pre_clamp = applyRescaleDevice(hidden_result.diagnostics.raw_product,
-                                                          scalar_params.hidden_product_to_output) +
-                                       scalar_params.hidden.zero_point;
-        const std::uint8_t hidden_clamped = hidden_pre_clamp < scalar_params.hidden.minimum ||
-                                            hidden_pre_clamp > scalar_params.hidden.maximum;
+        const double hidden_pre_clamp =
+            static_cast<double>(applyRescaleDevice(hidden_result.diagnostics.raw_product,
+                                                   scalar_params.hidden_product_to_output)) +
+            scalar_params.hidden.zero_point;
+        const std::uint8_t hidden_clamped =
+            static_cast<double>(hidden_pre_clamp) < scalar_params.hidden.quantized_minimum ||
+            static_cast<double>(hidden_pre_clamp) > scalar_params.hidden.quantized_maximum;
         const float next_hidden = hidden_result.value;
         hidden_state[state_index] = next_hidden;
 
@@ -1288,9 +1330,10 @@ void lstmForwardQuantizedFpCuda(
     }
 }
 
-void lstmDequantizeQCarrierCuda(const float* source, float* destination, std::size_t count,
+template <typename ZeroPoint>
+void dequantizeQCarrierCuda(const float* source, float* destination, std::size_t count,
                                 std::size_t elements_per_channel, const float* scales,
-                                const float* zero_points, std::size_t parameter_count,
+                                const ZeroPoint* zero_points, std::size_t parameter_count,
                                 cudaStream_t stream) {
     if (source == nullptr || destination == nullptr || scales == nullptr ||
         zero_points == nullptr) {
@@ -1304,6 +1347,22 @@ void lstmDequantizeQCarrierCuda(const float* source, float* destination, std::si
     dequantizeQCarrierKernel<<<oneDimensionalBlocks(count), kThreads, 0, stream>>>(
         source, destination, count, elements_per_channel, scales, zero_points, parameter_count);
     checkKernel("dequantize q-carrier kernel");
+}
+
+void lstmDequantizeQCarrierCuda(const float* source, float* destination, std::size_t count,
+                                std::size_t elements_per_channel, const float* scales,
+                                const float* zero_points, std::size_t parameter_count,
+                                cudaStream_t stream) {
+    dequantizeQCarrierCuda(source, destination, count, elements_per_channel, scales, zero_points,
+                          parameter_count, stream);
+}
+
+void lstmDequantizeQCarrierCuda(const float* source, float* destination, std::size_t count,
+                                std::size_t elements_per_channel, const float* scales,
+                                const std::int32_t* zero_points, std::size_t parameter_count,
+                                cudaStream_t stream) {
+    dequantizeQCarrierCuda(source, destination, count, elements_per_channel, scales, zero_points,
+                          parameter_count, stream);
 }
 
 }  // namespace quant_lstm

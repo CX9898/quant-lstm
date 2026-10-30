@@ -394,15 +394,16 @@ torch::Tensor dequantizeQCarrier(const torch::Tensor& value,
     TORCH_CHECK(per_channel || parameter_count == 1, "per-tensor 量化参数必须只有一个元素");
     auto host_scales = torch::empty(
         {parameter_count}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
-    auto host_zero_points = torch::empty_like(host_scales);
+    auto host_zero_points = torch::empty(
+        {parameter_count}, torch::TensorOptions().dtype(torch::kInt32).device(torch::kCPU));
     float* scales_data = host_scales.data_ptr<float>();
-    float* zero_points_data = host_zero_points.data_ptr<float>();
+    std::int32_t* zero_points_data = host_zero_points.data_ptr<std::int32_t>();
     for (std::int64_t index = 0; index < parameter_count; ++index) {
         scales_data[index] = params.values[index].scale;
-        zero_points_data[index] = static_cast<float>(params.values[index].zero_point);
+        zero_points_data[index] = params.values[index].zero_point;
     }
     auto scales = host_scales.to(source.options());
-    auto zero_points = host_zero_points.to(source.options());
+    auto zero_points = host_zero_points.to(source.options().dtype(torch::kInt32));
     auto result = torch::empty_like(source);
     const std::size_t count = static_cast<std::size_t>(source.numel());
     const std::size_t elements_per_channel =
@@ -411,7 +412,7 @@ torch::Tensor dequantizeQCarrier(const torch::Tensor& value,
     const cudaStream_t stream = c10::cuda::getCurrentCUDAStream(source.get_device()).stream();
     quant_lstm::lstmDequantizeQCarrierCuda(source.data_ptr<float>(), result.data_ptr<float>(),
                                            count, elements_per_channel, scales.data_ptr<float>(),
-                                           zero_points.data_ptr<float>(),
+                                           zero_points.data_ptr<std::int32_t>(),
                                            static_cast<std::size_t>(parameter_count), stream);
     return result;
 }
@@ -514,7 +515,7 @@ py::dict safetySummary(const quant_lstm::ExecutionSafetyDiagnostics& diagnostics
         py::dict entry;
         entry["name"] = name;
         entry["fp32_accumulation"] = accumulationClassName(report.fp32_accumulation);
-        entry["safe"] = report.safe();
+        entry["safe"] = report.fpSafe();
         entries.append(std::move(entry));
         using Class = quant_lstm::quantization::Fp32AccumulationClass;
         if (report.fp32_accumulation == Class::ExactIntegerRange) {

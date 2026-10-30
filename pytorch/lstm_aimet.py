@@ -8,6 +8,7 @@ from copy import deepcopy
 import json
 import math
 from pathlib import Path
+import re
 
 
 try:
@@ -47,6 +48,21 @@ _PARAMETER_OPERATORS = {"weight_ih", "weight_hh", "bias_ih", "bias_hh"}
 _ENCODING_FIELDS = ("scale", "zero_point", "real_min", "real_max")
 
 
+def _parse_encoding_dtype(dtype, *, symmetric=None):
+    if not isinstance(dtype, str):
+        raise ValueError("Encoding dtype must be an INTn or UINTn string")
+    match = re.fullmatch(r"(U?INT)([1-9][0-9]*)", dtype)
+    if match is None:
+        raise ValueError("Encoding dtype must be an INTn or UINTn string")
+    bitwidth = int(match.group(2))
+    unsigned = match.group(1) == "UINT"
+    if not 1 <= bitwidth <= (31 if unsigned else 32):
+        raise ValueError("Encoding bitwidth must be INT1..INT32 or UINT1..UINT31")
+    if not unsigned and bitwidth == 1 and symmetric is True:
+        raise ValueError("signed symmetric INT1 has qmax=0 and is unsupported")
+    return bitwidth, unsigned
+
+
 def _encoding_n(scale):
     if isinstance(scale, list):
         if not scale:
@@ -60,7 +76,8 @@ def _encoding_n(scale):
 def _aimet_encoding(native):
     """Use the same scalar/vector record as QuantGRU's AIMET export."""
     encoding = deepcopy(native)
-    encoding["bitwidth"] = int(encoding["dtype"].removeprefix("UINT").removeprefix("INT"))
+    encoding["bitwidth"], _ = _parse_encoding_dtype(
+        encoding["dtype"], symmetric=encoding["symmetric"])
     encoding["is_symmetric"] = "True" if encoding.pop("symmetric") else "False"
     encoding["n"] = _encoding_n(encoding["scale"])
     return encoding
@@ -109,13 +126,16 @@ def _native_encoding(record, name):
     if not isinstance(record, dict):
         raise ValueError(f"Invalid encoding record: {name}")
     dtype = record.get("dtype")
-    if dtype not in {"INT8", "UINT8", "INT16", "UINT16"}:
-        raise ValueError(f"Invalid encoding dtype: {name}")
-    if record.get("bitwidth") != int(dtype.removeprefix("UINT").removeprefix("INT")):
-        raise ValueError(f"Inconsistent encoding bitwidth: {name}")
     symmetric = record.get("is_symmetric")
     if symmetric not in ("True", "False"):
         raise ValueError(f"Invalid encoding symmetry: {name}")
+    try:
+        bitwidth, _ = _parse_encoding_dtype(dtype, symmetric=symmetric == "True")
+    except ValueError as error:
+        raise ValueError(f"Invalid encoding dtype for {name}: {error}") from error
+    if (not isinstance(record.get("bitwidth"), int)
+            or isinstance(record["bitwidth"], bool) or record["bitwidth"] != bitwidth):
+        raise ValueError(f"Inconsistent encoding bitwidth: {name}")
     try:
         if "n" in record:
             def matches(actual, expected):
@@ -231,8 +251,8 @@ class LSTMAimetIntegration:
         document = self.export_quant_params()
         for field in ("operators", "operators_reverse"):
             for name, encoding in document.get(field, {}).items():
-                bitwidth = int(encoding["dtype"].lstrip("UINT"))
-                unsigned = encoding["dtype"].startswith("UINT")
+                bitwidth, unsigned = _parse_encoding_dtype(
+                    encoding["dtype"], symmetric=encoding["symmetric"])
                 qmax = (1 << (bitwidth if unsigned else bitwidth - 1)) - 1
                 qmin = 0 if unsigned else -qmax - 1
                 vector = isinstance(encoding["scale"], list)

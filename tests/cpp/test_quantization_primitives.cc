@@ -81,6 +81,47 @@ int main() {
                       "value below INT8 minimum must be rejected");
         signed_asymmetric_8.validateValue(-128);
 
+        for (std::uint8_t bits = 2; bits <= 32; ++bits) {
+            const q::QuantizationType type{bits, false, true};
+            const std::int64_t half = std::int64_t{1} << (bits - 1);
+            require(type.range().minimum == -half && type.range().maximum == half - 1,
+                    "arbitrary signed range");
+        }
+        for (std::uint8_t bits = 1; bits <= 31; ++bits) {
+            const q::QuantizationType type{bits, true, true};
+            require(type.range().minimum == 0 &&
+                        type.range().maximum == (std::int64_t{1} << bits) - 1,
+                    "arbitrary unsigned range");
+        }
+        require(q::QuantizationType{1, false, false}.range().minimum == -1 &&
+                    q::QuantizationType{1, false, false}.range().maximum == 0,
+                "one-bit signed affine range");
+        requireThrows([] { q::QuantizationType{1, false, true}.validate(); },
+                      "one-bit signed symmetric needs a positive endpoint");
+        requireThrows([] { q::QuantizationType{32, true, false}.validate(); },
+                      "UINT32 cannot fit existing integer metadata");
+
+        const q::QuantizationType signed_32{32, false, true};
+        const q::QuantParam unit_32{1.0F, 0};
+        const float fp32_upper = 2147483520.0F;
+        require(q::floatCarrierMaximum(std::numeric_limits<std::int32_t>::max()) == fp32_upper,
+                "INT32 upper FP endpoint must remain inside the mathematical domain");
+        require(q::quantizeFp(2147483648.0F, unit_32, signed_32) == fp32_upper &&
+                    q::quantizeFp(-2147483648.0F, unit_32, signed_32) == -2147483648.0F,
+                "FP32 quantization must not escape INT32 at either endpoint");
+        require(q::dequantizeFp(fp32_upper, unit_32, signed_32) == fp32_upper,
+                "FP dequantization must avoid narrow integer round trips");
+        requireThrows([&] { q::validateFloatCarrierValue(2147483648.0F, signed_32); },
+                      "rounded-up INT32 endpoint is not a valid FP carrier code");
+        const q::QuantParam tiny_scale{std::ldexp(1.0F, -31), 0};
+        require(q::realActivation(20.0F, unit_32, signed_32, tiny_scale, signed_32,
+                                  q::RealActivationKind::Sigmoid) == fp32_upper,
+                "FP activation saturates to a legal representable code");
+        require(q::realActivation(std::int32_t{20}, unit_32, signed_32, tiny_scale, signed_32,
+                                  q::RealActivationKind::Sigmoid) ==
+                    std::numeric_limits<std::int32_t>::max(),
+                "integer activation clamps before narrowing at INT32 maximum");
+
         // Literal RNE answers are independent of the production rounding implementation.
         constexpr std::array<float, 6> ties{-2.5F, -1.5F, -0.5F, 0.5F, 1.5F, 2.5F};
         constexpr std::array<int, 6> rounded{-2, -2, 0, 0, 2, 2};
@@ -221,6 +262,19 @@ int main() {
                 "M+shift 65536 normalization");
         require(q::applyRescale(std::int64_t{7}, ratio_half) == 4, "integer M+shift apply");
         require(q::applyRescale(7.0F, ratio_half) == 4.0F, "FP M+shift apply");
+        const q::FixedPointScale rounding_risk{65533, 15};
+        require(q::applyRescale(std::int64_t{5462}, rounding_risk) == 10923 &&
+                    q::applyRescale(5462.0F, rounding_risk) == 10924.0F,
+                "M16 multiplication can lose a rounding bit even for small source values");
+        q::NumericSafetyInput rescale_precision;
+        rescale_precision.fp32_accumulator_maximum = 10924;
+        rescale_precision.fp32_precision_maximum = 5462.L * 65533.L;
+        const auto rescale_report = q::buildNumericSafetyReport(rescale_precision);
+        require(rescale_report.fpSafe() && rescale_report.fp32_accumulation ==
+                    q::Fp32AccumulationClass::PrecisionRisk,
+                "exact classification must include effective M16 multiply precision");
+        requireThrows([&] { q::enforceFpNumericSafety(rescale_report, true); },
+                      "exact FP mode must reject effective M16 rounding risk");
         require(q::applyRescale(std::int64_t{5}, ratio_half) == 2 &&
                     q::applyRescale(std::int64_t{-5}, ratio_half) == -2 &&
                     q::applyRescale(-5.0F, ratio_half) == -2.0F,

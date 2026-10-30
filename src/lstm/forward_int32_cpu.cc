@@ -85,6 +85,19 @@ void lstmForwardInt32CpuReference(const LstmShape& shape, const LstmInt32Weights
 #if !defined(__SIZEOF_INT128__)
     throw std::runtime_error("int32 Cell reference 要求编译器支持 __int128");
 #else
+    const auto diagnostics =
+        deriveLstmExecutionParams(config, quant_params, shape.input_size).diagnostics;
+    for (const auto& report : diagnostics.input_hidden_linear) {
+        quantization::enforceNumericSafety(report, false);
+    }
+    for (const auto& report : diagnostics.hidden_hidden_linear) {
+        quantization::enforceNumericSafety(report, false);
+    }
+    for (const auto& report : diagnostics.gates) {
+        quantization::enforceNumericSafety(report, false);
+    }
+    quantization::enforceNumericSafety(diagnostics.cell, false);
+    quantization::enforceNumericSafety(diagnostics.hidden, false);
     const std::size_t steps =
         reference_detail::checkedSize(shape.sequence_length, "sequence_length");
     const std::size_t batch = reference_detail::checkedSize(shape.batch_size, "batch_size");

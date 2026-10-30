@@ -22,7 +22,11 @@ except ImportError as exc:
     ) from exc
 
 from lstm_autograd import float_lstm, quantized_lstm
-from lstm_aimet import LSTMAimetIntegration, normalize_quant_lstm_onnx
+from lstm_aimet import (
+    LSTMAimetIntegration,
+    _parse_encoding_dtype,
+    normalize_quant_lstm_onnx,
+)
 from lstm_onnx import (
     ensure_quant_lstm_onnx_registered,
     onnx_lstm,
@@ -215,10 +219,13 @@ def _internal_operator(name: str, external: Any) -> dict[str, Any]:
     if not isinstance(external, dict) or set(external) != _EXTERNAL_OPERATOR_FIELDS:
         raise ValueError(f"operator {name} 字段不完整或包含未知字段")
     dtype = external["dtype"]
-    if dtype not in {"INT8", "UINT8", "INT16", "UINT16"}:
-        raise ValueError(f"operator {name} dtype 非法")
     if not isinstance(external["symmetric"], bool):
         raise ValueError(f"operator {name} symmetric 必须是 boolean")
+    try:
+        bitwidth, is_unsigned = _parse_encoding_dtype(
+            dtype, symmetric=external["symmetric"])
+    except ValueError as error:
+        raise ValueError(f"operator {name} dtype 非法: {error}") from error
     enc_type = external["enc_type"]
     if enc_type not in _GRANULARITY_FROM_EXTERNAL:
         raise ValueError(f"operator {name} enc_type 非法")
@@ -245,8 +252,6 @@ def _internal_operator(name: str, external: Any) -> dict[str, Any]:
     ):
         raise ValueError(f"operator {name} 的量化参数长度不一致")
 
-    bitwidth = int(dtype.removeprefix("UINT").removeprefix("INT"))
-    is_unsigned = dtype.startswith("UINT")
     is_symmetric = external["symmetric"]
     minimum, maximum = _quantized_range(
         bitwidth, is_unsigned

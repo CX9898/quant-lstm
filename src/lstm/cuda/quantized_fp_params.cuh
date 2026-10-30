@@ -13,9 +13,11 @@ enum class DeviceRescaleKind : std::uint8_t {
 
 struct DeviceQuantPoint {
     float scale;
-    float zero_point;
+    std::int32_t zero_point;
     float minimum;
     float maximum;
+    std::int32_t quantized_minimum;
+    std::int32_t quantized_maximum;
 };
 
 struct DeviceRescale {
@@ -53,6 +55,12 @@ struct DeviceScalarParams {
     DeviceRescale hidden_product_to_output;
     std::int64_t cell_forget_q31;
     std::int64_t cell_input_q31;
+    double cell_forget_mantissa;
+    double cell_input_mantissa;
+    std::int16_t cell_forget_exponent;
+    std::int16_t cell_input_exponent;
+    bool cell_forget_uses_fp_scale;
+    bool cell_input_uses_fp_scale;
     std::int32_t bias_enabled;
 };
 

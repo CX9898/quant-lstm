@@ -13,7 +13,7 @@
 #include "lstm/forward_cpu.h"
 #include "lstm/quant_config_loader.h"
 #include "lstm/quant_params_io.h"
-#include "quantization/fixed_point_ops.h"
+#include "quantization/float_carrier_ops.h"
 
 namespace py = pybind11;
 
@@ -144,7 +144,7 @@ py::dict safetySummary(const quant_lstm::ExecutionSafetyDiagnostics& diagnostics
         py::dict entry;
         entry["name"] = name;
         entry["fp32_accumulation"] = accumulationClassName(report.fp32_accumulation);
-        entry["safe"] = report.safe();
+        entry["safe"] = report.fpSafe();
         entries.append(std::move(entry));
         using Class = quant_lstm::quantization::Fp32AccumulationClass;
         if (report.fp32_accumulation == Class::ExactIntegerRange) ++exact;
@@ -180,8 +180,8 @@ torch::Tensor quantize(const torch::Tensor& source, quant_lstm::QuantOperator id
     float* output = result.data_ptr<float>();
     for (std::int64_t index = 0; index < source.numel(); ++index) {
         const auto parameter = row_width == 0 ? 0 : static_cast<std::size_t>(index) / row_width;
-        output[index] = static_cast<float>(quant_lstm::quantization::quantize(
-            input[index], points.at(parameter), type));
+        output[index] = quant_lstm::quantization::quantizeFp(
+            input[index], points.at(parameter), type);
     }
     return result;
 }
@@ -192,8 +192,7 @@ void dequantize(torch::Tensor& value, quant_lstm::QuantOperator id,
     const auto& type = bundle.config.at(id).type;
     float* values = value.data_ptr<float>();
     for (std::int64_t index = 0; index < value.numel(); ++index) {
-        values[index] = quant_lstm::quantization::dequantize(
-            static_cast<std::int32_t>(values[index]), point, type);
+        values[index] = quant_lstm::quantization::dequantizeFp(values[index], point, type);
     }
 }
 

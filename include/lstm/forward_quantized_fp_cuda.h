@@ -163,4 +163,9 @@ void lstmDequantizeQCarrierCuda(const float* source, float* destination, std::si
                                 const float* zero_points, std::size_t parameter_count,
                                 cudaStream_t stream);
 
+void lstmDequantizeQCarrierCuda(const float* source, float* destination, std::size_t count,
+                                std::size_t elements_per_channel, const float* scales,
+                                const std::int32_t* zero_points, std::size_t parameter_count,
+                                cudaStream_t stream);
+
 }  // namespace quant_lstm

@@ -362,7 +362,7 @@ class PrecisionContractV2Test(unittest.TestCase):
             "stage4_strict_cuda_fp32_minimal_int8": (
                 "minimal",
                 "pedantic",
-                "exact_integer_range",
+                "precision_risk",
             ),
             "stage4_strict_cuda_fp32_short_int16": (
                 "short_recurrent",

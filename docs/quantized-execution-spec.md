@@ -67,7 +67,11 @@ lstm_quant_default_v1.json <- user override -> resolved config
 
 Python、CPU、CUDA、Golden 和报告只消费 resolved config，不得各自补默认值。Unknown operator/字段、重复 key、`null`、错误类型、非法枚举、遗留 `mul_*`、`pot_scale_method` 和 `pot_scale_tolerance` 均 fail fast。Resolved config 二次解析和序列化必须字节一致。
 
-首版 operator `bitwidth` 只允许 `8` 或 `16`，允许不同量化点混合使用。其他位宽在 resolver 阶段失败。载体、累加器、M+shift 和 Q31 的内部宽度不属于 operator bitwidth。
+operator `bitwidth` 允许 signed `1–32`、unsigned `1–31`，不同量化点可混合使用。
+signed symmetric INT1 的 `qmax=0`，校准无有效正端点，因此明确拒绝；权重和偏置
+固定 signed symmetric，支持 `2–32` 位。UINT32 无法用当前 int32 范围与零点元数据
+表示，同样在 resolver 阶段拒绝。载体、累加器、M+shift 和 Q31 的内部宽度不属于
+operator bitwidth。JSON 字段、层次与版本不变，仅扩展合法取值。
 
 ### 4.2 默认 profile
 
@@ -101,7 +105,7 @@ PyTorch 公共导入导出使用 GRU-compatible v1 文档。与 GRU 共有的模
 每个 operator 固定使用 `dtype`、`symmetric`、`scale`、`zero_point`、
 `enc_type`、`real_min` 和 `real_max`。单组值使用 JSON number/integer，多组值使用
 同类型数组；参数算子的多组值仍按 4.3 节完整展开为 `4H`。`dtype` 为
-`INT8|UINT8|INT16|UINT16`，`enc_type` 为
+符合 4.1 节位宽及对称性约束的 `INTn|UINTn`，`enc_type` 为
 `PER_TENSOR|PER_GATE|PER_CHANNEL`。
 
 公共 `scale/real_min/real_max` 是 JSON number。Python 边界 adapter 仅负责将公共
@@ -227,13 +231,19 @@ ratio_exec = M * 2^(-shift)
 
 Setup 阶段统一生成 `NumericSafetyReport`：
 
-- int64/`__int128` 乘加、左移或累加无法证明安全时 fail fast。
+- int32 reference 的 int64/`__int128` 乘加、左移或累加无法证明安全时 fail fast；
+  FP 路径独立检查浮点中间结果有限性，不要求整数 reference 的溢出证明成立。
 - FP32 整数运算上界小于 `2^24` 时标记 `exact_integer_range`。
 - 超过 `2^24` 但仍有限时标记 `precision_risk`，必须通过严格指标。
 - `require_exact_accumulation=true` 时，超过 `2^24` 直接失败。
 - 可能产生 Inf/NaN 时无条件失败。
 
 除真实量化边界外，不允许中间隐藏 Clamp、饱和或 wrap。
+
+FP32 并非能精确承载所有合法高位宽整数码。执行边界使用数学整数域以内的可表示
+浮点端点，例如 INT32 上界在 FP32 中取 `2147483520`，避免将 `2147483647`
+舍入为越界的 `2147483648`。导出仍描述原数学网格，精度差异由 `precision_risk`
+记录，不宣称与整数 reference 逐码相同。
 
 ## 8. 融合前向公式
 
@@ -292,6 +302,10 @@ multiplier，使用 `int64_t` multiplier 和 `__int128` 合并累加，最后只
 一次。实现必须通过静态 fail-fast、缩小域穷举和 8/16-bit Affine/POT2 随机及对抗
 验证。
 
+FP 路径保留可表示的原 Q31 编码；比例太小而被 Q31 舍入为零，或超出 multiplier
+范围时，内部改用尾数和指数表示。两路贡献仍先融合再做一次 RNE、加零点和 Clamp，
+不新增量化点、JSON 字段或中间量化边界。int32 reference 明确拒绝仅 FP 可执行的比例。
+
 ### 8.4 Hidden 融合
 
 ```text
@@ -308,7 +322,8 @@ q_h_new = Clamp(
 
 ### 9.1 CPU FP 载体 reference
 
-量化 q 值用 FP32 保存；普通 rescale 和 Cell Q31 ratio 都以浮点算术模拟已编码参数。它是 CUDA FP 路径的 reference。
+量化 q 值用 FP32 保存；普通 rescale 和 Cell ratio 都以浮点算术模拟内部执行参数。
+Cell 默认复用 Q31，在其不可表示的范围使用尾数和指数。它是 CUDA FP 路径的 reference。
 
 ### 9.2 CUDA FP 载体主路径
 
